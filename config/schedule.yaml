@@ -1,0 +1,21 @@
+heartbeat:
+  interval_minutes: 5
+
+# Times are Europe/Berlin. Session jobs follow the exchange calendar (holidays, half-days, DST).
+jobs:
+  ingest_macro:
+    cron: {day_of_week: mon-fri, hour: 7, minute: 0}
+    misfire_grace_minutes: 360
+  ingest_earnings:
+    cron: {day_of_week: mon-fri, hour: 7, minute: 15}
+    misfire_grace_minutes: 360
+  ingest_eod_eu:                    # EU bars, ECB FX, quality check
+    calendar: XETR
+    anchor: close
+    offset_minutes: 30
+    misfire_grace_minutes: 360
+  ingest_eod_us:                    # US bars, quality check
+    calendar: XNYS
+    anchor: close
+    offset_minutes: 30
+    misfire_grace_minutes: 360

@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.env
+.env.*
+secrets
+*.dump
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.hypothesis
+tests
+screenshots
+*.md

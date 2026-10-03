@@ -1,0 +1,55 @@
+name: trading-agent
+
+# M0: db + agent. ib-gateway and dashboard are added in M6 (IMPLEMENTATION.md 15.3).
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    command: ["postgres", "-c", "shared_buffers=256MB"]
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password, agent_db_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trading -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [backend]
+
+  agent:
+    build: .
+    image: trading-agent:latest
+    command: ["python", "-m", "trading_agent", "run"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+    secrets:
+      - source: agent_db_password
+        target: db_password
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend, egress]
+
+networks:
+  backend:
+    internal: true
+  egress: {}
+
+volumes:
+  pgdata: {}
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  agent_db_password:
+    file: ./secrets/agent_db_password
