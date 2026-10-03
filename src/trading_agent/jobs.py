@@ -2,19 +2,24 @@
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 import httpx
 import structlog
 
+from trading_agent import backtest
+from trading_agent.calc.fees import FeeSchedule
 from trading_agent.data import ingest
 from trading_agent.data.ingest import IngestResult, Sessions
 from trading_agent.data.quality import QualityIssue
 from trading_agent.data.series import EcbProvider, FredProvider
 from trading_agent.data.universe import Universe
 from trading_agent.data.yahoo import YahooProvider
+from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Market
-from trading_agent.settings import DataConfig, Settings
+from trading_agent.risk.config import RiskConfig, load_risk_config
+from trading_agent.settings import DataConfig, Settings, load_fees
 
 log = structlog.get_logger(__name__)
 
@@ -34,6 +39,56 @@ class DataContext:
         key = settings.fred_api_key
         fred = FredProvider(http, key) if key is not None and key.get_secret_value() else None
         return cls(sessions, cfg, YahooProvider(), EcbProvider(http), fred)
+
+
+@dataclass
+class BookContext:
+    sessions: Sessions
+    cfg: backtest.BacktestConfig
+    risk: RiskConfig
+    fees: FeeSchedule
+    benchmarks: dict[Market, str]
+
+    @classmethod
+    def load(cls, config_dir: Path, sessions: Sessions, universe: Universe) -> "BookContext":
+        return cls(
+            sessions,
+            backtest.load_backtest_config(config_dir),
+            load_risk_config(config_dir),
+            load_fees(config_dir),
+            dict(universe.benchmarks),
+        )
+
+
+async def baseline_book(
+    ctx: BookContext, today: date | None = None
+) -> backtest.BacktestResult | None:
+    """Replay the forward `baseline_sim` book from its start date and store its trades."""
+    today = today or datetime.now(UTC).date()
+    start = ctx.cfg.baseline_book.start
+    if today < start:
+        log.info("baseline_sim.not_started", start=start.isoformat())
+        return None
+    data = await backtest.load_market_data(ctx.sessions, ctx.benchmarks, ctx.cfg.pullback)
+    result = backtest.run(
+        data,
+        ctx.cfg,
+        ctx.risk,
+        ctx.fees,
+        start=start,
+        end=today,
+        markets=ctx.risk.markets.paper,
+        book="baseline_sim",
+    )
+    async with ctx.sessions.begin() as s:
+        await trades_repo.replace_book(s, "baseline_sim", result.trades)
+    log.info(
+        "baseline_sim.updated",
+        trades=len(result.trades),
+        open=sum(1 for t in result.trades if t.exit_date is None),
+        equity_eur=round(float(result.equity.iloc[-1]), 2) if not result.equity.empty else None,
+    )
+    return result
 
 
 def _log_result(result: IngestResult) -> None:

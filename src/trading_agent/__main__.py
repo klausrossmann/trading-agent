@@ -1,15 +1,19 @@
 import asyncio
 from collections import defaultdict
+from pathlib import Path
 from typing import Literal
 
 import typer
 
 from trading_agent.data.quality import QualityIssue
+from trading_agent.domain.market import Market
 from trading_agent.settings import Settings
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 MarketOption = typer.Option(None, help="US or EU; default both.")
+YearsOption = typer.Option(5, help="Trading period in years, ending at the last stored bar.")
+OutputOption = typer.Option(None, help="Also write the report to this file.")
 
 
 @app.callback()
@@ -114,6 +118,76 @@ def quality(
     typer.echo(f"{len(issues)} issues, {len(blocked)} blocked symbols: {', '.join(blocked) or '-'}")
     if blocked:
         raise typer.Exit(1)
+
+
+@app.command()
+def backtest(
+    years: int = YearsOption,
+    market: Literal["US", "EU"] | None = MarketOption,
+    output: Path | None = OutputOption,
+) -> None:
+    """Backtest the rule-based baseline on stored data and print the report."""
+    from datetime import timedelta
+
+    from trading_agent import backtest as bt
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+    from trading_agent.evaluation import report
+    from trading_agent.risk.config import load_risk_config
+    from trading_agent.settings import load_fees
+
+    settings = _settings()
+    cfg_dir = settings.config_dir
+    cfg, risk = bt.load_backtest_config(cfg_dir), load_risk_config(cfg_dir)
+    fees, universe = load_fees(cfg_dir), load_universe(cfg_dir)
+
+    async def _load() -> bt.MarketData:
+        engine = create_engine(settings.database_url)
+        try:
+            return await bt.load_market_data(
+                session_factory(engine), dict(universe.benchmarks), cfg.pullback
+            )
+        finally:
+            await engine.dispose()
+
+    data = asyncio.run(_load())
+    if not data.instruments:
+        raise typer.BadParameter("no bars stored; run `trading-agent backfill` first")
+    end = max(max(x.rows) for x in data.instruments.values())
+    start = end - timedelta(days=round(365.25 * years))
+    markets: list[Market] = [market] if market else list(risk.markets.paper)
+    result = bt.run(data, cfg, risk, fees, start=start, end=end, markets=markets)
+    capital = float(risk.capital.agent_budget_eur)
+    benchmarks = {
+        f"Buy and hold {universe.benchmarks[m]}": curve
+        for m in markets
+        if m in universe.benchmarks
+        and (curve := bt.benchmark_equity(data, m, start, end, capital)) is not None
+    }
+    text = report.render(
+        title=f"Backtest: {bt.pullback.NAME} ({', '.join(markets)})",
+        start=start,
+        end=end,
+        capital=capital,
+        trades=result.trades,
+        equity=result.equity,
+        invested=result.invested,
+        benchmarks=benchmarks,
+        signals=result.signals,
+        rejections=result.rejections,
+        notes=[
+            "Survivorship bias: today's index members over the whole period, which flatters "
+            "the result.",
+            "Daily bars: if stop and target are both inside a bar the stop counts; on the entry "
+            "bar only the stop is checked.",
+            "Not modelled yet: correlation clusters and loss limits (risk engine, M8), FX "
+            "conversion costs, dividends.",
+            "Prices from Yahoo Finance; third-party fees are estimates (config/fees.yaml).",
+        ],
+    )
+    typer.echo(text)
+    if output:
+        output.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":

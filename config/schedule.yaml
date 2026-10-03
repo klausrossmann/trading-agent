@@ -19,3 +19,8 @@ jobs:
     anchor: close
     offset_minutes: 30
     misfire_grace_minutes: 360
+  baseline_sim:                     # replay the rule-based book once the US bars are in
+    calendar: XNYS
+    anchor: close
+    offset_minutes: 60
+    misfire_grace_minutes: 360

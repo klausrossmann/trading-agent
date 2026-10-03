@@ -310,6 +310,30 @@ This is both the **candidate generator** for the LLM pipeline and the **rule-bas
 
 The baseline book is simulated every day (`baseline_sim`) with the same fee model and risk engine, so the comparison is fair.
 
+Implementation: rules in `strategies/pullback.py` (parameters in `config/strategies.yaml`), fill model in `execution/sim.py` (section 10.5), portfolio loop in `backtest.py`. Until the risk engine exists (M8), the loop applies sizing, max positions, sector cap, fee-to-risk, orders per day, settled cash (T+1 US, T+2 Xetra) and the cash reserve; correlation clusters and loss limits follow in M8. The forward `baseline_sim` book replays from `baseline_book.start` every evening (job `baseline_sim`, XNYS close + 60 min) and replaces its rows in `trades`. `trading-agent backtest` prints the report.
+
+### 6.3 Backtest result and decision (M3, 2026-10-03)
+
+5 years (Oct 2021 to Oct 2026), EUR 1,000, US + EU, all rules above, fees and 0.05 % slippage per side ([reports/backtest-baseline-2026-10-03.md](reports/backtest-baseline-2026-10-03.md)):
+
+| | Trades | Win rate | Avg R | Profit factor | Return | Max drawdown |
+|---|---|---|---|---|---|---|
+| Baseline as specified, EUR 1,000 | 266 | 40 % | −0.03 | 0.94 | −7.7 % | −23.8 % |
+| Same, without fees | 284 | 39 % | −0.05 | 0.92 | −10.7 % | −26.4 % |
+| EUR 5,000, with fees | 254 | 41 % | −0.06 | 0.86 | −20.0 % | −31.0 % |
+| EUR 50,000, no fees (no size frictions) | 347 | 43 % | +0.04 | 1.10 | +19.3 % | −16.0 % |
+| ... same, no breakeven stop | 349 | 47 % | +0.07 | 1.21 | +39.7 % | −16.5 % |
+| ... same, 30-session time stop / 3R target / 1.5R target | 256 / 310 / 343 | | +0.02 / +0.01 / +0.02 | | | |
+| Buy and hold SPY / EXS1.DE (EUR) | | | | | +86.1 % / +61.2 % | −23.0 % / −26.7 % |
+
+Findings:
+- **No measurable edge.** Even without fees and size limits the average is +0.04 R per trade; with ~350 trades the standard error is about 0.05 R, so that is indistinguishable from zero. Costs at EUR 1,000 (fees ≈ 0.05 R per trade, plus slippage) turn it negative. Buy and hold beat it by a wide margin in this bull market.
+- **Exits:** the 2R target is reached in only 12 % of trades; most end at the 15-session time stop (+0.35 R on average) or the stop (−0.86 R). Dropping the breakeven stop scored best, but within the noise of one sample with survivorship bias, so it is not adopted.
+- **EUR 1,000 frictions:** of 7,993 setups, 3,230 can't be sized (one share exceeds the EUR 300 position cap or the EUR 15 risk cap; 32 of 101 US stocks trade above $330) and 2,417 fall below the EUR 200 minimum. Every EU setup that reached the fee check failed the 10 % fee-to-risk rule, so **EU produces no trades at EUR 1,000**.
+- **Sample size:** about 53 trades per year at EUR 1,000. The go-live gate (50 closed trades in 3 months) depends on the shadow book.
+
+**Decision: keep the baseline unchanged (v1) as the comparison bar, not as a strategy to trade on its own.** No parameters are tuned on this data. The LLM pipeline has to produce the edge; the baseline sets the floor it must clear after costs. Open points are in section 19.
+
 ---
 
 ## 7. Analysis modules and LLM layer
@@ -830,3 +854,10 @@ flowchart LR
 | 4 | IBKR account | Application started, not ready yet | M0–M5 don't need IBKR (`yfinance` + simulator). M6 starts once the paper login exists. |
 | 5 | LLM tracing (Logfire) | Undecided | **Recommendation adopted: local only.** Prompts contain positions and theses, and `llm_calls` + `audit_log` already cover cost and audit. Hosted Logfire can be reconsidered in M9 if debugging prompts gets hard. |
 | 6 | Dashboard | Streamlit is fine | As planned (section 13) |
+
+### 19.1 Open questions from the M3 backtest
+
+1. **EU in paper:** at EUR 1,000 every Xetra trade fails the 10 % fee-to-risk rule, so the paper book will contain no EU trades. Options: (a) accept it, since live starts US-only anyway; (b) give EU paper trading its own notional budget of EUR 5,000, where fees fit (69 EU trades in the backtest); (c) relax the fee rule for EU in paper only. Recommendation: (b), because it adds sample size and tests the setup that becomes relevant at EUR 5,000, without loosening any live rule.
+(b)
+2. **Expensive US stocks:** 32 of 101 S&P 100 stocks trade above $330 and can't be bought within the EUR 300 position cap. Fractional shares via the API (checked in M6) would fix this; until then they stay unbuyable. OK?
+ok

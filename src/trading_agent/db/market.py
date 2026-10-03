@@ -181,6 +181,31 @@ async def bars(session: AsyncSession, instrument_id: int, start: date | None = N
     ]
 
 
+async def all_bars(session: AsyncSession) -> dict[int, list[Bar]]:
+    """Every stored bar, grouped by instrument id, oldest first."""
+    stmt = select(BarDailyRow).order_by(BarDailyRow.instrument_id, BarDailyRow.date)
+    out: dict[int, list[Bar]] = {}
+    for r in await session.scalars(stmt):
+        out.setdefault(r.instrument_id, []).append(
+            Bar(date=r.date, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
+        )
+    return out
+
+
+async def earnings_dates(session: AsyncSession) -> dict[int, list[date]]:
+    out: dict[int, list[date]] = {}
+    for inst_id, day in await session.execute(
+        select(EarningsEventRow.instrument_id, EarningsEventRow.date)
+    ):
+        out.setdefault(inst_id, []).append(day)
+    return out
+
+
+async def fx_rates(session: AsyncSession, quote: str) -> list[Observation]:
+    stmt = select(FxDailyRow).where(FxDailyRow.quote == quote).order_by(FxDailyRow.date)
+    return [Observation(date=r.date, value=r.rate) for r in await session.scalars(stmt)]
+
+
 # --- FX and macro series ---
 
 

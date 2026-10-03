@@ -102,12 +102,13 @@ def plan_session_jobs(
     return planned
 
 
-def data_jobs(ctx: jobs.DataContext) -> dict[str, JobFn]:
+def job_functions(data: jobs.DataContext, book: jobs.BookContext) -> dict[str, JobFn]:
     return {
-        "ingest_macro": partial(jobs.macro, ctx),
-        "ingest_earnings": partial(jobs.earnings, ctx),
-        "ingest_eod_eu": partial(jobs.eod, ctx, "EU"),
-        "ingest_eod_us": partial(jobs.eod, ctx, "US"),
+        "ingest_macro": partial(jobs.macro, data),
+        "ingest_earnings": partial(jobs.earnings, data),
+        "ingest_eod_eu": partial(jobs.eod, data, "EU"),
+        "ingest_eod_us": partial(jobs.eod, data, "US"),
+        "baseline_sim": partial(jobs.baseline_book, book),
     }
 
 
@@ -134,7 +135,8 @@ async def serve(
         )
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http)
-            scheduler = build_scheduler(schedule, settings, http, data_jobs(ctx))
+            book = jobs.BookContext.load(settings.config_dir, sessions, universe)
+            scheduler = build_scheduler(schedule, settings, http, job_functions(ctx, book))
             scheduler.start()
             log.info(
                 "agent.started", mode=settings.app_mode, jobs=[j.id for j in scheduler.get_jobs()]

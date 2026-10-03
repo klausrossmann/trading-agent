@@ -1,0 +1,24 @@
+pullback:                          # IMPLEMENTATION.md 6.2
+  min_price: 5
+  min_avg_dollar_volume: 20000000    # 20-day average, in the instrument currency
+  avg_volume_sessions: 20
+  high_lookback: 20
+  pullback_sessions: [3, 10]         # sessions since the highest close of the lookback
+  ma_band_pct: [0, 3]                # close 0-3 % above EMA20 or SMA50
+  rsi_range: [40, 55]
+  earnings_buffer_sessions: 3
+  entry_offset_pct: 0.2              # limit = signal close + 0.2 %
+  entry_valid_sessions: 2
+  swing_lookback: 5
+  swing_window: 60
+  stop_swing_atr: 0.5                # stop = min(last swing low - 0.5 ATR, entry - 2 ATR)
+  stop_atr: 2.0
+  target_r: 2.0
+  breakeven_r: 1.0
+  time_stop_sessions: 15
+  rs_window: 63                      # ranking: 3-month return relative to the benchmark
+
+slippage_pct: 0.05                   # per side (IMPLEMENTATION.md 10.5)
+
+baseline_book:
+  start: 2026-10-05                  # forward book: replays from here every evening

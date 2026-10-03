@@ -115,3 +115,30 @@ class EarningsEventRow(_Sourced, Base):
     timing: Mapped[str] = mapped_column(Text)
     eps_estimate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     eps_actual: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+
+
+class TradeRow(Base):
+    """Round trips per book. Prices and fees in the instrument currency, P&L in EUR."""
+
+    __tablename__ = "trades"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    book: Mapped[str] = mapped_column(Text, index=True)
+    strategy: Mapped[str] = mapped_column(Text)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    signal_date: Mapped[dt.date] = mapped_column(Date)
+    entry_date: Mapped[dt.date] = mapped_column(Date)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    quantity: Mapped[int] = mapped_column(Integer)
+    stop: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    target: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    risk_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    fees: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    fees_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    exit_date: Mapped[dt.date | None] = mapped_column(Date)
+    exit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    exit_reason: Mapped[str | None] = mapped_column(Text)
+    pnl_net_eur: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    r_multiple: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    holding_sessions: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,0 +1,55 @@
+# Hard limits (CONCEPT.md 6.1). Changes need explicit sign-off (IMPLEMENTATION.md 16.1).
+capital:
+  agent_budget_eur: 1000           # hard cap, also in paper (ignores the paper account's simulated balance)
+  min_cash_reserve_pct: 10
+
+per_trade:
+  max_risk_pct: 1.5                # (entry - stop) * qty <= EUR 15
+  max_position_pct: 30             # few, larger positions keep minimum fees small relative to size
+  min_position_eur: 200
+  max_fee_to_risk_pct: 10          # reject if round-trip fees exceed 10 % of the money at risk
+  require_broker_side_stop: true   # GTC stop at IBKR, so downtime never leaves a position unprotected
+  order_type: limit_only
+  max_limit_deviation_pct: 1.0     # limit price within 1 % of current mid
+  min_risk_reward: 2.0
+
+portfolio:
+  max_open_positions: 4
+  max_sector_pct: 60
+  max_correlated_cluster_pct: 60   # holdings with rho > 0.7 counted together
+
+loss_limits:                       # breaching any -> stop new entries, notify
+  daily_loss_pct: 3
+  weekly_loss_pct: 6
+  max_drawdown_pct: 15             # EUR 150 -> kill switch: close-only mode, needs manual reset
+
+markets:
+  paper: [US, EU]
+  live: [US]                       # add EU at >= EUR 5,000 (CONCEPT.md 6.3)
+
+options:
+  enabled: false                   # paper-only track (CONCEPT.md 7.2)
+  allowed_strategies: [debit_spread]
+  forbid_naked_short: true
+  max_premium_at_risk_pct: 1.5
+  dte_range: [21, 75]
+  min_open_interest: 500
+  max_bid_ask_spread_pct: 10
+
+instruments:
+  universe_us: [SP100]             # start small (IMPLEMENTATION.md 19); later SP500, NASDAQ100
+  universe_eu: [DAX]               # later MDAX, STOXX600
+  etfs: ucits_only
+  min_avg_daily_dollar_volume: 20000000
+  min_price: 5
+  blacklist: [penny_stocks, leveraged_etps, otc]
+
+execution:
+  routing: smart                   # IBKR Tiered pricing is not available for directed API orders
+  max_orders_per_day: 6
+  no_trading_first_minutes: 15
+  no_trading_last_minutes: 10
+  no_new_entries_before_earnings_days: 3   # unless strategy == earnings
+
+costs:
+  llm_budget_eur_month: 15         # lean mode at 80 %, no LLM calls at 100 %

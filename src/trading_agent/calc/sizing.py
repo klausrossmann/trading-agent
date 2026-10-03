@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 ZERO = Decimal(0)
 
 Binding = Literal["risk", "position", "cash"]
+Rejection = Literal["invalid", "no_capacity", "below_minimum"]
 
 
 class SizingLimits(BaseModel):
@@ -25,13 +26,16 @@ class Sizing(BaseModel):
 
     quantity: int
     binding: Binding | None  # the cap that limited the quantity
+    rejection: Rejection | None = None
     reason: str | None  # why the quantity is 0
     risk: Decimal  # quantity * (entry - stop), instrument currency
     value: Decimal  # quantity * entry, instrument currency
 
 
-def _rejected(reason: str) -> Sizing:
-    return Sizing(quantity=0, binding=None, reason=reason, risk=ZERO, value=ZERO)
+def _rejected(rejection: Rejection, reason: str) -> Sizing:
+    return Sizing(
+        quantity=0, binding=None, rejection=rejection, reason=reason, risk=ZERO, value=ZERO
+    )
 
 
 def position_size(
@@ -50,9 +54,9 @@ def position_size(
     1 EUR, 1 for EUR instruments). Returns quantity 0 with a reason instead of raising.
     """
     if entry <= 0 or stop <= 0 or eur_rate <= 0:
-        return _rejected("non-positive price or FX rate")
+        return _rejected("invalid", "non-positive price or FX rate")
     if stop >= entry:
-        return _rejected("stop must be below entry for a long trade")
+        return _rejected("invalid", "stop must be below entry for a long trade")
 
     budget = limits.budget_eur * eur_rate
     caps: dict[Binding, Decimal] = {
@@ -63,10 +67,12 @@ def position_size(
     binding = min(caps, key=lambda k: caps[k])
     quantity = max(int(caps[binding].to_integral_value(rounding=ROUND_FLOOR)), 0)
     if quantity == 0:
-        return _rejected(f"no capacity ({binding} limit allows less than one share)")
+        return _rejected("no_capacity", f"no capacity ({binding} limit allows less than one share)")
     value = entry * quantity
     if value < limits.min_position_eur * eur_rate:
-        return _rejected(f"position {value:.2f} below the minimum size ({binding} limit binds)")
+        return _rejected(
+            "below_minimum", f"position {value:.2f} below the minimum size ({binding} limit binds)"
+        )
     return Sizing(
         quantity=quantity,
         binding=binding,

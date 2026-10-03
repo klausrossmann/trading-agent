@@ -27,7 +27,14 @@ async def _noop() -> None:
 
 
 JOBS: dict[str, JobFn] = {
-    name: _noop for name in ("ingest_macro", "ingest_earnings", "ingest_eod_eu", "ingest_eod_us")
+    name: _noop
+    for name in (
+        "ingest_macro",
+        "ingest_earnings",
+        "ingest_eod_eu",
+        "ingest_eod_us",
+        "baseline_sim",
+    )
 }
 
 
