@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
+from trading_agent.calc.fees import FeeSchedule
+
 _SECRETS_DIR = Path("/run/secrets")
 
 
@@ -50,9 +52,8 @@ class HeartbeatJob(BaseModel):
 class CronJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    cron: dict[
-        str, str | int
-    ]  # APScheduler CronTrigger fields, e.g. {hour: 7, day_of_week: mon-fri}
+    # APScheduler CronTrigger fields, e.g. {hour: 7, day_of_week: mon-fri}
+    cron: dict[str, str | int]
     misfire_grace_minutes: int = Field(default=30, ge=0)
 
 
@@ -111,3 +112,8 @@ class DataConfig(BaseModel):
 def load_data_config(config_dir: Path) -> DataConfig:
     raw = yaml.safe_load((config_dir / "data.yaml").read_text(encoding="utf-8"))
     return DataConfig.model_validate(raw)
+
+
+def load_fees(config_dir: Path) -> FeeSchedule:
+    raw = yaml.safe_load((config_dir / "fees.yaml").read_text(encoding="utf-8"))
+    return FeeSchedule.model_validate(raw)

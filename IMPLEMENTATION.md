@@ -279,19 +279,19 @@ Rules:
 
 ### 6.1 Calculators (`calc/`)
 
-Own implementations, pure functions over pandas Series, unit-tested against hand-checked reference values:
+Own implementations, pure functions over pandas Series (pyright strict), unit-tested against hand-checked reference values:
 
 | Function | Notes |
 |---|---|
-| `sma`, `ema`, `rsi` (Wilder), `macd`, `atr` (Wilder), `bollinger` | Standard definitions |
-| `trend_state(close, sma50, sma200)` | `up` / `down` / `sideways` per timeframe (daily, weekly resample) |
-| `swing_points(high, low, lookback)` | Pivot highs and lows, giving support and resistance levels with touch counts |
-| `fib_levels(swing_low, swing_high)` | 38.2 / 50 / 61.8 % |
-| `relative_strength(close, benchmark)` | Against SPY for the US and the DAX for the EU |
-| `post_earnings_moves(bars, events)` | Historical absolute moves around earnings |
-| `level_menu(...)` | Builds the named `LevelRef` list a module may choose from |
-| `fees.estimate(market, qty, price)` | From `fees.yaml`; IBKR Tiered/Fixed including minimums |
-| `sizing.quantity(...)` | See section 9.2 |
+| `indicators`: `sma`, `ema`, `rsi` (Wilder), `macd`, `atr` (Wilder), `bollinger` | EMAs and Wilder averages are seeded with the SMA of the first n values, as in charting tools; Bollinger uses the population standard deviation |
+| `trend.trend_states(close)` | `up` / `down` / `sideways` / `unknown`: daily SMA 50/200, weekly SMA 10/40 (same spans) |
+| `levels.swing_points(high, low, lookback)` + `levels.zones(...)` | Confirmed pivots (5 bars each side), clustered within 0.5 × ATR into support/resistance zones with touch counts |
+| `levels.fib_levels(low, high, up_leg)` | 38.2 / 50 / 61.8 % retracements of the largest leg in the last 126 bars |
+| `trend.relative_strength(close, benchmark)` | 63-bar return relative to SPY (US) or EXS1.DE (EU) |
+| `trend.post_earnings_moves(frame, events)` | Gap and close move on the reaction day (event day for before-open, next day for after-close, both for unknown times) |
+| `levels.level_menu(frame)` | Named `LevelRef` list, rounded to cents: `close`, `last_high`, `last_low`, `ema20`, `sma50`, `sma200`, `bb_lower`, `bb_upper`, `high_52w`, `low_52w`, `atr_stop_1_5x`/`2x`/`3x`, `support_1..3`, `resistance_1..3`, `swing_low_last`, `swing_high_last`, `fib_382`/`500`/`618`. Levels without enough history are left out. |
+| `fees.order_fees(...)`, `fees.round_trip_fees(...)` | From `config/fees.yaml` (checked against IBKR's pricing page); Tiered or Fixed per market, minimums and caps, estimated third-party and US sell-side regulatory fees, rounded up to the cent |
+| `sizing.position_size(...)` | Formula from section 9.2 in the instrument currency; returns the binding limit, or quantity 0 with a reason. Property tests (`hypothesis`) check that no result breaks a limit and that it is the largest quantity that fits. |
 
 ### 6.2 Baseline strategy: "pullback in an uptrend"
 

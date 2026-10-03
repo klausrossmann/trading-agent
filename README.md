@@ -37,6 +37,7 @@ Paper and live use the same code, risk limits and fee model. Live mode needs thr
 |---|---|
 | M0 Bootstrap: project, Docker stack, database, heartbeat, CI | done in the repo; Zenbook setup pending |
 | M1 Data foundation: universe, prices, FX, macro, earnings, quality checks | done in the repo; first real backfill pending on the Zenbook |
+| M2 Calculators: indicators, levels, level menu, fees, sizing | done |
 | M2–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
 
 ## Documentation
