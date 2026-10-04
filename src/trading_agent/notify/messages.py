@@ -270,6 +270,53 @@ def render_why(p: Proposal, label: tuple[str, str | None] | None = None) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class ClosedLine:
+    symbol: str
+    reason: str
+    pnl_eur: float
+    budget_eur: float
+
+
+@dataclass(frozen=True)
+class BookDay:
+    book: str
+    entered: list[str]
+    closed: list[ClosedLine]
+    open: int
+
+
+@dataclass(frozen=True)
+class Digest:
+    day: date
+    proposals_as_of: date | None
+    statuses: Mapping[str, int]
+    to_label: int
+    books: list[BookDay]
+    llm_usd_today: float
+
+
+def render_digest(d: Digest) -> str:
+    lines = [f"🌙 Evening digest {day_label(d.day)}"]
+    if d.proposals_as_of is None:
+        lines.append("Proposals: none yet")
+    else:
+        counts = ", ".join(f"{n} {s.replace('_', ' ')}" for s, n in sorted(d.statuses.items()))
+        lines.append(f"Proposals ({day_label(d.proposals_as_of)}): {counts or 'none'}")
+        if d.to_label:
+            lines.append(f"  {d.to_label} to label: /review")
+    for b in d.books:
+        parts = [f"{b.open} open"]
+        if b.entered:
+            parts.append(f"entered {', '.join(b.entered)}")
+        parts += [
+            f"closed {c.symbol} {money(c.pnl_eur, c.budget_eur)} ({c.reason})" for c in b.closed
+        ]
+        lines.append(f"{b.book}: {'; '.join(parts)}")
+    lines.append(f"LLM today: ${d.llm_usd_today:.4f}")
+    return "\n".join(lines)
+
+
 # --- alerts ---
 
 

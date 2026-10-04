@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import jobs, pipeline
+from trading_agent import jobs, journal, pipeline
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
@@ -127,7 +127,7 @@ def job_functions(
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
         "baseline_sim": partial(jobs.baseline_book, book),
-        "agent_sim": partial(jobs.agent_book, book),
+        "evening_digest": partial(journal.evening_digest, book, notifier),
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
@@ -206,10 +206,12 @@ async def serve(
         state = jobs.RuntimeState(mode=settings.app_mode, started_at=datetime.now(UTC))
         book = jobs.BookContext.load(settings.config_dir, sessions, universe)
         analysis = jobs.AnalysisContext.build(settings, sessions, universe)
+        review = journal.Review(sessions)
         notifier = build_notifier(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
-            commands(state, sessions, book, analysis),
+            commands(state, sessions, book, analysis) | journal.commands(sessions, review),
+            review.interaction(),
         )
         if isinstance(notifier, TelegramBot):
             notifier.start()

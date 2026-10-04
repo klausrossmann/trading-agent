@@ -7,11 +7,12 @@ from typing import Any, Protocol
 
 import structlog
 from pydantic import SecretStr
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -37,17 +38,52 @@ class LogNotifier:
 
 
 @dataclass(frozen=True)
+class Reply:
+    """A text with rows of inline buttons: (label, callback data of at most 64 bytes)."""
+
+    text: str
+    buttons: tuple[tuple[tuple[str, str], ...], ...] = ()
+
+    def markup(self) -> InlineKeyboardMarkup | None:
+        if not self.buttons:
+            return None
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton(label, callback_data=data) for label, data in row]
+                for row in self.buttons
+            ]
+        )
+
+
+def as_reply(answer: "str | Reply") -> Reply:
+    return answer if isinstance(answer, Reply) else Reply(answer)
+
+
+@dataclass(frozen=True)
 class Command:
     description: str
-    run: Callable[[list[str]], Awaitable[str]]  # args -> reply text
+    run: Callable[[list[str]], Awaitable["str | Reply"]]  # args -> reply
+
+
+@dataclass(frozen=True)
+class Interaction:
+    """Handlers for button presses (callback data -> new message content) and plain text."""
+
+    on_button: Callable[[str], Awaitable[Reply]]
+    on_text: Callable[[str], Awaitable[str | None]]  # None: not expected, show the help
 
 
 class TelegramBot:
     def __init__(
-        self, token: SecretStr, owner_chat_id: int | None, commands: Mapping[str, Command]
+        self,
+        token: SecretStr,
+        owner_chat_id: int | None,
+        commands: Mapping[str, Command],
+        interaction: Interaction | None = None,
     ) -> None:
         self._owner = owner_chat_id
         self._commands = dict(commands)
+        self._interaction = interaction
         self._ready = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self.app = Application.builder().token(token.get_secret_value()).build()
@@ -55,6 +91,8 @@ class TelegramBot:
         for name, command in self._commands.items():
             self.app.add_handler(CommandHandler(name, self.handler(command)))
         self.app.add_handler(CommandHandler(["help", "start"], self.help))
+        self.app.add_handler(CallbackQueryHandler(self.button))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.text))
         self.app.add_handler(MessageHandler(filters.ALL, self.help))
 
     async def gate(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -76,17 +114,42 @@ class TelegramBot:
         if update.effective_message:
             await update.effective_message.reply_text(self.help_text())
 
+    async def button(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        if self._interaction is None or not query.data:
+            return
+        try:
+            reply = await self._interaction.on_button(query.data)
+        except Exception as exc:
+            log.exception("telegram.button_failed")
+            reply = Reply(f"⚠️ Failed: {type(exc).__name__}")
+        await query.edit_message_text(reply.text[:MAX_MESSAGE], reply_markup=reply.markup())
+
+    async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        if message is None:
+            return
+        answer = None
+        if self._interaction is not None and message.text:
+            answer = await self._interaction.on_text(message.text)
+        await message.reply_text(answer[:MAX_MESSAGE] if answer else self.help_text())
+
     def handler(
         self, command: Command
     ) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]]:
         async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             try:
-                reply = await command.run(list(context.args or []))
+                reply = as_reply(await command.run(list(context.args or [])))
             except Exception as exc:
                 log.exception("telegram.command_failed")
-                reply = f"⚠️ Command failed: {type(exc).__name__}"
+                reply = Reply(f"⚠️ Command failed: {type(exc).__name__}")
             if update.effective_message:
-                await update.effective_message.reply_text(reply[:MAX_MESSAGE])
+                await update.effective_message.reply_text(
+                    reply.text[:MAX_MESSAGE], reply_markup=reply.markup()
+                )
 
         return handle
 
@@ -141,8 +204,11 @@ class TelegramBot:
 
 
 def build_notifier(
-    token: SecretStr | None, owner_chat_id: int | None, commands: Mapping[str, Command]
+    token: SecretStr | None,
+    owner_chat_id: int | None,
+    commands: Mapping[str, Command],
+    interaction: Interaction | None = None,
 ) -> TelegramBot | LogNotifier:
     if token is None or not token.get_secret_value():
         return LogNotifier()
-    return TelegramBot(token, owner_chat_id, commands)
+    return TelegramBot(token, owner_chat_id, commands, interaction)

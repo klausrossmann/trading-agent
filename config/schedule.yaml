@@ -27,7 +27,7 @@ jobs:
     anchor: close
     offset_minutes: 60
     misfire_grace_minutes: 360
-  agent_sim:                        # replay agent_shadow from the stored proposals (M7)
+  evening_digest:                   # replay agent_shadow from the proposals, then the digest (M7)
     calendar: XNYS
     anchor: close
     offset_minutes: 65

@@ -8,7 +8,15 @@ import pytest
 from pydantic import SecretStr
 from telegram.ext import ApplicationHandlerStop, ExtBot
 
-from trading_agent.notify.telegram import Command, LogNotifier, TelegramBot, build_notifier
+from trading_agent.notify.telegram import (
+    Command,
+    Interaction,
+    LogNotifier,
+    Reply,
+    TelegramBot,
+    as_reply,
+    build_notifier,
+)
 
 OWNER = 4242
 TOKEN = SecretStr("123456:TEST-token")
@@ -55,7 +63,7 @@ async def test_command_reply_and_failure() -> None:
     b = bot()
     u = update(OWNER)
     await b.handler(Command("echo", _echo))(u, context("a", "b"))
-    u.effective_message.reply_text.assert_awaited_once_with("args=['a', 'b']")
+    u.effective_message.reply_text.assert_awaited_once_with("args=['a', 'b']", reply_markup=None)
 
     u = update(OWNER)
     await b.handler(Command("fails", _boom))(u, context())
@@ -70,6 +78,51 @@ def test_help_lists_commands() -> None:
         "/boom - fails",
         "/help - this list",
     ]
+
+
+async def _on_button(data: str) -> Reply:
+    if data == "boom":
+        raise RuntimeError("secret detail")
+    return Reply(f"pressed {data}", ((("Next", "n"),),))
+
+
+async def _on_text(text: str) -> str | None:
+    return f"noted: {text}" if text.startswith("reason") else None
+
+
+def interactive() -> TelegramBot:
+    return TelegramBot(TOKEN, OWNER, {}, Interaction(_on_button, _on_text))
+
+
+async def test_buttons_edit_the_message_with_the_answer() -> None:
+    query = SimpleNamespace(data="l:1:agree", answer=AsyncMock(), edit_message_text=AsyncMock())
+    await interactive().button(cast(Any, SimpleNamespace(callback_query=query)), context())
+    query.answer.assert_awaited_once()
+    call = query.edit_message_text.await_args
+    assert call is not None
+    assert call.args[0] == "pressed l:1:agree"
+    (row,) = call.kwargs["reply_markup"].inline_keyboard
+    assert [(b.text, b.callback_data) for b in row] == [("Next", "n")]
+
+    query.data = "boom"
+    await interactive().button(cast(Any, SimpleNamespace(callback_query=query)), context())
+    assert query.edit_message_text.await_args.args[0] == "⚠️ Failed: RuntimeError"
+
+
+async def test_plain_text_goes_to_the_interaction_or_shows_help() -> None:
+    b = interactive()
+    for text, expected in (("reason: extended", "noted: reason: extended"), ("hi", None)):
+        message = SimpleNamespace(text=text, reply_text=AsyncMock())
+        await b.text(cast(Any, SimpleNamespace(effective_message=message)), context())
+        assert message.reply_text.await_args.args[0] == (expected or b.help_text())
+
+
+def test_reply_markup() -> None:
+    assert Reply("x").markup() is None
+    assert as_reply("x") == Reply("x")
+    markup = Reply("x", ((("A", "a"), ("B", "b")), (("C", "c"),))).markup()
+    assert markup is not None
+    assert [[b.text for b in row] for row in markup.inline_keyboard] == [["A", "B"], ["C"]]
 
 
 async def test_send_only_when_ready(monkeypatch: pytest.MonkeyPatch) -> None:
