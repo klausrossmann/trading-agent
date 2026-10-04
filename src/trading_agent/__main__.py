@@ -315,6 +315,38 @@ def ibkr_check(symbols: list[str] | None = CheckSymbolsArgument) -> None:
     typer.echo("\n".join(asyncio.run(_run())))
 
 
+@app.command(name="weekly-report")
+def weekly_report(
+    day: str | None = typer.Option(None, "--date", help="Week end, YYYY-MM-DD; default today."),
+    output: Path | None = OutputOption,
+) -> None:
+    """Weekly report now (KPIs, costs, calibration, go-live gate); stores it, sends the summary."""
+    from datetime import date
+
+    from trading_agent import jobs, reports
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+    from trading_agent.notify.telegram import LogNotifier
+
+    settings = _settings()
+
+    async def _run() -> str:
+        engine = create_engine(settings.database_url)
+        try:
+            ctx = jobs.BookContext.load(
+                settings.config_dir, session_factory(engine), load_universe(settings.config_dir)
+            )
+            week_end = date.fromisoformat(day) if day else None
+            return await reports.weekly_report(ctx, LogNotifier(), week_end)
+        finally:
+            await engine.dispose()
+
+    text = asyncio.run(_run())
+    typer.echo(text)
+    if output:
+        output.write_text(text, encoding="utf-8")
+
+
 @app.command()
 def reset() -> None:
     """End a halt (kill switch): prints a code to confirm with /reset CODE in Telegram."""

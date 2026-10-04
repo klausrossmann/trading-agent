@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, pipeline, trading
+from trading_agent import broker, jobs, journal, pipeline, reports, trading
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
@@ -29,6 +29,7 @@ from trading_agent.notify import heartbeat, messages
 from trading_agent.notify.telegram import (
     Command,
     Interaction,
+    LogNotifier,
     Notifier,
     Reply,
     TelegramBot,
@@ -149,6 +150,7 @@ def job_functions(
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
         "reconcile": partial(broker.reconcile_positions, link, notifier, expected, halt),
+        "weekly_report": partial(reports.weekly_report, book, notifier),
     }
     if trade is not None:
         fns |= {
@@ -281,15 +283,23 @@ async def serve(
         review = journal.Review(sessions)
         link: broker.BrokerLink | None = None
         center = ControlCenter(sessions, settings.app_mode)
+        if settings.ib_enabled:
+            link = broker.BrokerLink(settings, LogNotifier())
+            center.gateway_mode = link.mode
+            state.gateway = link.status
+        trade = await trading_context(settings, sessions, book, center, LogNotifier(), link)
         notifier = build_notifier(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
             commands(state, sessions, book, analysis)
             | journal.commands(sessions, review)
-            | center.commands(),
+            | center.commands()
+            | trading.commands(trade),
             interaction(review, center),
         )
-        center.notifier = notifier
+        center.notifier = trade.notifier = notifier
+        if link is not None:
+            link.notifier = notifier
         live = center.start_live_interlock()
 
         async def kill_switch_line() -> str:
@@ -299,11 +309,6 @@ async def serve(
         if isinstance(notifier, TelegramBot):
             notifier.start()
         link_task: asyncio.Task[None] | None = None
-        if settings.ib_enabled:
-            link = broker.BrokerLink(settings, notifier)
-            center.gateway_mode = link.mode
-            state.gateway = link.status
-        trade = await trading_context(settings, sessions, book, center, notifier, link)
         expected = (
             partial(trading.expected_positions, trade) if settings.ib_orders_enabled else None
         )

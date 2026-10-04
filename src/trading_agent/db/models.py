@@ -339,3 +339,14 @@ class EquityDailyRow(Base):
     equity_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     cash_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     invested_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+
+
+class ReportRow(Base):
+    """Rendered Markdown reports (weekly, tax); a re-run of the same period replaces it."""
+
+    __tablename__ = "reports"
+
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    period_end: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    body: Mapped[str] = mapped_column(Text)

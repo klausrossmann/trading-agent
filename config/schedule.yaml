@@ -70,3 +70,6 @@ jobs:
   monitor:                          # broker sync in sessions; IBKR mode only (M8)
     cron: {day_of_week: mon-fri, hour: "9-22", minute: "*/10"}
     misfire_grace_minutes: 5
+  weekly_report:                    # KPIs vs. baselines, costs, calibration, go-live gate (M9)
+    cron: {day_of_week: sat, hour: 10, minute: 0}
+    misfire_grace_minutes: 720

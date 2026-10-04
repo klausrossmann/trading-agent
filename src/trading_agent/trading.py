@@ -29,12 +29,12 @@ from trading_agent.domain.market import Bar, Instrument, Market, Observation
 from trading_agent.domain.orders import Bracket, BracketRequest
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
-from trading_agent.domain.trading import Book
+from trading_agent.domain.trading import Book, Trade
 from trading_agent.execution import sim
 from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
 from trading_agent.notify import messages
-from trading_agent.notify.telegram import Notifier
+from trading_agent.notify.telegram import Command, Notifier
 from trading_agent.portfolio import book as accounting
 from trading_agent.portfolio.snapshot import snapshot, to_tick
 from trading_agent.risk import engine
@@ -405,3 +405,97 @@ async def expected_positions(ctx: TradingContext) -> dict[int, tuple[str, float]
             symbol, qty = out.get(inst.conid, (inst.yahoo_symbol, 0.0))
             out[inst.conid] = (symbol, qty + b.open_qty)
     return out
+
+
+# --- Telegram: /positions, /pnl ---
+
+
+async def positions_text(ctx: TradingContext) -> str:
+    loaded = await _load(ctx)
+    held: list[messages.HeldLine] = []
+    pending: list[messages.PendingLine] = []
+    for b, _ in loaded.brackets:
+        inst = loaded.instruments[b.instrument_id]
+        if b.state in accounting.PENDING and b.quantity > b.filled_qty:
+            pending.append(
+                messages.PendingLine(
+                    inst.yahoo_symbol, b.quantity - b.filled_qty, float(b.entry), b.expires
+                )
+            )
+        if b.open_qty <= 0 or b.entry_price is None:
+            continue
+        last = loaded.marks.get(b.instrument_id, b.entry_price)
+        risk = b.entry - b.initial_stop
+        _, cfg = ctx.sleeve(inst.market)
+        held.append(
+            messages.HeldLine(
+                symbol=inst.yahoo_symbol,
+                quantity=b.open_qty,
+                entry=float(b.entry_price),
+                stop=float(b.stop),
+                target=float(b.target),
+                last=float(last),
+                r_now=float((last - b.entry_price) / risk) if risk > 0 else 0.0,
+                pnl_eur=float(b.open_qty * (last - b.entry_price) / loaded.rates[inst.currency]),
+                budget_eur=float(cfg.capital.agent_budget_eur),
+                exiting=b.state == "exiting",
+            )
+        )
+    return messages.render_positions(ctx.book, held, pending)
+
+
+def _change(history: Sequence[tuple[date, Decimal]], before: date, base: Decimal) -> float:
+    """Last equity minus the last equity before `before` (the budget if none)."""
+    earlier = [e for d, e in history if d < before]
+    return float(history[-1][1] - (earlier[-1] if earlier else base))
+
+
+async def pnl_text(ctx: TradingContext) -> str:
+    markets = ctx.risk.markets.paper if ctx.mode == "paper" else ctx.risk.markets.live
+    async with ctx.sessions() as s:
+        baseline = await trades_repo.trades(s, "baseline_sim")
+    lines: list[messages.PnlLine] = []
+    for sleeve_markets, cfg in ctx.risk.sleeves(list(markets), ctx.mode):
+        key = ",".join(sleeve_markets)
+        budget = cfg.capital.agent_budget_eur
+        async with ctx.sessions() as s:
+            history = await book_repo.equity_history(s, ctx.book, key)
+        as_of = history[-1][0] if history else None
+        ref = as_of or ctx.clock().date()
+        week_start = ref - timedelta(days=ref.weekday())
+        month_start = ref.replace(day=1)
+        mine = [t for t in baseline if t.market in sleeve_markets and t.exit_date is not None]
+
+        def closed_since(start: date, trades: Sequence[Trade] = mine) -> float:
+            return sum(t.pnl_net_eur or 0.0 for t in trades if t.exit_date and t.exit_date >= start)
+
+        lines.append(
+            messages.PnlLine(
+                sleeve=key,
+                budget_eur=float(budget),
+                as_of=as_of,
+                day=_change(history, ref, budget) if history else 0.0,
+                week=_change(history, week_start, budget) if history else 0.0,
+                month=_change(history, month_start, budget) if history else 0.0,
+                total=float(history[-1][1] - budget) if history else 0.0,
+                baseline=(
+                    closed_since(week_start),
+                    closed_since(month_start),
+                    closed_since(date.min),
+                ),
+            )
+        )
+    return messages.render_pnl(ctx.book, lines)
+
+
+def commands(ctx: TradingContext) -> dict[str, Command]:
+    async def positions(_: list[str]) -> str:
+        return await positions_text(ctx)
+
+    async def pnl(_: list[str]) -> str:
+        return await pnl_text(ctx)
+
+    return {
+        "positions": Command("open positions and pending entries of the agent book", positions),
+        "pnl": Command("P&L by day, week, month and since start, with the baseline", pnl),
+    }

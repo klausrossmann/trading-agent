@@ -728,7 +728,7 @@ Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start 
 | `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
 
-Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. Since M8 step 2: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`. The others arrive with the features they report on.
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. Since M8 step 2: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`. Since M9: `/positions`, `/pnl`. The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
@@ -774,6 +774,15 @@ M6 is split because the IBKR paper login doesn't exist yet: the dashboard comes 
 KPIs per book, weekly and cumulative: number of trades, win rate, average R, expectancy, profit factor, maximum drawdown, Sharpe/Sortino on daily equity, fees, LLM costs, and **net expectancy after LLM costs**. For the agent: calibration (confidence buckets against hit rate) and your agree/disagree accuracy.
 
 Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed trades (including shadow), positive net expectancy after costs, and `agent_paper` + `agent_shadow` beating `baseline_sim`.
+
+### 14.1 Implementation (M9, 2026-10-04)
+
+| Part | Where | Notes |
+|---|---|---|
+| Weekly report | `evaluation/weekly.py`, `reports.py`, job `weekly_report` (Saturday 10:00), CLI `trading-agent weekly-report [--date] [--output]` | Per book this week and since the start: trades, win rate, average R, expectancy, profit factor, net P&L, fees; open positions; `agent_paper` drawdown per sleeve; buy and hold of the benchmarks. LLM costs in EUR (ECB rate). Calibration by confidence bucket and your label accuracy over the agent sample. Stored in `reports` (migration `0009`); Telegram gets the summary with the gate. |
+| Agent sample | `weekly.agent_sample` | `agent_paper` trades plus `agent_shadow` trades of proposals that weren't executed, so nothing is counted twice. Trades link to proposals by instrument and signal date. |
+| Gate | `weekly.gate` | Four checks: 91 days since the paper start, 50 closed trades in the agent sample, net expectancy after all LLM costs > 0, and above `baseline_sim`'s expectancy. |
+| Telegram | `trading.commands` | `/positions`: open positions with entry, stop, target, last close, R and unrealized P&L; pending entries with their limit and expiry. `/pnl`: per sleeve day, week, month and since start from the equity snapshots, with `baseline_sim`'s closed P&L for the same windows. |
 
 ---
 

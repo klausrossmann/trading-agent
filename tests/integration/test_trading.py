@@ -164,6 +164,9 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     result = await trading.place(ctx, "US")
     assert [p.symbol for p in result.placed] == ["AAA"]
     assert result.rejected == [("BBB", "levels: R:R 1.50 below 2.0")]
+    assert (await trading.positions_text(ctx)).endswith(
+        "pending AAA 3 limit 100.00 until Thu 08 Oct 22:00"
+    )
     assert inbox.sent[-1].splitlines()[:2] == [
         "📤 Orders US (simulator)",
         "  AAA 3 @ 100.00, stop 96.00, target 108.00",
@@ -182,6 +185,16 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
         history = await book_repo.equity_history(s, "agent_paper", "US")
     assert (trade.quantity, trade.exit_date) == (3, None)
     assert history[0][0] == TODAY
+    cmds = trading.commands(ctx)
+    positions = await cmds["positions"].run([])
+    assert positions == (
+        "📊 agent_paper\n  AAA 3 @ 100.05, stop 96.00, target 108.00, last 100.00: -0.01 R, "
+        "−€0.14 (−0.0 %)"
+    )
+    pnl = str(await cmds["pnl"].run([]))
+    assert pnl.splitlines()[0] == "💶 P&L agent_paper (equity at the last close)"
+    assert pnl.splitlines()[1].startswith("US (budget €1,000, Wed 7 Oct): day −€0.")
+    assert pnl.splitlines()[3].startswith("EU (budget €5,000, no close yet): day €0.00")
 
     day2 = date(2026, 10, 8)
     await _add_bar(sessions, ids["AAA"], _bar(day2, 101, 105, 100.5, 104))

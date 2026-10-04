@@ -463,3 +463,71 @@ def exit_alert(symbol: str, quantity: int, price: float, reason: str) -> str:
 
 def entry_ended_alert(symbol: str, outcome: str) -> str:
     return f"⌛ {symbol}: entry {outcome} without a fill"
+
+
+@dataclass(frozen=True)
+class HeldLine:
+    symbol: str
+    quantity: int
+    entry: float
+    stop: float
+    target: float
+    last: float
+    r_now: float
+    pnl_eur: float  # unrealized, before exit fees
+    budget_eur: float
+    exiting: bool = False
+
+
+@dataclass(frozen=True)
+class PendingLine:
+    symbol: str
+    quantity: int
+    limit: float
+    until: datetime
+
+
+def render_positions(book: str, held: Sequence[HeldLine], pending: Sequence[PendingLine]) -> str:
+    if not held and not pending:
+        return f"📊 {book}: no open positions or pending entries."
+    lines = [f"📊 {book}"]
+    for h in held:
+        lines.append(
+            f"  {h.symbol} {h.quantity} @ {h.entry:.2f}, stop {h.stop:.2f}, target {h.target:.2f}"
+            f", last {h.last:.2f}: {h.r_now:+.2f} R, {money(h.pnl_eur, h.budget_eur)}"
+            + (" (exit order out)" if h.exiting else "")
+        )
+    lines += [
+        f"  pending {p.symbol} {p.quantity} limit {p.limit:.2f} until {when(p.until)}"
+        for p in pending
+    ]
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class PnlLine:
+    sleeve: str
+    budget_eur: float
+    as_of: date | None  # last equity snapshot
+    day: float
+    week: float
+    month: float
+    total: float
+    baseline: tuple[float, float, float]  # baseline_sim closed P&L: week, month, since start
+
+
+def render_pnl(book: str, lines: Sequence[PnlLine]) -> str:
+    out = [f"💶 P&L {book} (equity at the last close)"]
+    for p in lines:
+        b = p.budget_eur
+        as_of = f", {day_label(p.as_of)}" if p.as_of else ", no close yet"
+        out.append(
+            f"{p.sleeve} (budget €{b:,.0f}{as_of}): day {money(p.day, b)} · week "
+            f"{money(p.week, b)} · month {money(p.month, b)} · since start {money(p.total, b)}"
+        )
+        w, m, t = p.baseline
+        out.append(
+            f"  baseline_sim, closed trades: week {money(w, b)} · month {money(m, b)} · "
+            f"since start {money(t, b)}"
+        )
+    return "\n".join(out)
