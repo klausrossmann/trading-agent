@@ -7,10 +7,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.risk import KillSwitch
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def money(eur: float, budget_eur: float) -> str:
@@ -145,6 +148,8 @@ class StatusSnapshot:
     blocked: Mapping[str, Sequence[str]]  # market -> symbols, from the last quality check
     next_jobs: Sequence[tuple[str, datetime]]
     gateway: str = "disabled (IB_ENABLED=false)"
+    kill_switch: str = "unknown"
+    interlock: str | None = None  # live mode only
 
 
 def render_status(s: StatusSnapshot) -> str:
@@ -166,7 +171,9 @@ def render_status(s: StatusSnapshot) -> str:
         "Next jobs:",
         *[f"  {name} {when:%a %d %b %H:%M}" for name, when in s.next_jobs],
         f"IB Gateway: {s.gateway}",
-        "LLM spend: /budget · Kill switch: M8",
+        f"Kill switch: {s.kill_switch}",
+        *([f"Live interlock: {s.interlock}"] if s.interlock else []),
+        "LLM spend: /budget",
     ]
     return "\n".join(lines)
 
@@ -376,3 +383,40 @@ def reconcile_alert(unknown: Sequence[str], missing: Sequence[str], qty: Sequenc
     if qty:
         lines.append(f"Different size: {', '.join(qty)}")
     return "\n".join(lines)
+
+
+# --- kill switch and live interlock (M8) ---
+
+RESET_HINT = "Reset on the host with `trading-agent reset`, then send /reset CODE here."
+STOP_CONFIRM = (
+    "Stop trading? The agent halts: no new entries, protective stops stay. "
+    "Only a reset on the host undoes it."
+)
+
+
+def when(t: datetime) -> str:
+    local = t.astimezone(BERLIN)
+    return f"{WEEKDAYS[local.weekday()]} {local:%d %b %H:%M}"
+
+
+def kill_switch_line(ks: KillSwitch) -> str:
+    if ks.state == "active":
+        return "active"
+    if ks.state == "paused":
+        return f"paused ({ks.reason}) until {when(ks.until) if ks.until else '/resume'}"
+    return f"halted ({ks.reason})" + (f" since {when(ks.since)}" if ks.since else "")
+
+
+def kill_switch_alert(ks: KillSwitch) -> str:
+    if ks.state == "active":
+        return f"▶️ New entries allowed again ({ks.reason})"
+    if ks.state == "paused":
+        return f"⏸ New entries {kill_switch_line(ks)}"
+    return f"⛔ Halted: {ks.reason}. No new entries; protective stops stay.\n{RESET_HINT}"
+
+
+def live_confirm_alert() -> str:
+    return (
+        "🔐 Live mode: no orders until you send /confirm_live CODE. The code is in the host "
+        "logs: `docker compose logs agent | grep live.confirm_code`."
+    )

@@ -8,6 +8,7 @@ from sqlalchemy import (
     ARRAY,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Numeric,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -232,3 +234,19 @@ class UserLabelRow(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     label: Mapped[str] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(Text)
+
+
+class KillSwitchRow(Base):
+    """The single kill-switch row (IMPLEMENTATION.md 9.3); every change also goes to audit_log."""
+
+    __tablename__ = "kill_switch"
+    __table_args__ = (CheckConstraint("id = 1", name="single_row"),)
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, server_default=text("1"))
+    state: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reset_code_sha256: Mapped[str | None] = mapped_column(Text)
+    reset_code_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

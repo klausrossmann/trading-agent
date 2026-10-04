@@ -45,9 +45,13 @@ class FakeIB:
         self.qualified: list[Any] = []
         self.summary: list[Any] = []
         self.position_list: list[Any] = []
+        self.accounts: list[str] = []
 
     def isConnected(self) -> bool:
         return self.connected
+
+    def managedAccounts(self) -> list[str]:
+        return self.accounts
 
     async def connectAsync(self, *args: Any, **kwargs: Any) -> None:
         if not self.connect_ok:
@@ -233,3 +237,23 @@ async def test_link_alerts_once_after_ten_minutes_and_on_recovery() -> None:
 
 async def test_reconcile_job_skips_without_a_connection() -> None:
     assert await broker.reconcile_positions(None, cast(Any, None), Inbox()) is None
+
+
+@pytest.mark.parametrize(
+    ("connected", "accounts", "mode"),
+    [
+        (False, ["DU123"], None),
+        (True, [], None),
+        (True, ["DU123"], "paper"),
+        (True, ["DU123", "U456"], "live"),
+        (True, ["U456"], "live"),
+    ],
+)
+def test_gateway_mode_from_the_account_type(
+    connected: bool, accounts: list[str], mode: str | None
+) -> None:
+    fake = FakeIB()
+    fake.connected = connected
+    fake.accounts = accounts
+    link = broker.BrokerLink(Settings(db_password=SecretStr("x")), Inbox(), ib=_ib(fake))
+    assert link.mode() == mode

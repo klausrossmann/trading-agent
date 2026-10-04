@@ -1,7 +1,7 @@
 """Scheduled and CLI-triggered jobs (orchestration layer): wires providers, config and DB."""
 
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -66,6 +66,8 @@ class RuntimeState:
     blocked: dict[str, list[str]] = field(default_factory=dict[str, list[str]])  # market -> symbols
     scheduler: Any = None  # AsyncIOScheduler, set once built
     gateway: Callable[[], str] | None = None  # IB Gateway status, when enabled
+    kill_switch: Callable[[], Awaitable[str]] | None = None
+    interlock: Callable[[], str | None] | None = None
 
 
 @dataclass
@@ -472,6 +474,8 @@ async def status_text(state: RuntimeState, sessions: Sessions, now: datetime | N
             blocked=state.blocked,
             next_jobs=next_jobs,
             **({"gateway": state.gateway()} if state.gateway else {}),
+            **({"kill_switch": await state.kill_switch()} if state.kill_switch else {}),
+            interlock=state.interlock() if state.interlock else None,
         )
     )
 

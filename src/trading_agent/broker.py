@@ -14,6 +14,7 @@ from trading_agent.data.ingest import Sessions
 from trading_agent.db import market as market_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Instrument
+from trading_agent.domain.risk import Mode
 from trading_agent.execution.ibkr import IbkrBroker
 from trading_agent.execution.reconcile import ReconcileReport, reconcile
 from trading_agent.notify import messages
@@ -59,6 +60,13 @@ class BrokerLink:
         if self.down_since is None:
             return "connecting"
         return f"unreachable for {int((self._clock() - self.down_since) // 60)} min"
+
+    def mode(self) -> Mode | None:
+        """Paper or live from the account type (paper ids start with D); None if unknown."""
+        accounts = self.ib.managedAccounts() if self.connected else []
+        if not accounts:
+            return None
+        return "paper" if all(a.startswith("D") for a in accounts) else "live"
 
     async def connect(self) -> bool:
         s = self.settings
@@ -121,9 +129,12 @@ async def sync_conids(link: BrokerLink, sessions: Sessions) -> list[str]:
 
 
 async def reconcile_positions(
-    link: BrokerLink | None, sessions: Sessions, notifier: Notifier
+    link: BrokerLink | None,
+    sessions: Sessions,
+    notifier: Notifier,
+    halt: Callable[[str], Awaitable[object]] | None = None,
 ) -> ReconcileReport | None:
-    """Broker positions vs. the open agent_paper trades (empty until orders exist in M8)."""
+    """Broker positions vs. the open agent_paper trades; any difference halts (10.3)."""
     if link is None or not link.connected:
         log.info("reconcile.skipped", reason="gateway not connected")
         return None
@@ -152,12 +163,19 @@ async def reconcile_positions(
                 [f"{m.symbol} {m.expected:g} vs {m.actual:g}" for m in report.quantity],
             )
         )
+        if halt is not None:
+            await halt("reconciliation mismatch")
     return report
 
 
-async def on_connect(link: BrokerLink, sessions: Sessions, notifier: Notifier) -> None:
+async def on_connect(
+    link: BrokerLink,
+    sessions: Sessions,
+    notifier: Notifier,
+    halt: Callable[[str], Awaitable[object]] | None = None,
+) -> None:
     await sync_conids(link, sessions)
-    await reconcile_positions(link, sessions, notifier)
+    await reconcile_positions(link, sessions, notifier, halt)
 
 
 # --- one-off check for the runbook (IMPLEMENTATION.md 15.5) ---

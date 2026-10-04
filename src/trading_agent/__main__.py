@@ -316,6 +316,31 @@ def ibkr_check(symbols: list[str] | None = CheckSymbolsArgument) -> None:
 
 
 @app.command()
+def reset() -> None:
+    """End a halt (kill switch): prints a code to confirm with /reset CODE in Telegram."""
+    from trading_agent.controls import RESET_CODE_TTL, ControlCenter
+    from trading_agent.db.session import create_engine, session_factory
+
+    settings = _settings()
+
+    async def _run() -> str | None:
+        engine = create_engine(settings.database_url)
+        try:
+            return await ControlCenter(
+                session_factory(engine), settings.app_mode
+            ).issue_reset_code()
+        finally:
+            await engine.dispose()
+
+    code = asyncio.run(_run())
+    if code is None:
+        typer.echo("The agent is not halted; nothing to reset.")
+        return
+    minutes = int(RESET_CODE_TTL.total_seconds() // 60)
+    typer.echo(f"Send /reset {code} to the bot within {minutes} minutes.")
+
+
+@app.command()
 def dashboard(
     address: str = typer.Option("127.0.0.1", help="Listen address; 0.0.0.0 inside the container."),
     port: int = typer.Option(8501),

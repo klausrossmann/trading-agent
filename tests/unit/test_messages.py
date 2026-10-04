@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.risk import KillSwitch
 from trading_agent.notify import messages as m
 
 
@@ -77,6 +78,38 @@ def test_status_text() -> None:
     assert "last bars US 02 Oct, EU -" in text
     assert "EU: EXS1.DE" in text
     assert "ingest_eod_eu:2026-10-05 Mon 05 Oct 16:00" in text
+    assert "Kill switch: unknown" in text
+    assert "Live interlock" not in text
+
+
+def test_kill_switch_texts() -> None:
+    since = datetime(2026, 10, 7, 14, 0, tzinfo=UTC)
+    until = datetime(2026, 10, 7, 22, 0, tzinfo=UTC)
+    assert m.kill_switch_line(KillSwitch()) == "active"
+    paused = KillSwitch(state="paused", reason="daily loss limit", since=since, until=until)
+    assert m.kill_switch_line(paused) == "paused (daily loss limit) until Thu 08 Oct 00:00"
+    halted = KillSwitch(state="halted", reason="/stop", since=since)
+    assert m.kill_switch_line(halted) == "halted (/stop) since Wed 07 Oct 16:00"
+    assert m.kill_switch_line(halted.model_copy(update={"since": None})) == "halted (/stop)"
+    alert = m.kill_switch_alert(halted)
+    assert alert.startswith("⛔ Halted: /stop. No new entries; protective stops stay.")
+    assert "trading-agent reset" in alert
+    status = m.render_status(
+        m.StatusSnapshot(
+            mode="live",
+            started_at=since,
+            now=since,
+            heartbeat_at=None,
+            heartbeat_ok=None,
+            last_bars={},
+            blocked={},
+            next_jobs=[],
+            kill_switch=m.kill_switch_line(paused),
+            interlock="waiting for /confirm_live CODE",
+        )
+    )
+    assert "Kill switch: paused (daily loss limit)" in status
+    assert "Live interlock: waiting for /confirm_live CODE" in status
 
 
 def test_alerts() -> None:

@@ -15,13 +15,21 @@ from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
 from trading_agent import broker, jobs, journal, pipeline
+from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
 from trading_agent.db.session import create_engine, session_factory
 from trading_agent.notify import heartbeat, messages
-from trading_agent.notify.telegram import Command, Notifier, TelegramBot, build_notifier
+from trading_agent.notify.telegram import (
+    Command,
+    Interaction,
+    Notifier,
+    Reply,
+    TelegramBot,
+    build_notifier,
+)
 from trading_agent.settings import CronJob, DataConfig, ScheduleConfig, SessionJob, Settings
 
 log = structlog.get_logger(__name__)
@@ -121,7 +129,9 @@ def job_functions(
     notifier: Notifier,
     analysis: jobs.AnalysisContext,
     link: broker.BrokerLink | None = None,
+    center: ControlCenter | None = None,
 ) -> dict[str, JobFn]:
+    halt = center.halt if center else None
     return {
         "ingest_macro": partial(jobs.macro, data),
         "ingest_earnings": partial(jobs.earnings, data),
@@ -132,8 +142,19 @@ def job_functions(
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
-        "reconcile": partial(broker.reconcile_positions, link, data.sessions, notifier),
+        "reconcile": partial(broker.reconcile_positions, link, data.sessions, notifier, halt),
     }
+
+
+def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
+    """Buttons go to the kill switch (k:...) or the review; replies only to the review."""
+
+    async def on_button(data: str) -> Reply:
+        if data.startswith("k:"):
+            return await center.on_button(data)
+        return await review.on_button(data)
+
+    return Interaction(on_button, review.on_text)
 
 
 def alert_on_job_failures(
@@ -209,29 +230,46 @@ async def serve(
         book = jobs.BookContext.load(settings.config_dir, sessions, universe)
         analysis = jobs.AnalysisContext.build(settings, sessions, universe)
         review = journal.Review(sessions)
+        link: broker.BrokerLink | None = None
+        center = ControlCenter(sessions, settings.app_mode)
         notifier = build_notifier(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
-            commands(state, sessions, book, analysis) | journal.commands(sessions, review),
-            review.interaction(),
+            commands(state, sessions, book, analysis)
+            | journal.commands(sessions, review)
+            | center.commands(),
+            interaction(review, center),
         )
+        center.notifier = notifier
+        live = center.start_live_interlock()
+
+        async def kill_switch_line() -> str:
+            return messages.kill_switch_line(await center.kill_switch())
+
+        state.kill_switch, state.interlock = kill_switch_line, center.interlock_line
         if isinstance(notifier, TelegramBot):
             notifier.start()
-        link: broker.BrokerLink | None = None
         link_task: asyncio.Task[None] | None = None
         if settings.ib_enabled:
             link = broker.BrokerLink(
                 settings,
                 notifier,
-                on_connect=partial(broker.on_connect, sessions=sessions, notifier=notifier),
+                on_connect=partial(
+                    broker.on_connect, sessions=sessions, notifier=notifier, halt=center.halt
+                ),
             )
+            center.gateway_mode = link.mode
             state.gateway = link.status
             link_task = asyncio.create_task(link.run(stop))
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
             ctx.ibkr = link.prices if link else None
             scheduler = build_scheduler(
-                schedule, settings, http, job_functions(ctx, book, notifier, analysis, link), state
+                schedule,
+                settings,
+                http,
+                job_functions(ctx, book, notifier, analysis, link, center),
+                state,
             )
             state.scheduler = scheduler
             pending_alerts = alert_on_job_failures(scheduler, notifier)
@@ -241,7 +279,11 @@ async def serve(
             )
             if isinstance(notifier, TelegramBot):
                 await notifier.wait_ready(within_s=30)
-            await notifier.send(f"▶️ Agent started ({settings.app_mode})")
+            await notifier.send(
+                f"▶️ Agent started ({settings.app_mode}), kill switch {await kill_switch_line()}"
+            )
+            if live:
+                await notifier.send(messages.live_confirm_alert())
             try:
                 await stop.wait()
             finally:

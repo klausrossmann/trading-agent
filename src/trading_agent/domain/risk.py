@@ -38,6 +38,15 @@ class Controls(_Frozen):
     live_confirmed: bool  # /confirm_live after this start
 
 
+class KillSwitch(_Frozen):
+    """Stored kill-switch state (9.3)."""
+
+    state: TradingState = "active"
+    reason: str = ""
+    since: datetime | None = None
+    until: datetime | None = None  # paused: automatic resume; None means until /resume
+
+
 class Holding(_Frozen):
     """An open position or a pending entry order of the sleeve."""
 

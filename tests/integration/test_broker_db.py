@@ -87,7 +87,12 @@ async def test_conids_are_stored_and_positions_reconciled(sessions: Sessions) ->
     async with sessions.begin() as s:
         await trades_repo.replace_book(s, "agent_paper", [trade])
     inbox = Inbox()
-    report = await broker.reconcile_positions(link, sessions, inbox)
+    halts: list[str] = []
+
+    async def halt(reason: str) -> None:
+        halts.append(reason)
+
+    report = await broker.reconcile_positions(link, sessions, inbox, halt)
     assert report is not None
     assert [p.symbol for p in report.unknown] == ["ZZZ"]
     assert [m.symbol for m in report.missing] == ["AAA"]
@@ -96,3 +101,4 @@ async def test_conids_are_stored_and_positions_reconciled(sessions: Sessions) ->
         "At the broker only: ZZZ 1",
         "In the book only: AAA 4",
     ]
+    assert halts == ["reconciliation mismatch"]

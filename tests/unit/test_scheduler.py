@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -10,7 +11,10 @@ from pydantic import SecretStr
 from typer.testing import CliRunner
 
 from trading_agent.__main__ import app
-from trading_agent.scheduler import JobFn, build_scheduler, plan_session_jobs
+from trading_agent.controls import ControlCenter
+from trading_agent.journal import Review
+from trading_agent.notify.telegram import Reply
+from trading_agent.scheduler import JobFn, build_scheduler, interaction, plan_session_jobs
 from trading_agent.settings import (
     HeartbeatJob,
     ScheduleConfig,
@@ -120,5 +124,26 @@ async def test_session_jobs_follow_exchange_calendar(
 def test_cli_lists_commands() -> None:
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
-    for command in ("run", "backfill", "quality"):
+    for command in ("run", "backfill", "quality", "reset"):
         assert command in result.output
+
+
+async def test_buttons_are_routed_by_prefix() -> None:
+    seen: list[str] = []
+
+    class Stub:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def on_button(self, data: str) -> Reply:
+            seen.append(f"{self.name} {data}")
+            return Reply(self.name)
+
+        async def on_text(self, text: str) -> str | None:
+            return f"{self.name} text"
+
+    routed = interaction(cast(Review, Stub("review")), cast(ControlCenter, Stub("controls")))
+    assert (await routed.on_button("k:stop")).text == "controls"
+    assert (await routed.on_button("l:abc:a")).text == "review"
+    assert await routed.on_text("because") == "review text"
+    assert seen == ["controls k:stop", "review l:abc:a"]

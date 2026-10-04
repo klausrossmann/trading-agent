@@ -532,7 +532,21 @@ Every check result is stored, and rejections show up in the evening digest.
 | Earnings, liquidity | | No entry if the next report is 0–3 sessions away (as in the baseline). The liquidity floor compares the 20-session average close × volume in the instrument currency, as the baseline does. |
 | Tests | `tests/unit/risk/test_risk_engine.py` | One test per rule and boundary, plus a `hypothesis` property test: every approved decision is re-checked against all limits computed independently. `make test` and CI fail below 100 % branch coverage of `trading_agent.risk`. |
 
-Next M8 steps: (2) kill switch state, `/pause`, `/resume`, `/stop`, live interlock; (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker; (4) `place_eu`/`place_us`, `monitor`, stop management, halting on reconciliation mismatches; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
+Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker; (4) `place_eu`/`place_us`, `monitor`, stop management, applying the engine's `trip`, cancelling entry orders on a halt; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
+
+### 9.5 Implementation, step 2: kill switch and interlock (M8, 2026-10-04)
+
+| Part | Where | Notes |
+|---|---|---|
+| Transitions | `risk/kill_switch.py` | Pure functions for 9.3: `pause` (only ever extended), `resume`, `halt`, `reset` (the only way out of halted), `apply_trip` (daily loss: until the next midnight in Berlin; weekly: until Monday 00:00; drawdown: halt), `current` (a timed pause that has ended is over). Part of the 100 % coverage gate. |
+| Storage | migration `0006`, `db/controls.py` | One row in `kill_switch` (state, reason, since, until, hashed reset code with expiry), locked during changes. Every change also writes `kill_switch.changed` to `audit_log`. Halted and paused survive restarts. |
+| Runtime | `controls.py` `ControlCenter` | Builds the engine's `Controls`. Automatic changes (loss limits, reconciliation, end of a pause) are announced in Telegram; command replies go to the chat only. |
+| Commands | Telegram | `/pause [reason]` (until `/resume`), `/resume`, `/stop` (inline confirm button, then halted), `/reset CODE`, `/confirm_live CODE`. `/status` shows the kill switch and, in live mode, the interlock. |
+| Reset | CLI `trading-agent reset` | Only when halted: prints a 6-digit code, stored as a SHA-256 hash, valid 15 minutes, single use. `/reset CODE` in Telegram ends the halt, so a reset needs both the host and your phone. |
+| Live interlock | 10.4 | In live mode every start logs a new code (`live.confirm_code`, host logs only) and sends 🔐 asking for `/confirm_live CODE`. The gateway's mode comes from the account type (paper ids start with `D`; the id itself isn't kept), not from configuration. Paper mode on a live gateway is refused too. |
+| Reconciliation | `broker.reconcile_positions` | Any difference now also halts (10.3). |
+
+The halt doesn't cancel orders yet, because none exist until step 3; that hook comes with execution.
 
 ### 9.3 Kill switch states
 
@@ -575,7 +589,7 @@ Everything below is tested against a fake `IB` object only; `trading-agent ibkr-
 | Contracts | `data/ibkr.py` `contract_for`, `resolve_conids` | SMART-routed stocks; `BRK.B` becomes `BRK B`; Xetra with `primaryExchange=IBIS`. Resolved once and stored in `instruments.conid`. |
 | Account, positions | `execution/ibkr.py` | `NetLiquidation`, `TotalCashValue`, `SettledCash`, `AvailableFunds`; the account number is never kept. |
 | Bars | `data/ibkr.py` `IbkrPriceProvider` | Daily `TRADES` bars, regular hours, same `BarSeries` as Yahoo; at most 60 requests per 10 minutes. Used per market when `config/data.yaml` `prices.sources` says `ibkr` and the gateway is connected; otherwise Yahoo. Stays `yahoo` until the check shows matching closes and volumes. |
-| Reconciliation | `execution/reconcile.py`, job `reconcile` (NYSE close + 40 min) | Broker positions vs. open `agent_paper` trades by conid: unknown, missing, different size → ⚠️ alert. Halting on a mismatch comes with the kill switch in M8. |
+| Reconciliation | `execution/reconcile.py`, job `reconcile` (NYSE close + 40 min) | Broker positions vs. open `agent_paper` trades by conid: unknown, missing, different size → ⚠️ alert and, since M8 step 2, a halt. |
 | Check | `trading-agent ibkr-check [SYMBOLS]` | Server version and time, account values, positions, contracts without conid, the last 5 IBKR bars vs. the stored ones (close difference, volume ratio), and the quote type the API delivers (real-time or delayed). |
 
 Still open for M6 once the login exists: the gateway surviving its daily restart, the re-login alert in practice, and the answers from `ibkr-check`. Fractional shares can't be checked with a read-only API; that moves to M8.
@@ -673,11 +687,13 @@ Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start 
 | `/review` | Steps through today's proposals with **Agree / Disagree** buttons; a reply adds the reason (written to `user_labels`) |
 | `/pause`, `/resume` | Block or allow new entries |
 | `/stop` | Kill switch, after an inline confirm button |
+| `/reset <CODE>` | Ends a halt, with the code from `trading-agent reset` on the host |
+| `/confirm_live <CODE>` | Live mode only: allows orders after a start, with the code from the host logs |
 | `/budget` | LLM spend this month and the current mode |
 | `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
 
-Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. The others arrive with the features they report on.
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. Since M8 step 2: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`. The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
@@ -885,6 +901,8 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - `docker compose run --rm agent trading-agent ibkr-check` 📋. During US market hours if possible, so the quote line shows whether real-time data reaches the API.
     - `/status` in Telegram shows `IB Gateway: connected`. The next morning 📋: did the gateway come back after its 23:45 restart without a message from you (`docker compose logs --since 12h ib-gateway | tail -50`)?
     - If something hangs: `ssh -L 5900:localhost:5900 zenbook`, then a VNC viewer on `localhost:5900` with the first 8 characters of `secrets/vnc_password`.
+    - Since M8 step 2, positions in the paper account that the agent didn't open halt it (reconciliation). Close them in the paper account first, or reset as in step 14.
+14. **Kill switch** (M8 step 2, after `make migrate`): in Telegram, `/pause test`, `/status` (shows `paused (test) until /resume`), `/resume`, then `/stop` and confirm. Then on the Zenbook `docker compose run --rm agent trading-agent reset` prints a code; send `/reset CODE` within 15 minutes. `/status` 📋 shows `Kill switch: active` again.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 
