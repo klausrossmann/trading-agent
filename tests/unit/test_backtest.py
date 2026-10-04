@@ -119,6 +119,37 @@ def test_unfilled_limit_expires() -> None:
     assert float(result.equity.iloc[-1]) == 1000
 
 
+def test_external_signals_replace_the_baseline_setups() -> None:
+    a, b, c = instrument(1, "A"), instrument(2, "B"), instrument(3, "C")
+    set_bar(b, 25, 50, 50.5, 49.5, 50)
+    plan = bt.TradePlan(entry=50.10, stop=48.10, target=54.10)
+    external = {
+        DAYS[22].date(): [
+            bt.Signal(2, plan, score=-2, strategy="agent"),
+            bt.Signal(3, plan, score=-1, strategy="agent"),
+        ],
+        DAYS[24].date(): [bt.Signal(9, plan, score=-1, strategy="agent")],  # unknown instrument
+    }
+    data = bt.MarketData({x.id: x for x in (a, b, c)}, pd.Series([1.0], index=DAYS[:1]), {})
+    small = RISK.model_copy(
+        update={"portfolio": RISK.portfolio.model_copy(update={"max_open_positions": 1})}
+    )
+    result = bt.run(
+        data,
+        CFG,
+        small,
+        FEES,
+        start=DAYS[0].date(),
+        end=DAYS[-1].date(),
+        markets=["US"],
+        external=external,
+    )
+    t = only_trade(result)  # the baseline setup on bar 19 is ignored
+    assert (t.instrument_id, t.strategy, t.signal_date) == (3, "agent", DAYS[22].date())
+    assert result.signals == 2
+    assert result.rejections["max open positions"] == 1
+
+
 def test_max_open_positions_and_ranking() -> None:
     small = RISK.model_copy(
         update={"per_trade": RISK.per_trade.model_copy(update={"max_position_pct": Decimal(25)})}

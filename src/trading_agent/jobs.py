@@ -1,6 +1,7 @@
 """Scheduled and CLI-triggered jobs (orchestration layer): wires providers, config and DB."""
 
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -25,9 +26,11 @@ from trading_agent.data.series import EcbProvider, FredProvider
 from trading_agent.data.universe import Universe
 from trading_agent.data.yahoo import YahooProvider
 from trading_agent.db import market as market_repo
+from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.market import Market
+from trading_agent.domain.trading import Book
 from trading_agent.llm.budget import BudgetMode, month_start
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
@@ -46,6 +49,7 @@ from trading_agent.notify import messages
 from trading_agent.notify.telegram import LogNotifier, Notifier
 from trading_agent.risk.config import RiskConfig, load_risk_config
 from trading_agent.settings import DataConfig, Settings, load_fees
+from trading_agent.strategies.pullback import TradePlan
 
 log = structlog.get_logger(__name__)
 
@@ -114,18 +118,15 @@ class BookContext:
         )
 
 
-async def baseline_book(
-    ctx: BookContext, today: date | None = None
+async def _replay(
+    ctx: BookContext,
+    book: Book,
+    start: date,
+    today: date,
+    external: Mapping[date, Sequence[backtest.Signal]] | None = None,
 ) -> list[backtest.BacktestResult]:
-    """Replay the forward `baseline_sim` book from its start date and store its trades.
-
-    One simulated account per paper budget sleeve (US EUR 1,000, EU EUR 5,000).
-    """
-    today = today or datetime.now(UTC).date()
-    start = ctx.cfg.baseline_book.start
-    if today < start:
-        log.info("baseline_sim.not_started", start=start.isoformat())
-        return []
+    """Replay a forward book from `start`, one simulated account per paper budget sleeve
+    (US EUR 1,000, EU EUR 5,000), and replace its stored trades."""
     data = await backtest.load_market_data(ctx.sessions, ctx.benchmarks, ctx.cfg.pullback)
     results: list[backtest.BacktestResult] = []
     for markets, risk in ctx.risk.sleeves(list(ctx.risk.markets.paper), "paper"):
@@ -137,19 +138,59 @@ async def baseline_book(
             start=start,
             end=today,
             markets=markets,
-            book="baseline_sim",
+            book=book,
+            external=external,
         )
         results.append(result)
         log.info(
-            "baseline_sim.updated",
+            f"{book}.updated",
             markets=markets,
             trades=len(result.trades),
             open=sum(1 for t in result.trades if t.exit_date is None),
             equity_eur=round(float(result.equity.iloc[-1]), 2) if not result.equity.empty else None,
+            rejections=dict(result.rejections),
         )
     async with ctx.sessions.begin() as s:
-        await trades_repo.replace_book(s, "baseline_sim", [t for r in results for t in r.trades])
+        await trades_repo.replace_book(s, book, [t for r in results for t in r.trades])
     return results
+
+
+async def baseline_book(
+    ctx: BookContext, today: date | None = None
+) -> list[backtest.BacktestResult]:
+    """Replay the forward `baseline_sim` book from its start date and store its trades."""
+    today = today or datetime.now(UTC).date()
+    start = ctx.cfg.baseline_book.start
+    if today < start:
+        log.info("baseline_sim.not_started", start=start.isoformat())
+        return []
+    return await _replay(ctx, "baseline_sim", start, today)
+
+
+async def agent_book(ctx: BookContext, today: date | None = None) -> list[backtest.BacktestResult]:
+    """Replay `agent_shadow` from the stored proposals with the baseline book's rules.
+
+    Interim until the risk engine (M8): same sizing, fee, portfolio and earnings checks.
+    """
+    today = today or datetime.now(UTC).date()
+    async with ctx.sessions() as s:
+        stored = await proposals_repo.proposals(s, start=ctx.cfg.baseline_book.start)
+    external: dict[date, list[backtest.Signal]] = {}
+    for p in stored:
+        if p.status != "proposed" or p.entry is None or p.stop is None or p.target is None:
+            continue
+        external.setdefault(p.as_of, []).append(
+            backtest.Signal(
+                instrument_id=p.instrument_id,
+                plan=TradePlan(p.entry, p.stop, p.target),
+                score=-(p.rank or 99),
+                strategy=p.strategy,
+            )
+        )
+    if not external:
+        log.info("agent_shadow.no_proposals")
+        return []
+    return await _replay(ctx, "agent_shadow", min(external), today, external)
 
 
 def _log_result(result: IngestResult) -> None:

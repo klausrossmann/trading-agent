@@ -27,6 +27,11 @@ jobs:
     anchor: close
     offset_minutes: 60
     misfire_grace_minutes: 360
+  agent_sim:                        # replay agent_shadow from the stored proposals (M7)
+    calendar: XNYS
+    anchor: close
+    offset_minutes: 65
+    misfire_grace_minutes: 360
   scan_eu:                          # agent proposals on the previous EOD bars (M7, no orders)
     calendar: XETR
     anchor: open

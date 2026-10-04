@@ -127,6 +127,7 @@ def job_functions(
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
         "baseline_sim": partial(jobs.baseline_book, book),
+        "agent_sim": partial(jobs.agent_book, book),
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),

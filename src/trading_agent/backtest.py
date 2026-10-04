@@ -10,6 +10,7 @@ limits (reported as drawdown instead).
 
 import math
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -138,6 +139,7 @@ class _Pending:
     plan: TradePlan
     quantity: int
     reserved_eur: float
+    strategy: str
 
 
 @dataclass
@@ -154,6 +156,17 @@ class _Position:
     fees_eur: float
     cost_eur: float
     risk_eur: float
+    strategy: str
+
+
+@dataclass(frozen=True)
+class Signal:
+    """A trade idea from outside the baseline rules (agent proposals), at `day`'s close."""
+
+    instrument_id: int
+    plan: TradePlan
+    score: float  # higher is placed first
+    strategy: str
 
 
 @dataclass
@@ -163,6 +176,16 @@ class BacktestResult:
     invested: pd.Series  # EUR in open positions
     rejections: Counter[str] = field(default_factory=Counter[str])
     signals: int = 0
+
+
+def _not_admitted(x: InstrumentData, day: date, busy: set[int], p: PullbackParams) -> str | None:
+    if x.id in busy:
+        return "already held or pending"
+    cal = calendars.CALENDAR_BY_MARKET[x.instrument.market]
+    buffer_end = calendars.session_offset(cal, day, p.earnings_buffer_sessions)
+    if not pullback.earnings_clear(day, buffer_end, x.earnings):
+        return "earnings within buffer"
+    return None
 
 
 def run(
@@ -175,7 +198,9 @@ def run(
     end: date,
     markets: list[Market],
     book: Book = "backtest",
+    external: Mapping[date, Sequence[Signal]] | None = None,
 ) -> BacktestResult:
+    """Simulates the baseline's setups, or only the `external` signals when given."""
     p = cfg.pullback
     slip = cfg.slippage_pct
     limits = risk.sizing_limits()
@@ -208,7 +233,7 @@ def run(
         trades.append(
             Trade(
                 book=book,
-                strategy=pullback.NAME,
+                strategy=pos.strategy,
                 instrument_id=pos.data.id,
                 yahoo_symbol=inst.yahoo_symbol,
                 market=inst.market,
@@ -281,38 +306,45 @@ def run(
                 fees_eur=to_eur(buy_fee, inst, day),
                 cost_eur=cost_eur,
                 risk_eur=to_eur(order.quantity * order.plan.risk_per_share, inst, day),
+                strategy=order.strategy,
             )
             open_.append(pos)
             stopped = sim.check_exit(order.data.bar(row), pos.stop, None, slip)
             if stopped is not None:
                 close_position(pos, day, row, stopped)
 
-        # 3. New signals at today's close, ranked by relative strength
-        candidates: list[tuple[float, InstrumentData, int, TradePlan]] = []
+        # 3. New signals at today's close, best first
+        candidates: list[tuple[float, InstrumentData, int, TradePlan, str]] = []
         busy = {x.data.id for x in pending} | {x.data.id for x in open_}
-        for x in data.instruments.values():
+        if external is not None:
+            for sig in external.get(day, ()):
+                x = data.instruments.get(sig.instrument_id)
+                row = x.rows.get(day) if x is not None else None
+                if x is None or row is None or x.instrument.market not in markets:
+                    continue
+                signals += 1
+                if why := _not_admitted(x, day, busy, p):
+                    rejections[why] += 1
+                    continue
+                candidates.append((sig.score, x, row, sig.plan, sig.strategy))
+        for x in data.instruments.values() if external is None else ():
             row = x.rows.get(day)
             if row is None or not bool(x.setup.iloc[row]) or x.instrument.market not in markets:
                 continue
             signals += 1
-            if x.id in busy:
-                rejections["already held or pending"] += 1
-                continue
-            cal = calendars.CALENDAR_BY_MARKET[x.instrument.market]
-            buffer_end = calendars.session_offset(cal, day, p.earnings_buffer_sessions)
-            if not pullback.earnings_clear(day, buffer_end, x.earnings):
-                rejections["earnings within buffer"] += 1
+            if why := _not_admitted(x, day, busy, p):
+                rejections[why] += 1
                 continue
             plan = pullback.plan_trade(x.frame.iloc[: row + 1], float(x.ind["atr"].iloc[row]), p)
             if plan is None:
                 rejections["no valid stop"] += 1
                 continue
             rs = float(x.ind["rs"].iloc[row])
-            candidates.append((rs if math.isfinite(rs) else -math.inf, x, row, plan))
+            candidates.append((rs if math.isfinite(rs) else -math.inf, x, row, plan, pullback.NAME))
         candidates.sort(key=lambda c: c[0], reverse=True)
 
         placed = 0
-        for _, x, row, plan in candidates:
+        for _, x, row, plan, strategy in candidates:
             inst = x.instrument
             if len(open_) + len(pending) >= risk.portfolio.max_open_positions:
                 rejections["max open positions"] += 1
@@ -347,7 +379,9 @@ def run(
                 rejections["sector cap"] += 1
                 continue
             buy_fee = float(order_fees(fees, inst.market, "buy", q, entry))
-            pending.append(_Pending(x, day, row, plan, q, (q * plan.entry + buy_fee) / rate))
+            pending.append(
+                _Pending(x, day, row, plan, q, (q * plan.entry + buy_fee) / rate, strategy)
+            )
             placed += 1
 
         # 4. Mark to market
@@ -362,7 +396,7 @@ def run(
         trades.append(
             Trade(
                 book=book,
-                strategy=pullback.NAME,
+                strategy=pos.strategy,
                 instrument_id=pos.data.id,
                 yahoo_symbol=pos.data.instrument.yahoo_symbol,
                 market=pos.data.instrument.market,

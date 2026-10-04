@@ -24,7 +24,7 @@ from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.domain.market import Bar, BarSeries, Instrument
+from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
 from trading_agent.llm.runner import LlmRunner
 from trading_agent.settings import Settings
 
@@ -140,7 +140,9 @@ class Agents:
         return ModelResponse(parts=[ToolCallPart(tool.name, args)])
 
 
-async def _context(sessions: Sessions, settings: Settings, script: Agents) -> jobs.AnalysisContext:
+async def _context(
+    sessions: Sessions, settings: Settings, script: Agents
+) -> tuple[jobs.AnalysisContext, Universe]:
     universe = Universe(
         generated=date(2026, 10, 6),
         benchmarks={"US": "SPY"},
@@ -151,6 +153,8 @@ async def _context(sessions: Sessions, settings: Settings, script: Agents) -> jo
         ids = {i.yahoo_symbol: k for k, i in (await repo.active_instruments(s)).items()}
         for symbol, slope in (("SPY", 0.05), ("AAA", 0.1), ("BBB", 0.12), ("CCC", 0.08)):
             await repo.upsert_bars(s, ids[symbol], _series(symbol, slope))
+        fx = [Observation(date=date(2026, 10, 1), value=Decimal("1.17"))]
+        await repo.upsert_fx(s, "USD", fx, source="test", fetched_at=NOW)
     cfg = settings.model_copy(
         update={"config_dir": ROOT / "config", "prompts_dir": ROOT / "prompts"}
     )
@@ -166,12 +170,12 @@ async def _context(sessions: Sessions, settings: Settings, script: Agents) -> jo
         dev_overrides=True,  # critic on Gemini, as in Phase 0-1
         sleep=no_pause,
     )
-    return ctx
+    return ctx, universe
 
 
 async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Settings) -> None:
     script = Agents(block={"CCC"})
-    ctx = await _context(sessions, settings, script)
+    ctx, universe = await _context(sessions, settings, script)
     run = await pipeline.propose(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
 
     assert run.as_of == date(2026, 10, 5)
@@ -225,3 +229,7 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
     text = pipeline.summary(again, "US")
     assert text.splitlines()[1].startswith("1. BBB ")
     assert "Blocked by the critic: CCC" in text
+
+    book = jobs.BookContext.load(ROOT / "config", sessions, universe)
+    results = await jobs.agent_book(book, today=date(2026, 10, 6))
+    assert sum(r.signals for r in results) == 2  # the proposed ones; entries need the next bar
