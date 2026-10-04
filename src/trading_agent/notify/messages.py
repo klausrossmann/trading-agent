@@ -6,6 +6,9 @@ Privacy (IMPLEMENTATION.md 12.4): no account numbers or credentials; amounts in 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from uuid import UUID
+
+from trading_agent.domain.proposals import Proposal
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -188,6 +191,82 @@ def render_budget(b: BudgetSnapshot) -> str:
     if not b.by_model:
         lines.append("  no calls this month")
     lines.append("Costs are estimated from list prices (config/models.yaml).")
+    return "\n".join(lines)
+
+
+# --- proposals (M7) ---
+
+
+def _plan(p: Proposal) -> str:
+    if p.entry is None or p.stop is None or p.target is None:
+        return ""
+    rr = f", R:R {p.risk_reward:.1f}" if p.risk_reward else ""
+    return f"{p.entry:.2f}, stop {p.stop:.2f}, target {p.target:.2f}{rr}"
+
+
+def _label_mark(p: Proposal, labels: Mapping[UUID, str]) -> str:
+    label = labels.get(p.id)
+    return {"agree": " 👍", "disagree": " 👎"}.get(label or "", "")
+
+
+def render_proposals(
+    title: str,
+    proposals: Sequence[Proposal],
+    labels: Mapping[UUID, str] | None = None,
+    skipped: int = 0,
+    cost_usd: float | None = None,
+) -> str:
+    labels = labels or {}
+    cost = f" (LLM ${cost_usd:.4f})" if cost_usd is not None else ""
+    lines = [f"🧠 {title}{cost}"]
+    proposed = sorted((p for p in proposals if p.status == "proposed"), key=lambda p: p.rank or 99)
+    for p in proposed:
+        critic = f", critic {p.critic_severity}" if p.critic_severity else ", no critique"
+        conf = f", conf {p.confidence:.2f}" if p.confidence is not None else ""
+        lines.append(
+            f"{p.rank or '-'}. {p.yahoo_symbol} {_plan(p)}{conf}{critic}{_label_mark(p, labels)}"
+        )
+    if not proposed:
+        lines.append("No trade proposed.")
+    blocked = [p for p in proposals if p.status == "blocked"]
+    if blocked:
+        items = [f"{p.yahoo_symbol}{_label_mark(p, labels)}" for p in blocked]
+        lines.append(f"Blocked by the critic: {', '.join(items)}")
+    passed = [p for p in proposals if p.status == "no_trade"]
+    if passed:
+        items = [f"{p.yahoo_symbol}{_label_mark(p, labels)}" for p in passed]
+        lines.append(f"Passed: {', '.join(items)}")
+    if skipped:
+        lines.append(f"Not sent to the proposer: {skipped} (technical rating, held, failed)")
+    if proposals:
+        lines.append("/why SYMBOL for details, /review to label them.")
+    return "\n".join(lines)
+
+
+def render_why(p: Proposal, label: tuple[str, str | None] | None = None) -> str:
+    status = {"proposed": f"proposed, rank {p.rank}", "blocked": "blocked by the critic"}
+    lines = [
+        f"🧠 {p.yahoo_symbol}, as of {day_label(p.as_of)}: {status.get(p.status, 'passed')}",
+    ]
+    if plan := _plan(p):
+        lines.append(f"Plan: buy limit {plan} ({p.entry_ref} / {p.stop_ref} / {p.target_ref})")
+    if p.confidence is not None:
+        lines.append(f"Confidence: {p.confidence:.2f}")
+    lines += [f"Thesis: {p.thesis}", f"Invalidation: {p.invalidation}"]
+    proposer = p.payload.get("proposer", {})
+    if reason := proposer.get("no_trade_reason"):
+        lines.append(f"Why not: {reason}")
+    critic = p.payload.get("critic", {})
+    if p.critic_summary:
+        lines.append(f"Critic ({p.critic_severity}): {p.critic_summary}")
+        lines += [f"  - {o['severity']}: {o['point']}" for o in critic.get("objections", [])]
+    elif "unavailable" in critic:
+        lines.append(f"Critic: unavailable ({critic['unavailable']})")
+    if pm := p.payload.get("portfolio_manager"):
+        lines.append(f"Ranking: {pm['note']}")
+    if label:
+        reason = f" ({label[1]})" if label[1] else ""
+        lines.append(f"Your label: {label[0]}{reason}")
     return "\n".join(lines)
 
 

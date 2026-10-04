@@ -2,6 +2,7 @@ import datetime as dt
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, ClassVar
+from uuid import UUID
 
 from sqlalchemy import (
     ARRAY,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     MetaData,
     Numeric,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -185,3 +187,48 @@ class LlmCallRow(Base):
     analysis_id: Mapped[int | None] = mapped_column(
         ForeignKey("analyses.id", ondelete="SET NULL"), index=True
     )
+
+
+class ProposalRow(Base):
+    """One agent decision per instrument and as-of date; a re-run updates it in place."""
+
+    __tablename__ = "proposals"
+    __table_args__ = (
+        UniqueConstraint("source", "instrument_id", "as_of", name="uq_proposals_source_day"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    source: Mapped[str] = mapped_column(Text)
+    as_of: Mapped[dt.date] = mapped_column(Date, index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    status: Mapped[str] = mapped_column(Text)
+    strategy: Mapped[str] = mapped_column(Text)
+    entry_ref: Mapped[str | None] = mapped_column(Text)
+    stop_ref: Mapped[str | None] = mapped_column(Text)
+    target_ref: Mapped[str | None] = mapped_column(Text)
+    entry: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    stop: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    target: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    rank: Mapped[int | None] = mapped_column(Integer)
+    thesis: Mapped[str] = mapped_column(Text)
+    invalidation: Mapped[str] = mapped_column(Text)
+    critic_severity: Mapped[str | None] = mapped_column(Text)
+    critic_summary: Mapped[str | None] = mapped_column(Text)
+    analyses: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    payload: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+
+
+class UserLabelRow(Base):
+    """Your agree/disagree on a proposal (CONCEPT.md 13.1); relabelling overwrites."""
+
+    __tablename__ = "user_labels"
+
+    proposal_id: Mapped[UUID] = mapped_column(
+        ForeignKey("proposals.id", ondelete="CASCADE"), primary_key=True
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    label: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)

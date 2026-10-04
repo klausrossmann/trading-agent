@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import jobs
+from trading_agent import jobs, pipeline
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
@@ -116,7 +116,10 @@ def plan_session_jobs(
 
 
 def job_functions(
-    data: jobs.DataContext, book: jobs.BookContext, notifier: Notifier
+    data: jobs.DataContext,
+    book: jobs.BookContext,
+    notifier: Notifier,
+    analysis: jobs.AnalysisContext,
 ) -> dict[str, JobFn]:
     return {
         "ingest_macro": partial(jobs.macro, data),
@@ -125,6 +128,8 @@ def job_functions(
         "ingest_eod_us": partial(jobs.eod, data, "US"),
         "baseline_sim": partial(jobs.baseline_book, book),
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
+        "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
+        "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
     }
 
 
@@ -210,7 +215,7 @@ async def serve(
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
             scheduler = build_scheduler(
-                schedule, settings, http, job_functions(ctx, book, notifier), state
+                schedule, settings, http, job_functions(ctx, book, notifier, analysis), state
             )
             state.scheduler = scheduler
             pending_alerts = alert_on_job_failures(scheduler, notifier)

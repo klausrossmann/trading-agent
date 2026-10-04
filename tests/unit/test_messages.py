@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 
+from trading_agent.domain.proposals import Proposal
 from trading_agent.notify import messages as m
 
 
@@ -106,3 +108,64 @@ def test_budget_message() -> None:
     assert "  google:gemini-3.8-flash: 120 calls, $3.5000" in text
     empty = m.render_budget(m.BudgetSnapshot(date(2026, 10, 1), 0.0, 16.0, "normal", []))
     assert "no calls this month" in empty
+
+
+def _proposal(symbol: str, status: str, rank: int | None = None, **kw: object) -> Proposal:
+    values: dict[str, object] = {
+        "id": uuid4(),
+        "source": "agent",
+        "as_of": date(2026, 10, 2),
+        "instrument_id": 1,
+        "yahoo_symbol": symbol,
+        "market": "US",
+        "sector": None,
+        "status": status,
+        "strategy": "pullback_uptrend",
+        "rank": rank,
+        "thesis": "Pullback in an uptrend.",
+        "invalidation": "Close below the stop.",
+    }
+    if status != "no_trade":
+        values |= {"entry": 100.0, "stop": 96.0, "target": 108.0, "confidence": 0.35}
+        values |= {"entry_ref": "close", "stop_ref": "atr_stop_2x", "target_ref": "atr_target_4x"}
+    return Proposal.model_validate(values | kw)
+
+
+def test_render_proposals_lists_ranked_blocked_and_passed() -> None:
+    a = _proposal("AAA", "proposed", 2, critic_severity="minor", critic_summary="ok")
+    b = _proposal("BBB", "proposed", 1)
+    c = _proposal("CCC", "blocked", critic_severity="blocking", critic_summary="no")
+    d = _proposal("DDD", "no_trade")
+    text = m.render_proposals("Proposals US", [a, b, c, d], {a.id: "agree"}, 2, 0.0123)
+    assert text.splitlines() == [
+        "🧠 Proposals US (LLM $0.0123)",
+        "1. BBB 100.00, stop 96.00, target 108.00, R:R 2.0, conf 0.35, no critique",
+        "2. AAA 100.00, stop 96.00, target 108.00, R:R 2.0, conf 0.35, critic minor 👍",
+        "Blocked by the critic: CCC",
+        "Passed: DDD",
+        "Not sent to the proposer: 2 (technical rating, held, failed)",
+        "/why SYMBOL for details, /review to label them.",
+    ]
+    assert m.render_proposals("P", []).splitlines() == ["🧠 P", "No trade proposed."]
+
+
+def test_render_why_shows_plan_critique_and_label() -> None:
+    p = _proposal(
+        "AAA",
+        "proposed",
+        1,
+        critic_severity="major",
+        critic_summary="Weak target.",
+        payload={
+            "critic": {"objections": [{"severity": "major", "point": "Resistance first."}]},
+            "portfolio_manager": {"note": "Only energy name.", "rationale": "r"},
+        },
+    )
+    text = m.render_why(p, ("disagree", "Extended."))
+    assert "Plan: buy limit 100.00, stop 96.00, target 108.00, R:R 2.0 (close / atr_stop_2x" in text
+    assert "Critic (major): Weak target.\n  - major: Resistance first." in text
+    assert "Ranking: Only energy name." in text
+    assert text.endswith("Your label: disagree (Extended.)")
+    passed = _proposal("DDD", "no_trade", payload={"proposer": {"no_trade_reason": "Fading."}})
+    assert "passed" in m.render_why(passed).splitlines()[0]
+    assert "Why not: Fading." in m.render_why(passed)

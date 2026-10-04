@@ -267,6 +267,34 @@ def analyse(
 
 
 @app.command()
+def propose(
+    symbols: list[str] | None = SymbolsArgument,
+    market: Literal["US", "EU"] | None = MarketOption,
+) -> None:
+    """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
+    from trading_agent import jobs, pipeline
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+
+    settings = _settings()
+
+    async def _run() -> pipeline.ProposalRun:
+        engine = create_engine(settings.database_url)
+        try:
+            ctx = jobs.AnalysisContext.build(
+                settings, session_factory(engine), load_universe(settings.config_dir)
+            )
+            return await pipeline.propose(ctx, market, symbols or None)
+        finally:
+            await engine.dispose()
+
+    result = asyncio.run(_run())
+    typer.echo(pipeline.summary(result, market))
+    for symbol, reason in result.skipped.items():
+        typer.echo(f"  skipped {symbol}: {reason}")
+
+
+@app.command()
 def dashboard(
     address: str = typer.Option("127.0.0.1", help="Listen address; 0.0.0.0 inside the container."),
     port: int = typer.Option(8501),

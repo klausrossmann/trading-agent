@@ -11,6 +11,10 @@ import httpx
 import structlog
 
 from trading_agent import backtest
+from trading_agent.agents import critic, portfolio, proposer
+from trading_agent.agents.critic import CriticAgent
+from trading_agent.agents.portfolio import PortfolioManagerAgent
+from trading_agent.agents.proposer import ProposerAgent
 from trading_agent.calc.fees import FeeSchedule
 from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.trend import trend_states
@@ -429,10 +433,15 @@ class AnalysisContext:
     holding_sessions: int  # entry validity + time stop of the baseline strategy
     pullback: backtest.PullbackParams
     benchmarks: dict[Market, str]
+    proposer: ProposerAgent
+    critic: CriticAgent
+    portfolio: PortfolioManagerAgent
+    max_open_positions: int
 
     @classmethod
     def build(cls, settings: Settings, sessions: Sessions, universe: Universe) -> "AnalysisContext":
         cfg_dir = settings.config_dir
+        prompts = settings.prompts_dir
         models = load_models_config(cfg_dir)
         runner = LlmRunner(
             models,
@@ -460,6 +469,12 @@ class AnalysisContext:
             holding_sessions=p.entry_valid_sessions + p.time_stop_sessions,
             pullback=p,
             benchmarks=dict(universe.benchmarks),
+            proposer=ProposerAgent(load_prompt(prompts, proposer.NAME, proposer.PROMPT_VERSION)),
+            critic=CriticAgent(load_prompt(prompts, critic.NAME, critic.PROMPT_VERSION)),
+            portfolio=PortfolioManagerAgent(
+                load_prompt(prompts, portfolio.NAME, portfolio.PROMPT_VERSION)
+            ),
+            max_open_positions=risk.portfolio.max_open_positions,
         )
 
 
