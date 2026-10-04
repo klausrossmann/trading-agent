@@ -1,6 +1,7 @@
 name: trading-agent
 
-# M0: db + agent. ib-gateway and dashboard are added in M6 (IMPLEMENTATION.md 15.3).
+# db, agent and dashboard. ib-gateway follows in M6 once the IBKR paper login exists
+# (IMPLEMENTATION.md 15.3).
 services:
   db:
     image: postgres:17
@@ -9,7 +10,7 @@ services:
     environment:
       POSTGRES_DB: trading
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets: [postgres_password, agent_db_password]
+    secrets: [postgres_password, agent_db_password, dashboard_db_password]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/db/init:/docker-entrypoint-initdb.d:ro
@@ -40,10 +41,34 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [backend, egress]
 
+  # Read-only role, no .env (no API keys). Published on the host's loopback only;
+  # `tailscale serve` makes it reachable in the tailnet.
+  dashboard:
+    build: .
+    image: trading-agent:latest
+    command: ["trading-agent", "dashboard", "--address", "0.0.0.0"]
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_USER: dashboard
+    secrets:
+      - source: dashboard_db_password
+        target: db_password
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["127.0.0.1:8501:8501"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend, frontend]  # an internal-only network can't publish ports
+
 networks:
   backend:
     internal: true
   egress: {}
+  frontend: {}
 
 volumes:
   pgdata: {}
@@ -53,3 +78,5 @@ secrets:
     file: ./secrets/postgres_password
   agent_db_password:
     file: ./secrets/agent_db_password
+  dashboard_db_password:
+    file: ./secrets/dashboard_db_password

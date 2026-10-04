@@ -651,6 +651,18 @@ Pages: **Overview** (equity curves of the three books plus a benchmark, drawdown
 
 It uses the read-only DB role and has no write actions; control happens through Telegram or the CLI. It is published to your tailnet with `tailscale serve`, so it's reachable from your phone and the Mac but not from the internet.
 
+### 13.1 Implementation (dashboard v1, M6, 2026-10-04)
+
+M6 is split because the IBKR paper login doesn't exist yet: the dashboard comes first, the gateway part follows once the login exists.
+
+| Part | Where | Notes |
+|---|---|---|
+| Pages | `dashboard/pages.py`, entry `dashboard/app.py` | **Overview** (positions, closed trades, unrealized P&L, LLM spend this month; KPIs per book and market; cumulative realized P&L; data freshness per dataset), **Positions** (open trades marked to the last close, R and P&L in EUR after fees), **Journal** (closed trades, filter by book, market, symbol), **Analyses** (LLM outputs with status, verdict, issues and the full JSON), **Costs** (LLM spend per month, role and model; per day; broker fees per book). Proposals, Risk and Evaluation follow with the data they show (M7/M8). |
+| Queries | `dashboard/queries.py`, `dashboard/frames.py` | Own SELECTs on `db.models`; the dashboard imports no repository that writes, and `import-linter` keeps it away from `risk`, `llm`, `agents`, `notify`, `scheduler` and `execution`. Results are cached for 60 s; "Reload data" clears the cache. |
+| Read-only, twice | `docker/db/init/20-dashboard-role.sh`, `queries.read_only_engine` | Role `dashboard`: `SELECT` on all tables, plus default privileges so tables from later migrations are readable too; `default_transaction_read_only=on`, `statement_timeout=30s`. The app's connections also open read-only transactions. |
+| Container | `compose.yaml` service `dashboard` | Same image, `trading-agent dashboard --address 0.0.0.0`. No `.env`, so no API keys; only `dashboard_db_password` as `db_password`. Port `127.0.0.1:8501` on the host only; read-only filesystem, no capabilities. Streamlit usage statistics and the public-IP lookup are off. |
+| Access | Tailscale | `sudo tailscale serve --bg 8501` serves it as `https://<host>.<tailnet>.ts.net` to devices in your tailnet only (15.5). |
+
 ---
 
 ## 14. Evaluation
@@ -694,7 +706,7 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 |---|---|---|
 | `postgres_password` | `db` (superuser, maintenance only) | M0 |
 | `agent_db_password` | `db` init script, `agent` | M0 |
-| `dashboard_db_password` | `db` init script, `dashboard` | M6 |
+| `dashboard_db_password` | `db` init script, `dashboard` | M6 (dashboard v1) |
 | `tws_password`, `vnc_password` | `ib-gateway` | M6 |
 
 ```dotenv
@@ -717,7 +729,7 @@ FRED_API_KEY=
 SEC_EDGAR_USER_AGENT=               # "Name email", required by SEC
 ```
 
-### 15.3 Compose (target state after M6; `compose.yaml` in the repo has `db` and `agent` so far)
+### 15.3 Compose (target state after M6; `compose.yaml` in the repo has `db`, `agent` and `dashboard` so far)
 
 ```yaml
 services:
@@ -762,7 +774,7 @@ services:
 
   dashboard:
     build: .
-    command: ["streamlit", "run", "src/trading_agent/dashboard/app.py", "--server.address=0.0.0.0"]
+    command: ["trading-agent", "dashboard", "--address", "0.0.0.0"]
     restart: unless-stopped
     environment:
       DB_USER: dashboard
@@ -792,13 +804,15 @@ secrets:
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
 - Moving to the mini PC: the same preparation as 15.1, copy `.env` and `secrets/`, restore the latest dump, `docker compose up -d`, then confirm reconciliation is clean before shutting down the Zenbook stack.
 
-### 15.5 First start on the Zenbook (runbook, state after M5)
+### 15.5 First start on the Zenbook (runbook, state after M6 dashboard v1)
 
 Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋.
 
+> Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; step 11 a few minutes.
+
 1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl`.
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
-3. **Secrets**: `make secrets` creates the database passwords in `secrets/`.
+3. **Secrets**: `make secrets` creates the database passwords in `secrets/` (`postgres_password`, `agent_db_password`, `dashboard_db_password`).
 4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
    - `FRED_API_KEY`: free, fred.stlouisfed.org → My Account → API Keys.
    - `TELEGRAM_BOT_TOKEN`: from `@BotFather` (`/newbot`). Leave `TELEGRAM_OWNER_CHAT_ID` empty for now.
@@ -810,6 +824,10 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 8. **Telegram owner**: send your bot any message, then `docker compose logs agent | grep telegram.ignored` shows your `chat_id`. Put it into `.env` as `TELEGRAM_OWNER_CHAT_ID` and run `docker compose up -d agent` (recreates the container; `restart` would not re-read `.env`). Check `/status`, `/briefing` and `/budget` in Telegram.
 9. **LLM scan** (M5): `docker compose run --rm agent trading-agent analyse --top 3` 📋. Prints the rating, plan and earnings stance per symbol and the cost of the scan.
 10. **Evals** (M5): `curl -LsSf https://astral.sh/uv/install.sh | sh`, open a new shell, then in `~/trading-agent`: `uv sync && uv run pytest -m llm tests/evals` 📋 (the summary at the end lists all 30 cases and the total cost). Uses `GEMINI_API_KEY` from `.env`; with the free tier it takes a few minutes because calls are paced.
+11. **Dashboard** (M6): on a fresh install, steps 3, 5 and 7 already created the password, the read-only role and the `dashboard` container. Only if the database existed before this step (installed at M5 or earlier): `git pull && make secrets && make build && make dashboard-role && make up` (`dashboard-role` recreates `db` with the new secret and creates the role; pause the agent or run it outside sessions). Then:
+    - On the Zenbook: `curl -s localhost:8501/_stcore/health` prints `ok`.
+    - Publish it to the tailnet: `sudo tailscale serve --bg 8501`, then `tailscale serve status` 📋 shows the `https://…ts.net` URL. The setting survives reboots.
+    - Open the URL on the phone (Tailscale app on) and on the Mac 📋 (loads? pages fill?). With Tailscale off it must not load.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

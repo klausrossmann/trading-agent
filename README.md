@@ -41,7 +41,8 @@ Paper and live use the same code, risk limits and fee model. Live mode needs thr
 | M3 Baseline strategy, simulator, `baseline_sim` book, backtest report | done; result and decision in [IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3 |
 | M4 Telegram: owner-only bot, `/status`, `/briefing`, alerts, morning briefing | done in the repo; bot token and chat ID pending on the Zenbook |
 | M5 LLM modules: Gemini via PydanticAI, budget guard, cache, validators, `technical` and `earnings` modules, 30 golden eval cases | done in the repo; first scan and evals pending on the Zenbook |
-| M6–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
+| M6 IBKR read-only + dashboard | dashboard v1 done in the repo (Streamlit, read-only DB role, Tailscale); IBKR gateway part waits for the paper login |
+| M7–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
 
 ## Documentation
 

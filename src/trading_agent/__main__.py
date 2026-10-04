@@ -266,5 +266,30 @@ def analyse(
         raise typer.Exit(1)
 
 
+@app.command()
+def dashboard(
+    address: str = typer.Option("127.0.0.1", help="Listen address; 0.0.0.0 inside the container."),
+    port: int = typer.Option(8501),
+) -> None:
+    """Serve the read-only dashboard (Streamlit)."""
+    from streamlit.web import cli as streamlit_cli
+
+    script = Path(__file__).parent / "dashboard" / "app.py"
+    streamlit_cli.main(
+        [
+            "run",
+            str(script),
+            f"--server.address={address}",
+            f"--server.port={port}",
+            "--server.headless=true",
+            "--server.fileWatcherType=none",
+            "--browser.gatherUsageStats=false",
+            "--client.toolbarMode=viewer",
+            "--logger.hideWelcomeMessage=true",  # it looks up the host's public IP
+        ],
+        prog_name="streamlit",
+    )
+
+
 if __name__ == "__main__":
     app()
