@@ -3,12 +3,14 @@
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 import pytest
 
 from trading_agent import backtest as bt
 from trading_agent.domain.market import Instrument
+from trading_agent.domain.proposals import Proposal
 from trading_agent.risk.config import RiskConfig, load_risk_config
 from trading_agent.settings import load_fees
 
@@ -191,3 +193,87 @@ def test_earnings_buffer() -> None:
     result = run(x)
     assert result.trades == []
     assert result.rejections["earnings within buffer"] == 1
+
+
+# --- agent_shadow: every proposal the risk engine would approve on an empty account ---
+
+
+def proposal(inst: int, row: int, target: float = 54.10, status: str = "proposed") -> Proposal:
+    return Proposal.model_validate(
+        {
+            "id": uuid4(),
+            "source": "agent",
+            "as_of": DAYS[row].date(),
+            "instrument_id": inst,
+            "yahoo_symbol": f"S{inst}",
+            "market": "US",
+            "sector": "Tech",
+            "status": status,
+            "strategy": "agent",
+            "entry_ref": "e",
+            "stop_ref": "s",
+            "target_ref": "t",
+            "entry": 50.10,
+            "stop": 48.10,
+            "target": target,
+            "thesis": "t",
+            "invalidation": "i",
+        }
+    )
+
+
+def shadow(*props: Proposal, end: int = 44, xs: int = 6) -> tuple[list[bt.Trade], dict[str, int]]:
+    items = [instrument(n) for n in range(1, xs + 1)]
+    for x in items:
+        x.ind["avg_dollar_volume"] = 50e6
+    set_bar(items[1], 23, 52, 53, 51, 52)  # S2 never trades down to the limit
+    set_bar(items[1], 24, 52, 53, 51, 52)
+    data = bt.MarketData({x.id: x for x in items}, pd.Series([1.0], index=DAYS[:1]), {})
+    trades, rejections = bt.shadow_book(data, CFG, RISK, FEES, props, end=DAYS[end].date())
+    return trades, dict(rejections)
+
+
+def test_shadow_ignores_portfolio_capacity() -> None:
+    props = [proposal(n, 22) for n in (1, 3, 4, 5, 6)]  # five at once, four slots in the book
+    trades, rejections = shadow(*props)
+    assert len(trades) == 5
+    assert rejections == {}
+    t = trades[0]
+    assert (t.book, t.signal_date, t.entry_date, t.quantity) == (
+        "agent_shadow",
+        DAYS[22].date(),
+        DAYS[23].date(),
+        5,
+    )
+    assert (t.exit_reason, t.holding_sessions) == ("time", 15)
+
+
+def test_shadow_rejections_and_open_trades() -> None:
+    trades, rejections = shadow(
+        proposal(1, 22, target=53.10),  # R:R 1.5
+        proposal(2, 22),  # limit never reached
+        proposal(3, 22, status="no_trade"),
+        proposal(4, 44),  # no next session yet
+        proposal(9, 22),  # unknown instrument
+        proposal(5, 22),
+        end=30,
+    )
+    assert rejections == {"levels": 1, "entry not filled": 1}
+    [t] = trades
+    assert (t.instrument_id, t.exit_date, t.pnl_net_eur, t.holding_sessions) == (
+        5,
+        None,
+        None,
+        None,
+    )
+
+
+def test_shadow_stop_on_the_entry_bar() -> None:
+    items = [instrument(1)]
+    items[0].ind["avg_dollar_volume"] = 50e6
+    set_bar(items[0], 23, 50, 50.5, 47, 47.5)
+    data = bt.MarketData({1: items[0]}, pd.Series([1.0], index=DAYS[:1]), {})
+    [t], _ = bt.shadow_book(data, CFG, RISK, FEES, [proposal(1, 22)], end=DAYS[44].date())
+    assert (t.exit_reason, t.exit_date, t.holding_sessions) == ("stop", DAYS[23].date(), 0)
+    assert t.pnl_net_eur is not None
+    assert t.pnl_net_eur < 0

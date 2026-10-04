@@ -29,7 +29,7 @@ from trading_agent.strategies import pullback
 
 log = structlog.get_logger(__name__)
 
-AGENT_BOOK = "agent_shadow"
+AGENT_BOOK = "agent_paper"  # what the agent holds; the proposer skips those symbols
 BUY_RATINGS = ("buy", "strong_buy")
 
 

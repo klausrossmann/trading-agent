@@ -31,7 +31,7 @@ from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.market import Market
-from trading_agent.domain.trading import Book
+from trading_agent.domain.trading import Book, Trade
 from trading_agent.llm.budget import BudgetMode, month_start
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
@@ -50,7 +50,6 @@ from trading_agent.notify import messages
 from trading_agent.notify.telegram import LogNotifier, Notifier
 from trading_agent.risk.config import RiskConfig, load_risk_config
 from trading_agent.settings import DataConfig, Settings, load_fees
-from trading_agent.strategies.pullback import TradePlan
 
 log = structlog.get_logger(__name__)
 
@@ -172,30 +171,24 @@ async def baseline_book(
     return await _replay(ctx, "baseline_sim", start, today)
 
 
-async def agent_book(ctx: BookContext, today: date | None = None) -> list[backtest.BacktestResult]:
-    """Replay `agent_shadow` from the stored proposals with the baseline book's rules.
-
-    Interim until the risk engine (M8): same sizing, fee, portfolio and earnings checks.
-    """
+async def agent_book(ctx: BookContext, today: date | None = None) -> list[Trade]:
+    """Replay `agent_shadow` from the stored proposals: each one the risk engine would approve
+    on an empty account, simulated on its own (CONCEPT.md 13, IMPLEMENTATION.md 14.1)."""
     today = today or datetime.now(UTC).date()
     async with ctx.sessions() as s:
         stored = await proposals_repo.proposals(s, start=ctx.cfg.baseline_book.start)
-    external: dict[date, list[backtest.Signal]] = {}
-    for p in stored:
-        if p.status != "proposed" or p.entry is None or p.stop is None or p.target is None:
-            continue
-        external.setdefault(p.as_of, []).append(
-            backtest.Signal(
-                instrument_id=p.instrument_id,
-                plan=TradePlan(p.entry, p.stop, p.target),
-                score=-(p.rank or 99),
-                strategy=p.strategy,
-            )
-        )
-    if not external:
-        log.info("agent_shadow.no_proposals")
-        return []
-    return await _replay(ctx, "agent_shadow", min(external), today, external)
+    data = await backtest.load_market_data(ctx.sessions, ctx.benchmarks, ctx.cfg.pullback)
+    trades, rejections = backtest.shadow_book(data, ctx.cfg, ctx.risk, ctx.fees, stored, end=today)
+    async with ctx.sessions.begin() as s:
+        await trades_repo.replace_book(s, "agent_shadow", trades)
+    log.info(
+        "agent_shadow.updated",
+        proposals=sum(p.status == "proposed" for p in stored),
+        trades=len(trades),
+        open=sum(t.exit_date is None for t in trades),
+        rejections=dict(rejections),
+    )
+    return trades
 
 
 def _log_result(result: IngestResult) -> None:

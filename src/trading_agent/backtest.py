@@ -12,7 +12,7 @@ import math
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -28,8 +28,12 @@ from trading_agent.calc.sizing import position_size
 from trading_agent.data import calendars
 from trading_agent.db import market as repo
 from trading_agent.domain.market import Instrument, Market
+from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.risk import Controls, MarketSnapshot, PortfolioState
 from trading_agent.domain.trading import Book, Trade
 from trading_agent.execution import sim
+from trading_agent.portfolio.snapshot import proposal_levels
+from trading_agent.risk import engine
 from trading_agent.risk.config import RiskConfig
 from trading_agent.strategies import pullback
 from trading_agent.strategies.pullback import PullbackParams, TradePlan
@@ -421,6 +425,178 @@ def run(
         )
 
     return BacktestResult(trades, series(equity), series(invested), rejections, signals)
+
+
+def simulate_trade(
+    data: MarketData,
+    x: InstrumentData,
+    signal_row: int,
+    plan: TradePlan,
+    quantity: int,
+    cfg: BacktestConfig,
+    fees: FeeSchedule,
+    *,
+    end: date,
+    book: Book,
+    strategy: str,
+) -> Trade | None:
+    """One trade on its own, with `run`'s fill, exit and stop rules; None if the entry
+    didn't fill within its validity (or hasn't yet by `end`)."""
+    p, slip, inst = cfg.pullback, cfg.slippage_pct, x.instrument
+    entry: tuple[int, date, float, float] | None = None  # row, day, price, buy fee
+    stop = plan.stop
+
+    def done(
+        entry: tuple[int, date, float, float], row: int, day: date, fill: sim.Fill | None
+    ) -> Trade:
+        e_row, e_day, e_price, buy_fee = entry
+        e_rate = data.rate(inst.currency, e_day)
+        cost_eur = (quantity * e_price + buy_fee) / e_rate
+        sell_fee = 0.0
+        pnl = r = None
+        if fill is not None:
+            sell_fee = float(
+                order_fees(fees, inst.market, "sell", quantity, Decimal(str(round(fill.price, 4))))
+            )
+            x_rate = data.rate(inst.currency, day)
+            pnl = (quantity * fill.price - sell_fee) / x_rate - cost_eur
+        risk_eur = quantity * plan.risk_per_share / e_rate
+        if pnl is not None and risk_eur > 0:
+            r = pnl / risk_eur
+        return Trade(
+            book=book,
+            strategy=strategy,
+            instrument_id=x.id,
+            yahoo_symbol=inst.yahoo_symbol,
+            market=inst.market,
+            sector=inst.sector,
+            signal_date=pd.Timestamp(x.frame.index[signal_row]).date(),
+            entry_date=e_day,
+            entry_price=e_price,
+            quantity=quantity,
+            stop=plan.stop,
+            target=plan.target,
+            risk_eur=risk_eur,
+            fees=buy_fee + sell_fee,
+            fees_eur=buy_fee / e_rate + sell_fee / data.rate(inst.currency, day),
+            exit_date=day if fill else None,
+            exit_price=fill.price if fill else None,
+            exit_reason=fill.reason if fill else None,
+            pnl_net_eur=pnl,
+            r_multiple=r,
+            holding_sessions=row - e_row if fill else None,
+        )
+
+    last_row, last_day = signal_row, pd.Timestamp(x.frame.index[signal_row]).date()
+    for row in range(signal_row + 1, len(x.frame)):
+        day = pd.Timestamp(x.frame.index[row]).date()
+        if day > end:
+            break
+        last_row, last_day = row, day
+        bar = x.bar(row)
+        if entry is None:
+            if row - signal_row > p.entry_valid_sessions:
+                return None
+            price = sim.fill_entry(bar, plan.entry, slip)
+            if price is None:
+                continue
+            fee = float(
+                order_fees(fees, inst.market, "buy", quantity, Decimal(str(round(price, 4))))
+            )
+            entry = (row, day, price, fee)
+            stopped = sim.check_exit(bar, stop, None, slip)
+            if stopped is not None:
+                return done(entry, row, day, stopped)
+            continue
+        fill = sim.check_exit(bar, stop, plan.target, slip)
+        if fill is None and row - entry[0] >= p.time_stop_sessions:
+            fill = sim.time_exit(bar, slip)
+        if fill is not None:
+            return done(entry, row, day, fill)
+        stop = sim.trailed_stop(bar, stop, entry[2], entry[2] + p.breakeven_r * plan.risk_per_share)
+    return done(entry, last_row, last_day, None) if entry is not None else None
+
+
+def shadow_book(
+    data: MarketData,
+    cfg: BacktestConfig,
+    risk: RiskConfig,
+    fees: FeeSchedule,
+    proposals: Sequence[Proposal],
+    *,
+    end: date,
+) -> tuple[list[Trade], Counter[str]]:
+    """`agent_shadow` (CONCEPT.md 13): every proposal the risk engine would approve on an
+    empty account, i.e. its per-trade checks without portfolio capacity, each simulated alone."""
+    trades: list[Trade] = []
+    rejections: Counter[str] = Counter()
+    for prop in proposals:
+        x = data.instruments.get(prop.instrument_id)
+        row = x.rows.get(prop.as_of) if x is not None else None
+        if prop.status != "proposed" or x is None or row is None or row + 1 >= len(x.frame):
+            continue
+        inst = x.instrument
+        day = pd.Timestamp(x.frame.index[row + 1]).date()  # the session it would be placed
+        if day > end:
+            continue
+        _, sleeve = next(
+            (ms, c)
+            for ms, c in risk.sleeves([*risk.markets.paper, inst.market], "paper")
+            if inst.market in ms
+        )
+        now = datetime.combine(day, time(12), UTC)
+        cal = calendars.CALENDAR_BY_MARKET[inst.market]
+        upcoming = [d for d in x.earnings if d >= day]
+        market = MarketSnapshot(
+            instrument_id=x.id,
+            in_universe=bool(inst.indices),
+            session_open=now - timedelta(hours=1),  # replay: the trading window is not checked
+            session_close=now + timedelta(hours=1),
+            mid=Decimal(str(round(float(x.frame["close"].iloc[row]), 4))),
+            atr=Decimal(str(round(float(x.ind["atr"].iloc[row]), 4))),
+            avg_daily_value=Decimal(str(round(float(x.ind["avg_dollar_volume"].iloc[row]), 0))),
+            sessions_to_earnings=len(calendars.sessions(cal, day, min(upcoming))) - 1
+            if upcoming
+            else None,
+            eur_rate=Decimal(str(data.rate(inst.currency, prop.as_of))),
+            correlations={},
+        )
+        empty = PortfolioState(
+            holdings=(),
+            settled_cash_eur=sleeve.capital.agent_budget_eur,
+            pnl_today_eur=Decimal(0),
+            pnl_week_eur=Decimal(0),
+            drawdown_eur=Decimal(0),
+            orders_today=0,
+        )
+        controls = Controls(
+            trading="active", app_mode="paper", gateway_mode=None, live_confirmed=False
+        )
+        decision = engine.evaluate(
+            prop, proposal_levels(prop), empty, market, controls, sleeve, fees, now
+        )
+        entry, stop, target = decision.entry, decision.stop, decision.target
+        if not decision.approved or entry is None or stop is None or target is None:
+            rejections[decision.failures[0].name if decision.failures else "rejected"] += 1
+            continue
+        plan = TradePlan(float(entry), float(stop), float(target))
+        trade = simulate_trade(
+            data,
+            x,
+            row,
+            plan,
+            decision.quantity,
+            cfg,
+            fees,
+            end=end,
+            book="agent_shadow",
+            strategy=prop.strategy,
+        )
+        if trade is None:
+            rejections["entry not filled"] += 1
+        else:
+            trades.append(trade)
+    return trades, rejections
 
 
 def latest_setups(data: MarketData, p: PullbackParams) -> list[tuple[str, float]]:

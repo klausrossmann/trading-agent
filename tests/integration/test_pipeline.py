@@ -231,5 +231,4 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
     assert "Blocked by the critic: CCC" in text
 
     book = jobs.BookContext.load(ROOT / "config", sessions, universe)
-    results = await jobs.agent_book(book, today=date(2026, 10, 6))
-    assert sum(r.signals for r in results) == 2  # the proposed ones; entries need the next bar
+    assert await jobs.agent_book(book, today=date(2026, 10, 6)) == []  # placed the next session

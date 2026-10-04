@@ -36,7 +36,7 @@ from trading_agent.executor import Executor
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, Notifier
 from trading_agent.portfolio import book as accounting
-from trading_agent.portfolio.snapshot import snapshot, to_tick
+from trading_agent.portfolio.snapshot import proposal_levels, snapshot, to_tick
 from trading_agent.risk import engine
 from trading_agent.risk.config import RiskConfig
 from trading_agent.strategies.pullback import PullbackParams
@@ -159,19 +159,6 @@ def _sessions_to_earnings(cal: str, today: date, dates: Sequence[date]) -> int |
     return len(calendars.sessions(cal, today, min(upcoming))) - 1
 
 
-def _levels(p: Proposal) -> dict[str, Decimal]:
-    """The proposal's resolved prices on the tick grid; missing ones stay unresolved."""
-    out: dict[str, Decimal] = {}
-    for ref, price, up in (
-        (p.entry_ref, p.entry, False),
-        (p.stop_ref, p.stop, True),
-        (p.target_ref, p.target, True),
-    ):
-        if ref is not None and price is not None:
-            out[ref] = to_tick(Decimal(str(price)), up)
-    return out
-
-
 async def _decide(
     ctx: TradingContext, loaded: _Book, p: Proposal, now: datetime, today: date
 ) -> tuple[RiskDecision, Instrument]:
@@ -195,7 +182,9 @@ async def _decide(
         eur_rate=Decimal(1) if inst.currency == "EUR" else _rate_on(usd, today),
     )
     controls = await ctx.center.controls()
-    decision = engine.evaluate(p, _levels(p), portfolio, market, controls, cfg, ctx.fees, now)
+    decision = engine.evaluate(
+        p, proposal_levels(p), portfolio, market, controls, cfg, ctx.fees, now
+    )
     return decision, inst
 
 

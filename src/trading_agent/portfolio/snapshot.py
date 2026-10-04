@@ -8,6 +8,7 @@ import pandas as pd
 
 from trading_agent.calc.indicators import atr, bars_to_frame
 from trading_agent.domain.market import Bar, Instrument
+from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import MarketSnapshot
 
 VALUE_SESSIONS = 20
@@ -19,6 +20,19 @@ TICK = Decimal("0.01")  # Xetra price bands come with the IBKR market rules (ste
 def to_tick(price: Decimal, up: bool) -> Decimal:
     """Entry limits round down, stops and targets up: never more risk than approved."""
     return price.quantize(TICK, rounding=ROUND_CEILING if up else ROUND_FLOOR)
+
+
+def proposal_levels(p: Proposal) -> dict[str, Decimal]:
+    """The proposal's resolved prices on the tick grid; missing ones stay unresolved."""
+    out: dict[str, Decimal] = {}
+    for ref, price, up in (
+        (p.entry_ref, p.entry, False),
+        (p.stop_ref, p.stop, True),
+        (p.target_ref, p.target, True),
+    ):
+        if ref is not None and price is not None:
+            out[ref] = to_tick(Decimal(str(price)), up)
+    return out
 
 
 def _returns(bars: Sequence[Bar]) -> pd.Series:

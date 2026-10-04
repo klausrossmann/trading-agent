@@ -768,7 +768,7 @@ M6 is split because the IBKR paper login doesn't exist yet: the dashboard comes 
 |---|---|---|
 | `baseline_sim` | Rule-based strategy, simulator | The bar the LLM must clear |
 | `agent_paper` | LLM pipeline + risk engine, IBKR paper account | The real execution path |
-| `agent_shadow` | Approved but unexecuted agent proposals, simulator | Larger sample despite only 4 slots |
+| `agent_shadow` | Approved but unexecuted agent proposals, simulator | Larger sample despite only 4 slots. Since M9: every proposal the risk engine approves on an empty account (per-trade checks, no capacity limits), each simulated on its own |
 | Benchmark | Buy and hold SPY (US) and DAX (EU), simulated | Context |
 
 KPIs per book, weekly and cumulative: number of trades, win rate, average R, expectancy, profit factor, maximum drawdown, Sharpe/Sortino on daily equity, fees, LLM costs, and **net expectancy after LLM costs**. For the agent: calibration (confidence buckets against hit rate) and your agree/disagree accuracy.
@@ -781,6 +781,7 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 |---|---|---|
 | Weekly report | `evaluation/weekly.py`, `reports.py`, job `weekly_report` (Saturday 10:00), CLI `trading-agent weekly-report [--date] [--output]` | Per book this week and since the start: trades, win rate, average R, expectancy, profit factor, net P&L, fees; open positions; `agent_paper` drawdown per sleeve; buy and hold of the benchmarks. LLM costs in EUR (ECB rate). Calibration by confidence bucket and your label accuracy over the agent sample. Stored in `reports` (migration `0009`); Telegram gets the summary with the gate. |
 | Agent sample | `weekly.agent_sample` | `agent_paper` trades plus `agent_shadow` trades of proposals that weren't executed, so nothing is counted twice. Trades link to proposals by instrument and signal date. |
+| Shadow book | `backtest.shadow_book`, `simulate_trade`; `jobs.agent_book` (evening digest) | Decision 19.2 #11. Each proposal is evaluated by the risk engine on an empty account at its sleeve's budget (mid = close at `as_of`, ATR and 20-day value from the bars, earnings buffer from the next session; trading window, positions, sector, cluster, loss and order limits can't bind), then simulated alone with the backtest's fill, breakeven and time-stop rules. Rejections are counted per check. The proposer's "already held" list now comes from `agent_paper`. |
 | Gate | `weekly.gate` | Four checks: 91 days since the paper start, 50 closed trades in the agent sample, net expectancy after all LLM costs > 0, and above `baseline_sim`'s expectancy. |
 | Telegram | `trading.commands` | `/positions`: open positions with entry, stop, target, last close, R and unrealized P&L; pending entries with their limit and expiry. `/pnl`: per sleeve day, week, month and since start from the equity snapshots, with `baseline_sim`'s closed P&L for the same windows. |
 
@@ -1065,3 +1066,7 @@ flowchart LR
 | 8 | Portfolio numbers for the risk engine | Own accounting from fills plus daily equity snapshots | 9.6 |
 | 9 | Which proposals get placed | Only today's scan for that market, in rank order | Older proposals are never placed |
 | 10 | Switch from the simulator to IBKR orders | New setting `IB_ORDERS_ENABLED` (needs `IB_ENABLED`) | Switch only with no open `agent_paper` brackets |
+| 11 | Definition of `agent_shadow` | Every proposal that passes the risk engine's per-trade checks, ignoring portfolio capacity | 14.1 |
+| 12 | Backup offsite copy | age-encrypted weekly copy in `backups/offsite/`; syncing is yours | 15.4 |
+| 13 | News source for position re-evaluation | Finnhub company news | 14.1 |
+| 14 | Re-evaluation says the thesis is invalidated | Alert with the reasoning; you decide (no automatic exit yet) | 14.1 |
