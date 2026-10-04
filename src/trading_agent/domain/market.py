@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 Market = Literal["US", "EU"]
 Currency = Literal["USD", "EUR"]
 EarningsTiming = Literal["bmo", "amc", "during", "unknown"]
+Increments = tuple[tuple[Decimal, Decimal], ...]  # (lowest price, tick), ascending
 
 
 class _Frozen(BaseModel):

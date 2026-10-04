@@ -671,6 +671,8 @@ Not wired to jobs yet (step 4); everything runs in tests.
 
 Open for step 4/5: tick sizes (Xetra price bands) before orders are built, child quantities after a partial IBKR fill, and the GTD format against the real gateway.
 
+Prepared on the Mac for step 5 (M9 session): `data/ibkr.MarketInfo` reads each contract's price increments from its IBKR market rule (the primary exchange's rule, cached) and quotes ((bid + ask) / 2, else last; real-time or delayed). Placement and stop moves round to those increments and the 1 % check uses the quote whenever the gateway is connected, also in read-only mode; without it 0.01 and the last close apply. `trading-agent ibkr-check` prints the increments, and `--order-test` places a 1-share buy limit at half the price and cancels it. `IB_READ_ONLY_API` in `.env` now sets the gateway's `READ_ONLY_API`.
+
 ---
 
 ## 11. Scheduler
@@ -957,6 +959,14 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - On the Zenbook as `trader`: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
     - `crontab -e`: `15 3 * * * cd ~/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
     - Copy one `.age` file to the Mac and run `scripts/restore.sh check <file>` there against a local throwaway database once: that is the "restore on another machine" test of section 18.
+17. **IBKR orders and chaos tests** (M8 step 5, after step 13 works; outside US hours for the switch, the tests during a session):
+    - Switch: `/positions` shows nothing open (otherwise wait until the simulated brackets are closed). In `.env`: `IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`. `docker compose up -d` (recreates gateway and agent). `/status` shows the gateway connected.
+    - `docker compose run --rm agent trading-agent ibkr-check --order-test AAPL` 📋: placed `working`, after cancel `inactive`, and the price increments for AAPL and SAP.DE.
+    - The next placements go to IBKR (📤 says `IBKR`). Once a bracket is working or filled, run the three chaos tests 📋:
+      1. Gateway restart with open orders: `docker compose restart ib-gateway`. Expected: 🔌 alerts only if it stays down more than 10 min; after reconnect a clean reconciliation (no ⚠️, no halt), `/positions` unchanged, in TWS/the IBKR app each order exists once.
+      2. Reboot during a session: `sudo reboot`. Expected: the stack comes back by itself, ▶️ message, reconciliation clean, stops still at IBKR (they are GTC there), nothing duplicated.
+      3. Replay the same proposals: `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent place US` during the session, after the scheduled placement. Expected: every proposal that already has a bracket is rejected (`rate_limits: already held or pending`), and IBKR shows no second order for any `orderRef`.
+    - Also check once: an entry that expires (`GTD`) shows ⌛ the day after, and the GTD time IBKR shows is the next session's close.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

@@ -14,7 +14,7 @@ from decimal import Decimal
 import structlog
 from ib_async import IB, Contract, Stock
 
-from trading_agent.domain.market import Bar, BarSeries, Instrument
+from trading_agent.domain.market import Bar, BarSeries, Increments, Instrument
 
 log = structlog.get_logger(__name__)
 
@@ -112,3 +112,55 @@ class IbkrPriceProvider:
             fetched_at=datetime.now(UTC),
             bars=tuple(b for b in out if start <= b.date <= end),
         )
+
+
+def _valid(value: float) -> bool:
+    return math.isfinite(value) and value > 0
+
+
+class MarketInfo:
+    """Price increments (IBKR market rules) and quotes. Falls back (None) without a connection
+    or on any IBKR error, so placement continues with 0.01 ticks and the last close."""
+
+    def __init__(self, ib: IB) -> None:
+        self.ib = ib
+        self._increments: dict[str, Increments] = {}
+
+    async def increments(self, inst: Instrument) -> Increments | None:
+        if inst.yahoo_symbol in self._increments:
+            return self._increments[inst.yahoo_symbol]
+        if not self.ib.isConnected():
+            return None
+        try:
+            details = await self.ib.reqContractDetailsAsync(contract_for(inst))
+            if not details:
+                return None
+            exchanges = details[0].validExchanges.split(",")
+            rules = details[0].marketRuleIds.split(",")
+            venue = "SMART" if inst.market == "US" else inst.exchange
+            rule = rules[exchanges.index(venue)] if venue in exchanges else rules[0]
+            table = await self.ib.reqMarketRuleAsync(int(rule)) or []
+        except (OSError, TimeoutError, ConnectionError, ValueError, IndexError) as exc:
+            log.warning("ibkr.market_rule_failed", symbol=inst.yahoo_symbol, error=repr(exc))
+            return None
+        out = tuple(sorted((_dec(p.lowEdge), Decimal(str(p.increment))) for p in table))
+        if not out:
+            return None
+        self._increments[inst.yahoo_symbol] = out
+        return out
+
+    async def mid(self, inst: Instrument) -> Decimal | None:
+        """(bid + ask) / 2, else the last trade; real-time or delayed, whatever the account gets."""
+        if not self.ib.isConnected():
+            return None
+        try:
+            tickers = await self.ib.reqTickersAsync(contract_for(inst))
+        except (OSError, TimeoutError, ConnectionError) as exc:
+            log.warning("ibkr.quote_failed", symbol=inst.yahoo_symbol, error=repr(exc))
+            return None
+        if not tickers:
+            return None
+        t = tickers[0]
+        if _valid(t.bid) and _valid(t.ask) and t.ask >= t.bid:
+            return _dec((t.bid + t.ask) / 2)
+        return _dec(t.last) if _valid(t.last) else None

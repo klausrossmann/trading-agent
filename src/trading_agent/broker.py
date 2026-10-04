@@ -7,6 +7,7 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import structlog
 from ib_async import IB, Ticker
@@ -15,11 +16,13 @@ from trading_agent.data import ibkr as ibkr_data
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import market as market_repo
 from trading_agent.domain.market import Instrument
+from trading_agent.domain.orders import OrderSpec, order_ref
 from trading_agent.domain.risk import Mode
 from trading_agent.execution.ibkr import IbkrBroker
 from trading_agent.execution.reconcile import ReconcileReport, reconcile
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Notifier
+from trading_agent.portfolio.snapshot import CENT_TICKS, to_tick
 from trading_agent.settings import Settings
 
 log = structlog.get_logger(__name__)
@@ -45,6 +48,7 @@ class BrokerLink:
         self.ib = ib or IB()
         self.broker = IbkrBroker(self.ib)
         self.prices = ibkr_data.IbkrPriceProvider(self.ib)
+        self.market_info = ibkr_data.MarketInfo(self.ib)
         self.on_connect = on_connect
         self._clock = clock
         self.down_since: float | None = None
@@ -226,8 +230,11 @@ class _LogOnly:
         log.info("ibkr_check.message", text=text)
 
 
-async def check(settings: Settings, sessions: Sessions, symbols: list[str]) -> list[str]:
-    """What M6 needs to know from the real gateway. Writes nothing except contract ids."""
+async def check(
+    settings: Settings, sessions: Sessions, symbols: list[str], order_test: bool = False
+) -> list[str]:
+    """What M6 needs to know from the real gateway. Writes nothing except contract ids
+    (and, with `order_test`, one far-from-market order that is cancelled right away)."""
     link = BrokerLink(settings, _LogOnly())
     if not await link.connect():
         return [f"Gateway not reachable at {settings.ib_host}:{settings.ib_port}"]
@@ -253,6 +260,51 @@ async def check(settings: Settings, sessions: Sessions, symbols: list[str]) -> l
             out.append(await _compare_bars(link, sessions, *found))
             quotes.append("  " + await _quote_type(ib, found[1]))
         out += quotes
+        for symbol in symbols:
+            found = await _instrument(sessions, symbol)
+            if found is not None:
+                ticks = await link.market_info.increments(found[1])
+                out.append(f"Price increments {symbol}: {ticks or 'unknown'}")
+        if order_test and symbols:
+            out += await _order_test(link, sessions, symbols[0])
     finally:
         ib.disconnect()
     return out
+
+
+async def _order_test(link: BrokerLink, sessions: Sessions, symbol: str) -> list[str]:
+    """Buy 1 share with a limit at half the price, read its status, cancel, read it again."""
+    if not link.settings.ib_orders_enabled:
+        return ["Order test skipped: IB_ORDERS_ENABLED=false"]
+    found = await _instrument(sessions, symbol)
+    if found is None:
+        return [f"Order test skipped: {symbol} not in the universe"]
+    inst_id, inst = found
+    mid = await link.market_info.mid(inst)
+    if mid is None:
+        async with sessions() as s:
+            mid = (await market_repo.last_closes(s, [inst_id])).get(inst_id)
+    if mid is None:
+        return ["Order test skipped: no price"]
+    ticks = await link.market_info.increments(inst) or CENT_TICKS
+    bracket_id = uuid4()
+    spec = OrderSpec(
+        order_ref=order_ref(bracket_id, "entry"),
+        bracket_id=bracket_id,
+        instrument=inst,
+        kind="entry",
+        action="BUY",
+        order_type="LMT",
+        quantity=1,
+        limit_price=to_tick(mid / 2, False, ticks),
+        tif="DAY",
+    )
+    lines = [f"Order test: BUY 1 {symbol} LMT {spec.limit_price} ({spec.order_ref})"]
+    placed = await link.broker.place([spec])
+    lines.append(f"  placed: {placed[0].status}, broker id {placed[0].broker_order_id}")
+    await asyncio.sleep(3)
+    await link.broker.cancel(spec.order_ref)
+    await asyncio.sleep(3)
+    after = {o.order_ref: o for o in await link.broker.orders()}.get(spec.order_ref)
+    lines.append(f"  after cancel: {after.status if after else 'not found'}")
+    return lines

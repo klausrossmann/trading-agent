@@ -205,6 +205,7 @@ async def trading_context(
         mode=mode,
         notifier=notifier,
         sim=sim,
+        market_info=link.market_info if link is not None else None,
     )
 
 

@@ -296,8 +296,13 @@ def propose(
 
 
 @app.command(name="ibkr-check")
-def ibkr_check(symbols: list[str] | None = CheckSymbolsArgument) -> None:
-    """Check the IB Gateway: account, positions, contract ids, bars vs. Yahoo, quote type."""
+def ibkr_check(
+    symbols: list[str] | None = CheckSymbolsArgument,
+    order_test: bool = typer.Option(
+        False, "--order-test", help="Also place and cancel a far-from-market 1-share limit."
+    ),
+) -> None:
+    """Check the IB Gateway: account, positions, contract ids, bars vs. Yahoo, quotes, ticks."""
     from trading_agent import broker
     from trading_agent.db.session import create_engine, session_factory
 
@@ -307,7 +312,7 @@ def ibkr_check(symbols: list[str] | None = CheckSymbolsArgument) -> None:
         engine = create_engine(settings.database_url)
         try:
             return await broker.check(
-                settings, session_factory(engine), symbols or ["AAPL", "SAP.DE"]
+                settings, session_factory(engine), symbols or ["AAPL", "SAP.DE"], order_test
             )
         finally:
             await engine.dispose()
@@ -345,6 +350,49 @@ def weekly_report(
     typer.echo(text)
     if output:
         output.write_text(text, encoding="utf-8")
+
+
+@app.command()
+def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) -> None:
+    """Run today's placement for MARKET now. Safe to repeat: proposals with a bracket are
+    rejected as already pending, and no orderRef is sent twice."""
+    from trading_agent import broker, jobs, scheduler, trading
+    from trading_agent.controls import ControlCenter
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+    from trading_agent.notify.telegram import LogNotifier
+
+    settings = _settings()
+
+    async def _run() -> trading.Placement:
+        engine = create_engine(settings.database_url)
+        link: broker.BrokerLink | None = None
+        try:
+            sessions = session_factory(engine)
+            book = jobs.BookContext.load(
+                settings.config_dir, sessions, load_universe(settings.config_dir)
+            )
+            center = ControlCenter(sessions, settings.app_mode)
+            if settings.ib_enabled:
+                link = broker.BrokerLink(settings, LogNotifier())
+                await link.connect()
+                center.gateway_mode = link.mode
+            ctx = await scheduler.trading_context(
+                settings, sessions, book, center, LogNotifier(), link
+            )
+            return await trading.place(ctx, market)
+        finally:
+            if link is not None:
+                link.ib.disconnect()
+            await engine.dispose()
+
+    result = asyncio.run(_run())
+    for p in result.placed:
+        typer.echo(f"placed {p.symbol} {p.quantity} @ {p.entry:.2f} (stop {p.stop:.2f})")
+    for symbol, reason in result.rejected:
+        typer.echo(f"not placed {symbol}: {reason}")
+    if not result.placed and not result.rejected:
+        typer.echo("nothing to place")
 
 
 @app.command()

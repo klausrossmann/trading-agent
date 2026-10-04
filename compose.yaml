@@ -74,7 +74,7 @@ services:
       TWS_USERID: ${TWS_USERID:-}
       TWS_PASSWORD_FILE: /run/secrets/tws_password
       TRADING_MODE: paper
-      READ_ONLY_API: "yes"            # "no" from M8
+      READ_ONLY_API: ${IB_READ_ONLY_API:-yes}  # "no" together with IB_ORDERS_ENABLED=true (M8 step 5)
       TIME_ZONE: Europe/Berlin
       TZ: Europe/Berlin
       AUTO_RESTART_TIME: "11:45 PM"

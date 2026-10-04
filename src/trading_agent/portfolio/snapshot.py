@@ -7,22 +7,29 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 import pandas as pd
 
 from trading_agent.calc.indicators import atr, bars_to_frame
-from trading_agent.domain.market import Bar, Instrument
+from trading_agent.domain.market import Bar, Increments, Instrument
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import MarketSnapshot
 
 VALUE_SESSIONS = 20
 CORRELATION_SESSIONS = 60
 MIN_OVERLAP = 20  # fewer common sessions: no estimate, the holding counts as correlated
-TICK = Decimal("0.01")  # Xetra price bands come with the IBKR market rules (step 5)
+
+CENT_TICKS: Increments = ((Decimal(0), Decimal("0.01")),)  # until IBKR's market rules are known
 
 
-def to_tick(price: Decimal, up: bool) -> Decimal:
+def tick_for(price: Decimal, increments: Increments) -> Decimal:
+    return next((tick for low, tick in reversed(increments) if price >= low), increments[0][1])
+
+
+def to_tick(price: Decimal, up: bool, increments: Increments = CENT_TICKS) -> Decimal:
     """Entry limits round down, stops and targets up: never more risk than approved."""
-    return price.quantize(TICK, rounding=ROUND_CEILING if up else ROUND_FLOOR)
+    tick = tick_for(price, increments)
+    steps = (price / tick).to_integral_value(rounding=ROUND_CEILING if up else ROUND_FLOOR)
+    return (steps * tick).quantize(tick)
 
 
-def proposal_levels(p: Proposal) -> dict[str, Decimal]:
+def proposal_levels(p: Proposal, increments: Increments = CENT_TICKS) -> dict[str, Decimal]:
     """The proposal's resolved prices on the tick grid; missing ones stay unresolved."""
     out: dict[str, Decimal] = {}
     for ref, price, up in (
@@ -31,7 +38,7 @@ def proposal_levels(p: Proposal) -> dict[str, Decimal]:
         (p.target_ref, p.target, True),
     ):
         if ref is not None and price is not None:
-            out[ref] = to_tick(Decimal(str(price)), up)
+            out[ref] = to_tick(Decimal(str(price)), up, increments)
     return out
 
 

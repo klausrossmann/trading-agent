@@ -167,6 +167,11 @@ def _bars(closes: Sequence[float], start: date = date(2026, 6, 1)) -> list[Bar]:
 def test_tick_rounding_never_adds_risk() -> None:
     assert to_tick(D("100.019"), up=False) == D("100.01")
     assert to_tick(D("96.001"), up=True) == D("96.01")
+    xetra = ((D(0), D("0.001")), (D(10), D("0.005")), (D(50), D("0.01")), (D(100), D("0.02")))
+    assert to_tick(D("123.457"), False, xetra) == D("123.44")
+    assert to_tick(D("123.457"), True, xetra) == D("123.46")
+    assert to_tick(D("12.3456"), True, xetra) == D("12.350")
+    assert to_tick(D("5.12345"), False, xetra) == D("5.123")
 
 
 def test_snapshot_and_correlations() -> None:

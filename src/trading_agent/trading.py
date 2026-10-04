@@ -19,13 +19,14 @@ from trading_agent.backtest import SETTLEMENT_SESSIONS
 from trading_agent.calc.fees import FeeSchedule, order_fees
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars
+from trading_agent.data.ibkr import MarketInfo
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import orders as orders_repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
-from trading_agent.domain.market import Bar, Instrument, Market, Observation
+from trading_agent.domain.market import Bar, Increments, Instrument, Market, Observation
 from trading_agent.domain.orders import Bracket, BracketRequest
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
@@ -36,7 +37,7 @@ from trading_agent.executor import Executor
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, Notifier
 from trading_agent.portfolio import book as accounting
-from trading_agent.portfolio.snapshot import proposal_levels, snapshot, to_tick
+from trading_agent.portfolio.snapshot import CENT_TICKS, proposal_levels, snapshot, to_tick
 from trading_agent.risk import engine
 from trading_agent.risk.config import RiskConfig
 from trading_agent.strategies.pullback import PullbackParams
@@ -58,7 +59,12 @@ class TradingContext:
     mode: Mode
     notifier: Notifier
     sim: SimBroker | None  # None: orders go to IBKR
+    market_info: MarketInfo | None = None  # IBKR ticks and quotes, when the gateway is enabled
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
+
+    async def ticks(self, inst: Instrument) -> Increments:
+        found = await self.market_info.increments(inst) if self.market_info else None
+        return found or CENT_TICKS
 
     @property
     def book(self) -> Book:
@@ -180,11 +186,11 @@ async def _decide(
         session_close=calendars.session_time(cal, today, "close"),
         sessions_to_earnings=_sessions_to_earnings(cal, today, earnings),
         eur_rate=Decimal(1) if inst.currency == "EUR" else _rate_on(usd, today),
+        mid=await ctx.market_info.mid(inst) if ctx.market_info else None,
     )
     controls = await ctx.center.controls()
-    decision = engine.evaluate(
-        p, proposal_levels(p), portfolio, market, controls, cfg, ctx.fees, now
-    )
+    levels = proposal_levels(p, await ctx.ticks(inst))
+    decision = engine.evaluate(p, levels, portfolio, market, controls, cfg, ctx.fees, now)
     return decision, inst
 
 
@@ -337,7 +343,7 @@ async def _manage_positions(
             continue
         trigger = float(b.entry_price) + ctx.rules.breakeven_r * float(b.entry - b.initial_stop)
         moved = sim.trailed_stop(_sim_bar(bar), float(b.stop), float(b.entry_price), trigger)
-        new_stop = to_tick(Decimal(str(moved)), up=True)
+        new_stop = to_tick(Decimal(str(moved)), True, await ctx.ticks(inst))
         if new_stop > b.stop:
             await ctx.executor.move_stop(b.id, new_stop)
             log.info("stop.moved", symbol=inst.yahoo_symbol, stop=str(new_stop))
