@@ -762,6 +762,8 @@ M6 is split because the IBKR paper login doesn't exist yet: the dashboard comes 
 | Container | `compose.yaml` service `dashboard` | Same image, `trading-agent dashboard --address 0.0.0.0`. No `.env`, so no API keys; only `dashboard_db_password` as `db_password`. Port `127.0.0.1:8501` on the host only; read-only filesystem, no capabilities. Streamlit usage statistics and the public-IP lookup are off. |
 | Access | Tailscale | `sudo tailscale serve --bg 8501` serves it as `https://<host>.<tailnet>.ts.net` to devices in your tailnet only (15.5). |
 
+Since M9 three more pages: **Risk** (kill switch; per `agent_paper` sleeve the use of drawdown, day and week loss, positions and largest sector against `risk.yaml`; correlation heatmap of the held and pending instruments over 60 sessions; the risk engine's rejections of the last 30 days by check), **Evaluation** (the go-live gate computed live, calibration table and chart, your label accuracy) and **Reports** (the stored weekly reports). `risk.yaml` and `strategies.yaml` are read as plain YAML, so the dashboard still has no path to `risk`.
+
 ---
 
 ## 14. Evaluation

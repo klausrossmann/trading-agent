@@ -117,3 +117,79 @@ def test_monthly_costs() -> None:
     ]
     assert out["cost_usd"].tolist() == pytest.approx([0.5, 0.05, 0.01])
     assert frames.monthly_costs(calls.iloc[0:0]).empty
+
+
+LIMITS = {
+    "capital": {"agent_budget_eur": 1000, "paper_budget_eur": {"EU": 5000}},
+    "loss_limits": {"daily_loss_pct": 3, "weekly_loss_pct": 6, "max_drawdown_pct": 15},
+    "portfolio": {"max_open_positions": 4, "max_sector_pct": 60},
+}
+
+
+def test_limit_usage() -> None:
+    equity = pd.DataFrame(
+        {
+            "book": ["agent_paper"] * 3 + ["agent_live"],
+            "sleeve": ["US"] * 3 + ["US"],
+            "date": [date(2026, 10, 2), date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 7)],
+            "equity_eur": [1020.0, 1010.0, 990.0, 1.0],
+        }
+    )
+    brackets = pd.DataFrame(
+        {
+            "book": ["agent_paper"] * 3,
+            "instrument_id": [1, 2, 3],
+            "symbol": ["A", "B", "C"],
+            "market": ["US", "US", "EU"],
+            "currency": ["USD", "USD", "EUR"],
+            "sector": ["Tech", "Tech", "Energy"],
+            "state": ["filled", "working", "filled"],
+            "open_qty": [2, 0, 10],
+            "pending_qty": [0, 3, 0],
+            "entry": [100.0, 50.0, 40.0],
+            "entry_price": [110.0, None, 40.0],
+        }
+    )
+    out = frames.limit_usage(equity, brackets, LIMITS, usd_per_eur=1.1)
+    us = out[out["sleeve"] == "US"].set_index("limit")
+    assert us.loc["Drawdown (EUR)", "value"] == 30  # peak 1020
+    assert us.loc["Drawdown (EUR)", "used_pct"] == pytest.approx(20)
+    assert us.loc["Loss on the last day (EUR)", "value"] == 20
+    assert us.loc["Loss this week (EUR)", "value"] == 30  # vs Friday 2 Oct
+    assert us.loc["Positions and entries", "value"] == 2
+    assert us.loc["Largest sector (EUR)", "value"] == pytest.approx((220 + 150) / 1.1)
+    eu = out[out["sleeve"] == "EU"].set_index("limit")
+    assert eu.loc["Drawdown (EUR)", "max"] == 750  # 15 % of the EUR 5,000 sleeve
+    assert eu.loc["Largest sector (EUR)", "value"] == 400
+
+
+def test_correlation_matrix() -> None:
+    closes = pd.DataFrame({1: [1.0, 2.0, 3.0, 2.0], 2: [2.0, 4.0, 6.0, 4.0]})
+    m = frames.correlation_matrix(closes, {1: "A", 2: "B"})
+    assert list(m.columns) == ["A", "B"]
+    assert m.loc["A", "B"] == pytest.approx(1.0)
+    assert frames.correlation_matrix(closes[[1]], {1: "A"}).empty
+
+
+def test_outcomes_gate_and_calibration() -> None:
+    paper = _closed(5, 8).model_copy(update={"book": "agent_paper", "yahoo_symbol": "AAA"})
+    shadow = _closed(-2, 9).model_copy(
+        update={"book": "agent_shadow", "yahoo_symbol": "BBB", "instrument_id": 2}
+    )
+    proposals = pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB"],
+            "as_of": [paper.signal_date, shadow.signal_date],
+            "confidence": [0.75, float("nan")],
+            "label": ["agree", None],
+        }
+    )
+    items = frames.outcomes([paper, shadow, BASE], proposals)
+    assert [(o.confidence, o.label, o.pnl_eur) for o in items] == [
+        (0.75, "agree", 5),
+        (None, None, -2),
+    ]
+    assert frames.calibration(items).values.tolist() == [["0.7-0.8", 1, 100.0]]
+    gate = frames.gate([paper, shadow], 1.0, date(2026, 10, 1), date(2026, 10, 20))
+    assert gate["met"].tolist() == [False, False, True, False]  # no baseline trades yet
+    assert gate["detail"].tolist()[2] == "EUR 1.00 per trade"

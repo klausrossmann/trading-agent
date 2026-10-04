@@ -14,11 +14,16 @@ from sqlalchemy.pool import NullPool
 from trading_agent.db.models import (
     AnalysisRow,
     BarDailyRow,
+    BracketRow,
+    EquityDailyRow,
     FxDailyRow,
     InstrumentRow,
+    KillSwitchRow,
     LlmCallRow,
     MacroSeriesRow,
     ProposalRow,
+    ReportRow,
+    RiskDecisionRow,
     TradeRow,
     UserLabelRow,
 )
@@ -270,3 +275,106 @@ async def llm_costs(s: AsyncSession) -> pd.DataFrame:
     frame = pd.DataFrame(result.all(), columns=list(result.keys()))
     frame["cost_usd"] = frame["cost_usd"].astype(float)
     return frame
+
+
+# --- M9: risk, evaluation, reports ---
+
+
+async def equity(s: AsyncSession) -> pd.DataFrame:
+    stmt = select(EquityDailyRow).order_by(
+        EquityDailyRow.book, EquityDailyRow.sleeve, EquityDailyRow.date
+    )
+    rows = [
+        {"book": r.book, "sleeve": r.sleeve, "date": r.date, "equity_eur": float(r.equity_eur)}
+        for r in await s.scalars(stmt)
+    ]
+    return pd.DataFrame(rows, columns=["book", "sleeve", "date", "equity_eur"])
+
+
+async def kill_switch(s: AsyncSession) -> str:
+    row = await s.scalar(select(KillSwitchRow))
+    if row is None or row.state == "active":
+        return "active"
+    return f"{row.state} ({row.reason})"
+
+
+async def open_brackets(s: AsyncSession) -> pd.DataFrame:
+    """Brackets with a position or a pending entry."""
+    stmt = (
+        select(BracketRow, InstrumentRow)
+        .join(InstrumentRow, InstrumentRow.id == BracketRow.instrument_id)
+        .where(BracketRow.state.in_(["approved", "submitted", "working", "filled", "exiting"]))
+        .order_by(BracketRow.created_at)
+    )
+    rows = [
+        {
+            "book": b.book,
+            "instrument_id": b.instrument_id,
+            "symbol": i.yahoo_symbol,
+            "market": i.market,
+            "currency": i.currency,
+            "sector": i.sector or "-",
+            "state": b.state,
+            "open_qty": b.filled_qty - b.exit_qty,
+            "pending_qty": b.quantity - b.filled_qty
+            if b.state in ("approved", "submitted", "working")
+            else 0,
+            "entry": float(b.entry),
+            "entry_price": _float(b.entry_price),
+        }
+        for b, i in await s.execute(stmt)
+    ]
+    columns = [
+        "book",
+        "instrument_id",
+        "symbol",
+        "market",
+        "currency",
+        "sector",
+        "state",
+        "open_qty",
+        "pending_qty",
+        "entry",
+        "entry_price",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+async def closes(s: AsyncSession, instrument_ids: list[int], since: date) -> pd.DataFrame:
+    """Daily closes, one column per instrument id."""
+    stmt = select(BarDailyRow.instrument_id, BarDailyRow.date, BarDailyRow.close).where(
+        BarDailyRow.instrument_id.in_(instrument_ids), BarDailyRow.date >= since
+    )
+    frame = pd.DataFrame(
+        [(i, d, float(c)) for i, d, c in await s.execute(stmt)], columns=["id", "date", "close"]
+    )
+    if frame.empty:
+        return pd.DataFrame()
+    return frame.pivot_table(index="date", columns="id", values="close")
+
+
+async def rejections(s: AsyncSession, since: date) -> pd.DataFrame:
+    """Risk-engine rejections: scan day, symbol, first failed check."""
+    stmt = (
+        select(ProposalRow.as_of, InstrumentRow.yahoo_symbol, RiskDecisionRow.checks)
+        .join(ProposalRow, ProposalRow.id == RiskDecisionRow.proposal_id)
+        .join(InstrumentRow, InstrumentRow.id == ProposalRow.instrument_id)
+        .where(~RiskDecisionRow.approved, ProposalRow.as_of >= since)
+        .order_by(ProposalRow.as_of.desc())
+    )
+    rows: list[dict[str, Any]] = []
+    for as_of, symbol, checks in await s.execute(stmt):
+        failed = next((c for c in checks if c["outcome"] == "fail"), {"name": "-", "detail": ""})
+        rows.append(
+            {"as_of": as_of, "symbol": symbol, "check": failed["name"], "detail": failed["detail"]}
+        )
+    return pd.DataFrame(rows, columns=["as_of", "symbol", "check", "detail"])
+
+
+async def reports(s: AsyncSession, kind: str = "weekly") -> list[tuple[date, str]]:
+    stmt = (
+        select(ReportRow.period_end, ReportRow.body)
+        .where(ReportRow.kind == kind)
+        .order_by(ReportRow.period_end.desc())
+    )
+    return [(d, b) for d, b in await s.execute(stmt)]

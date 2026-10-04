@@ -1,15 +1,29 @@
 """Every dashboard page renders, with data and with an empty database (queries stubbed)."""
 
 from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import pytest
+import yaml
 from streamlit.testing.v1 import AppTest
 
 from trading_agent.dashboard import frames, pages
 from trading_agent.domain.trading import Trade
 
-PAGES = ["overview", "positions", "proposals", "journal", "analyses", "costs"]
+PAGES = [
+    "overview",
+    "positions",
+    "proposals",
+    "journal",
+    "analyses",
+    "costs",
+    "risk",
+    "evaluation",
+    "reports",
+]
+ROOT = Path(__file__).resolve().parents[2]
 
 OPEN = Trade(
     book="baseline_sim",
@@ -107,20 +121,75 @@ def _data(empty: bool) -> dict[str, object]:
             }
         ]
     )
+    shadow = CLOSED.model_copy(update={"book": "agent_shadow", "signal_date": date(2026, 10, 2)})
+    equity = pd.DataFrame(
+        [
+            {
+                "book": "agent_paper",
+                "sleeve": "US",
+                "date": date(2026, 10, 5),
+                "equity_eur": 1000.0,
+            },
+            {"book": "agent_paper", "sleeve": "US", "date": date(2026, 10, 6), "equity_eur": 990.0},
+        ]
+    )
+    brackets = pd.DataFrame(
+        [
+            {
+                "book": "agent_paper",
+                "instrument_id": i,
+                "symbol": s,
+                "market": "US",
+                "currency": "USD",
+                "sector": "Tech",
+                "state": "filled",
+                "open_qty": 3,
+                "pending_qty": 0,
+                "entry": 100.0,
+                "entry_price": 100.0,
+            }
+            for i, s in ((1, "AAA"), (2, "BBB"))
+        ]
+    )
+    days = pd.date_range("2026-07-01", periods=70).date
+    closes = pd.DataFrame(
+        {1: [100 + i % 5 for i in range(70)], 2: [50 + i % 3 for i in range(70)]}, index=days
+    )
+    rejected = pd.DataFrame(
+        [{"as_of": date(2026, 10, 2), "symbol": "CCC", "check": "portfolio", "detail": "4 open"}]
+    )
+    config = {
+        n: yaml.safe_load((ROOT / "config" / n).read_text())
+        for n in ("risk.yaml", "strategies.yaml")
+    }
     return {
-        "_trades": trades,
+        "_trades": [] if empty else [*trades, shadow],
         "_positions": frames.open_positions(trades, {1: (date(2026, 10, 7), 104.0)}, 1.17),
         "_data_status": status.iloc[0:0] if empty else status,
         "_analyses": analyses.iloc[0:0] if empty else analyses,
         "_proposals": proposals.iloc[0:0] if empty else proposals,
         "_llm_costs": costs.iloc[0:0] if empty else costs,
+        "_equity": equity.iloc[0:0] if empty else equity,
+        "_brackets": brackets.iloc[0:0] if empty else brackets,
+        "_kill_switch": "active",
+        "_usd_per_eur": None if empty else 1.1,
+        "_rejections": rejected.iloc[0:0] if empty else rejected,
+        "_closes": closes.iloc[0:0] if empty else closes,
+        "_reports": [] if empty else [(date(2026, 10, 10), "# Weekly report")],
+        "_config": config,
     }
 
 
 @pytest.fixture(params=[False, True], ids=["data", "empty"])
 def stubbed(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in _data(request.param).items():
-        monkeypatch.setattr(pages, name, lambda value=value: value)
+        if name == "_config":
+            config = cast(dict[str, Any], value)
+            monkeypatch.setattr(pages, name, lambda n, config=config: config[n])
+        elif name == "_closes":
+            monkeypatch.setattr(pages, name, lambda ids, value=value: value)
+        else:
+            monkeypatch.setattr(pages, name, lambda value=value: value)
 
 
 def _page_script(name: str) -> None:

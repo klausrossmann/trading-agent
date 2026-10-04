@@ -11,13 +11,17 @@ from trading_agent.dashboard import queries
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
+from trading_agent.db import book as book_repo
 from trading_agent.db import market as repo
 from trading_agent.db import proposals as proposals_repo
+from trading_agent.db import reports as reports_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.db.controls import save_kill_switch
 from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
 from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.risk import Check, KillSwitch, RiskDecision
 from trading_agent.domain.trading import Trade
 from trading_agent.settings import Settings
 
@@ -209,3 +213,60 @@ async def test_dashboard_connection_is_read_only(sessions: Sessions, settings: S
                 await s.execute(text("DELETE FROM trades"))
     finally:
         await engine.dispose()
+
+
+async def test_risk_and_report_queries(sessions: Sessions, settings: Settings) -> None:
+    ids = await _seed(sessions)
+    async with sessions.begin() as s:
+        await s.execute(text("TRUNCATE kill_switch, equity_daily, reports"))
+        p = Proposal(
+            id=uuid4(),
+            source="agent",
+            as_of=date(2026, 10, 6),
+            instrument_id=ids["AAA"],
+            yahoo_symbol="AAA",
+            market="US",
+            sector=None,
+            status="proposed",
+            strategy="s",
+            thesis="t",
+            invalidation="i",
+        )
+        [proposal_id] = await proposals_repo.save_proposals(s, [p])  # may keep a seeded id
+        decision = RiskDecision(
+            approved=False,
+            checks=(
+                Check(name="proposal", outcome="pass"),
+                Check(name="portfolio", outcome="fail", detail="4 open"),
+            ),
+        )
+        await book_repo.save_decision(s, proposal_id, decision, NOW)
+        await book_repo.upsert_equity(
+            s,
+            "agent_paper",
+            "US",
+            date(2026, 10, 7),
+            equity_eur=Decimal("990.5"),
+            cash_eur=Decimal(700),
+            invested_eur=Decimal("290.5"),
+        )
+        await save_kill_switch(s, KillSwitch(state="halted", reason="/stop", since=NOW), "test")
+        await reports_repo.save_report(s, "weekly", date(2026, 10, 10), "# Weekly")
+    engine = queries.read_only_engine(settings.database_url)
+    try:
+        async with AsyncSession(engine) as s:
+            equity = await queries.equity(s)
+            state = await queries.kill_switch(s)
+            brackets = await queries.open_brackets(s)
+            closes = await queries.closes(s, [ids["AAA"], ids["BBB"]], date(2026, 10, 1))
+            rejected = await queries.rejections(s, date(2026, 10, 1))
+            stored = await queries.reports(s)
+    finally:
+        await engine.dispose()
+    assert equity.values.tolist() == [["agent_paper", "US", date(2026, 10, 7), 990.5]]
+    assert state == "halted (/stop)"
+    assert brackets.empty
+    assert list(closes.columns) == [ids["AAA"], ids["BBB"]]
+    assert len(closes) == 3
+    assert rejected.values.tolist() == [[date(2026, 10, 6), "AAA", "portfolio", "4 open"]]
+    assert stored == [(date(2026, 10, 10), "# Weekly")]

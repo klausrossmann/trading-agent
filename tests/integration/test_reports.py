@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 
 from trading_agent import jobs, reports
 from trading_agent.data import ingest
@@ -46,6 +47,8 @@ async def test_weekly_report_is_stored_and_sent(sessions: Sessions) -> None:
     )
     universe = Universe(generated=START, benchmarks={}, instruments=[inst])
     await ingest.sync_universe(sessions, universe)
+    async with sessions.begin() as s:
+        await s.execute(text("TRUNCATE reports, equity_daily"))
     async with sessions.begin() as s:
         inst_id = next(iter(await market_repo.active_instruments(s)))
         p = Proposal(

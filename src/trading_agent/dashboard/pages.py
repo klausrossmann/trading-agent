@@ -1,12 +1,14 @@
 """Streamlit pages (IMPLEMENTATION.md 13). Read-only: no buttons that change state."""
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import altair as alt
 import pandas as pd
 import streamlit as st
+import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_agent.dashboard import frames, queries
@@ -58,6 +60,50 @@ def _proposals() -> pd.DataFrame:
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _llm_costs() -> pd.DataFrame:
     return _load(queries.llm_costs)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _equity() -> pd.DataFrame:
+    return _load(queries.equity)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _brackets() -> pd.DataFrame:
+    return _load(queries.open_brackets)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _kill_switch() -> str:
+    return _load(queries.kill_switch)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _usd_per_eur() -> float | None:
+    return _load(queries.usd_per_eur)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _rejections() -> pd.DataFrame:
+    since = datetime.now(ZoneInfo(queries.TZ)).date() - timedelta(days=30)
+    return _load(lambda s: queries.rejections(s, since))
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _closes(ids: tuple[int, ...]) -> pd.DataFrame:
+    since = datetime.now(ZoneInfo(queries.TZ)).date() - timedelta(days=120)
+    return _load(lambda s: queries.closes(s, list(ids), since))
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _reports() -> list[tuple[date, str]]:
+    return _load(queries.reports)
+
+
+@st.cache_data(show_spinner=False)
+def _config(name: str) -> dict[str, Any]:
+    """A config/*.yaml file as plain data (risk.yaml, strategies.yaml)."""
+    path = _settings().config_dir / name
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _local(ts: pd.Series) -> pd.Series:
@@ -290,6 +336,93 @@ def _refresh() -> None:
     st.cache_data.clear()
 
 
+def risk() -> None:
+    st.title("Risk")
+    st.metric("Kill switch", _kill_switch())
+    usage = frames.limit_usage(_equity(), _brackets(), _config("risk.yaml"), _usd_per_eur())
+    st.subheader("Limits, agent_paper")
+    if usage.empty:
+        st.info("No equity snapshots or open brackets yet.")
+    else:
+        _table(
+            usage,
+            column_config={
+                "value": PRICE,
+                "max": PRICE,
+                "used_pct": st.column_config.ProgressColumn(
+                    "used", format="%.0f %%", min_value=0, max_value=100
+                ),
+            },
+        )
+        st.caption("As of the last close; positions at their entry price.")
+    brackets = _brackets()
+    held = brackets[brackets["book"] == "agent_paper"]
+    names = dict(zip(held["instrument_id"], held["symbol"], strict=True))
+    matrix = frames.correlation_matrix(_closes(tuple(sorted(names))), names)
+    st.subheader("Correlation of holdings (60 sessions)")
+    if matrix.empty:
+        st.info("Needs at least two positions or pending entries.")
+    else:
+        long = matrix.reset_index(names="a").melt(id_vars="a", var_name="b", value_name="rho")
+        chart = (
+            alt.Chart(long)
+            .mark_rect()
+            .encode(
+                x="a:N",
+                y="b:N",
+                color=alt.Color("rho:Q", scale=alt.Scale(domain=[-1, 1], scheme="redblue")),
+                tooltip=["a", "b", alt.Tooltip("rho:Q", format=".2f")],
+            )
+        )
+        st.altair_chart(chart)
+    st.subheader("Rejections by the risk engine, last 30 days")
+    rejected = _rejections()
+    if rejected.empty:
+        st.info("None.")
+    else:
+        st.bar_chart(rejected["check"].value_counts())
+        _table(rejected)
+
+
+def evaluation() -> None:
+    st.title("Evaluation")
+    trades = _trades()
+    costs = _llm_costs()
+    usd = _usd_per_eur() or 1.0
+    start = date.fromisoformat(str(_config("strategies.yaml")["baseline_book"]["start"]))
+    today = datetime.now(ZoneInfo(queries.TZ)).date()
+    llm_eur = float(costs["cost_usd"].sum()) / usd if not costs.empty else 0.0
+    st.subheader("Go-live gate")
+    _table(frames.gate(trades, llm_eur, start, today))
+    items = frames.outcomes(trades, _proposals())
+    st.subheader("Calibration (agent sample)")
+    calibration = frames.calibration(items)
+    if calibration.empty:
+        st.info("No closed agent trades with a confidence yet.")
+    else:
+        _table(calibration, column_config={"hit_rate_pct": PCT})
+        st.bar_chart(calibration.set_index("confidence")["hit_rate_pct"])
+        st.caption("Well calibrated: the 0.7-0.8 bucket wins about 70-80 % of the time.")
+    labelled = [o for o in items if o.label is not None]
+    if labelled:
+        right = sum((o.label == "agree") == (o.pnl_eur > 0) for o in labelled)
+        st.metric(
+            "Your labels right", f"{right / len(labelled) * 100:.0f} %", f"{len(labelled)} trades"
+        )
+
+
+def reports() -> None:
+    st.title("Reports")
+    stored = _reports()
+    if not stored:
+        st.info("No weekly report yet (Saturdays, or `trading-agent weekly-report`).")
+        return
+    picked = st.selectbox(
+        "Week ending", range(len(stored)), format_func=lambda i: str(stored[i][0])
+    )
+    st.markdown(stored[picked or 0][1])  # our own text, no LLM output in it
+
+
 def main() -> None:
     st.set_page_config(page_title="Trading agent", layout="wide")
     page = st.navigation(
@@ -300,6 +433,9 @@ def main() -> None:
             st.Page(journal, title="Journal"),
             st.Page(analyses, title="Analyses"),
             st.Page(costs, title="Costs"),
+            st.Page(risk, title="Risk"),
+            st.Page(evaluation, title="Evaluation"),
+            st.Page(reports, title="Reports"),
         ]
     )
     st.sidebar.button("Reload data", on_click=_refresh)
