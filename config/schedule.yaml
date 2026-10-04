@@ -3,6 +3,9 @@ heartbeat:
 
 # Times are Europe/Berlin. Session jobs follow the exchange calendar (holidays, half-days, DST).
 jobs:
+  briefing:                         # data-only morning briefing via Telegram; skipped on holidays
+    cron: {day_of_week: mon-fri, hour: 8, minute: 30}
+    misfire_grace_minutes: 60
   ingest_macro:
     cron: {day_of_week: mon-fri, hour: 7, minute: 0}
     misfire_grace_minutes: 360

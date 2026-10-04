@@ -2,6 +2,8 @@
 capital:
   agent_budget_eur: 1000           # hard cap, also in paper (ignores the paper account's simulated balance)
   min_cash_reserve_pct: 10
+  paper_budget_eur:                # paper only: separate notional sleeve per market (IMPLEMENTATION.md 19.1)
+    EU: 5000                       # Xetra minimum fees don't fit EUR 1,000
 
 per_trade:
   max_risk_pct: 1.5                # (entry - stop) * qty <= EUR 15

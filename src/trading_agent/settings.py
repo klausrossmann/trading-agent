@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     config_dir: Path = Path("config")
     heartbeat_url: SecretStr | None = None
     fred_api_key: SecretStr | None = None
+    telegram_bot_token: SecretStr | None = None
+    telegram_owner_chat_id: int | None = None  # unset: every chat is ignored and logged (setup)
 
     db_host: str = "db"
     db_port: int = 5432

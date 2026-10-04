@@ -39,6 +39,7 @@ Paper and live use the same code, risk limits and fee model. Live mode needs thr
 | M1 Data foundation: universe, prices, FX, macro, earnings, quality checks | done in the repo; first real backfill pending on the Zenbook |
 | M2 Calculators: indicators, levels, level menu, fees, sizing | done |
 | M3 Baseline strategy, simulator, `baseline_sim` book, backtest report | done; result and decision in [IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3 |
+| M4 Telegram: owner-only bot, `/status`, `/briefing`, alerts, morning briefing | done in the repo; bot token and chat ID pending on the Zenbook |
 | M2–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
 
 ## Documentation

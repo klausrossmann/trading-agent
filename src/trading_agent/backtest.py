@@ -389,6 +389,30 @@ def run(
     return BacktestResult(trades, series(equity), series(invested), rejections, signals)
 
 
+def latest_setups(data: MarketData, p: PullbackParams) -> list[tuple[str, float]]:
+    """(symbol, relative strength) with a complete setup at the latest close, best first."""
+    latest: dict[Market, date] = {}
+    for x in data.instruments.values():
+        if not x.frame.empty:
+            last = pd.Timestamp(x.frame.index[-1]).date()
+            latest[x.instrument.market] = max(latest.get(x.instrument.market, last), last)
+    found: list[tuple[str, float]] = []
+    for x in data.instruments.values():
+        if x.frame.empty or not bool(x.setup.iloc[-1]):
+            continue
+        day = pd.Timestamp(x.frame.index[-1]).date()
+        if day != latest[x.instrument.market]:  # stale data
+            continue
+        cal = calendars.CALENDAR_BY_MARKET[x.instrument.market]
+        if not pullback.earnings_clear(
+            day, calendars.session_offset(cal, day, p.earnings_buffer_sessions), x.earnings
+        ):
+            continue
+        rs = float(x.ind["rs"].iloc[-1])
+        found.append((x.instrument.yahoo_symbol, rs if math.isfinite(rs) else -math.inf))
+    return sorted(found, key=lambda f: f[1], reverse=True)
+
+
 def benchmark_equity(
     data: MarketData, market: Market, start: date, end: date, capital: float
 ) -> pd.Series | None:

@@ -3,21 +3,25 @@
 import asyncio
 import signal
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from zoneinfo import ZoneInfo
 
 import httpx
 import structlog
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED, JobEvent, JobExecutionEvent
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from pydantic import SecretStr
 
 from trading_agent import jobs
 from trading_agent.data import calendars, ingest
+from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
 from trading_agent.db.session import create_engine, session_factory
-from trading_agent.notify import heartbeat
+from trading_agent.notify import heartbeat, messages
+from trading_agent.notify.telegram import Command, Notifier, TelegramBot, build_notifier
 from trading_agent.settings import CronJob, DataConfig, ScheduleConfig, SessionJob, Settings
 
 log = structlog.get_logger(__name__)
@@ -25,11 +29,20 @@ log = structlog.get_logger(__name__)
 JobFn = Callable[[], Awaitable[object]]
 
 
+async def _heartbeat(
+    http: httpx.AsyncClient, url: SecretStr | None, state: jobs.RuntimeState | None
+) -> None:
+    ok = await heartbeat.ping(http, url)
+    if state is not None and url is not None and url.get_secret_value():
+        state.heartbeat_at, state.heartbeat_ok = datetime.now(UTC), ok
+
+
 def build_scheduler(
     schedule: ScheduleConfig,
     settings: Settings,
     http: httpx.AsyncClient,
     job_fns: Mapping[str, JobFn] | None = None,
+    state: jobs.RuntimeState | None = None,
 ) -> AsyncIOScheduler:
     job_fns = job_fns or {}
     if unknown := set(schedule.jobs) - set(job_fns):
@@ -37,11 +50,11 @@ def build_scheduler(
     tz = ZoneInfo(schedule.timezone)
     scheduler = AsyncIOScheduler(timezone=tz, job_defaults={"coalesce": True, "max_instances": 1})
     scheduler.add_job(
-        heartbeat.ping,
+        _heartbeat,
         "interval",
         id="heartbeat",
         minutes=schedule.heartbeat.interval_minutes,
-        kwargs={"client": http, "url": settings.heartbeat_url},
+        args=[http, settings.heartbeat_url, state],
         next_run_time=datetime.now(tz),
         misfire_grace_time=60,
     )
@@ -102,13 +115,54 @@ def plan_session_jobs(
     return planned
 
 
-def job_functions(data: jobs.DataContext, book: jobs.BookContext) -> dict[str, JobFn]:
+def job_functions(
+    data: jobs.DataContext, book: jobs.BookContext, notifier: Notifier
+) -> dict[str, JobFn]:
     return {
         "ingest_macro": partial(jobs.macro, data),
         "ingest_earnings": partial(jobs.earnings, data),
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
         "baseline_sim": partial(jobs.baseline_book, book),
+        "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
+    }
+
+
+def alert_on_job_failures(
+    scheduler: AsyncIOScheduler, notifier: Notifier
+) -> set[asyncio.Task[None]]:
+    """Send a Telegram alert when a job raises or misses its run time."""
+    loop = asyncio.get_running_loop()
+    tasks: set[asyncio.Task[None]] = set()
+
+    def spawn(text: str) -> None:
+        task = loop.create_task(notifier.send(text))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def listener(event: JobEvent) -> None:
+        if isinstance(event, JobExecutionEvent) and event.exception is not None:
+            text = messages.job_alert(event.job_id, describe_error(event.exception))
+        else:
+            text = messages.missed_alert(event.job_id)
+        loop.call_soon_threadsafe(spawn, text)
+
+    scheduler.add_listener(listener, EVENT_JOB_ERROR | EVENT_JOB_MISSED)
+    return tasks
+
+
+def commands(
+    state: jobs.RuntimeState, sessions: jobs.Sessions, book: jobs.BookContext
+) -> dict[str, Command]:
+    async def status(_: list[str]) -> str:
+        return await jobs.status_text(state, sessions)
+
+    async def briefing(_: list[str]) -> str:
+        return await jobs.briefing_text(book, state, datetime.now(UTC).date())
+
+    return {
+        "status": Command("mode, heartbeat, data and next jobs", status),
+        "briefing": Command("the morning briefing, now", briefing),
     }
 
 
@@ -133,18 +187,37 @@ async def serve(
             updated=sync.updated,
             deactivated=sync.removed,
         )
+        state = jobs.RuntimeState(mode=settings.app_mode, started_at=datetime.now(UTC))
+        book = jobs.BookContext.load(settings.config_dir, sessions, universe)
+        notifier = build_notifier(
+            settings.telegram_bot_token,
+            settings.telegram_owner_chat_id,
+            commands(state, sessions, book),
+        )
+        if isinstance(notifier, TelegramBot):
+            notifier.start()
         async with httpx.AsyncClient() as http:
-            ctx = jobs.DataContext.build(settings, data_cfg, sessions, http)
-            book = jobs.BookContext.load(settings.config_dir, sessions, universe)
-            scheduler = build_scheduler(schedule, settings, http, job_functions(ctx, book))
+            ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
+            scheduler = build_scheduler(
+                schedule, settings, http, job_functions(ctx, book, notifier), state
+            )
+            state.scheduler = scheduler
+            pending_alerts = alert_on_job_failures(scheduler, notifier)
             scheduler.start()
             log.info(
                 "agent.started", mode=settings.app_mode, jobs=[j.id for j in scheduler.get_jobs()]
             )
+            if isinstance(notifier, TelegramBot):
+                await notifier.wait_ready(within_s=30)
+            await notifier.send(f"▶️ Agent started ({settings.app_mode})")
             try:
                 await stop.wait()
             finally:
                 scheduler.shutdown(wait=False)
+                await notifier.send("⏹ Agent stopping")
+                await asyncio.gather(*pending_alerts, return_exceptions=True)
+                if isinstance(notifier, TelegramBot):
+                    await notifier.stop()
         await audit.record(sessions, actor="agent", event="agent.stopped")
         log.info("agent.stopped")
     finally:

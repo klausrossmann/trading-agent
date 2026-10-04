@@ -201,6 +201,18 @@ async def earnings_dates(session: AsyncSession) -> dict[int, list[date]]:
     return out
 
 
+async def upcoming_earnings(
+    session: AsyncSession, start: date, end: date
+) -> list[tuple[int, date, str]]:
+    """(instrument id, date, timing) for announcements between start and end, inclusive."""
+    stmt = (
+        select(EarningsEventRow.instrument_id, EarningsEventRow.date, EarningsEventRow.timing)
+        .where(EarningsEventRow.date >= start, EarningsEventRow.date <= end)
+        .order_by(EarningsEventRow.date)
+    )
+    return [(i, d, t) for i, d, t in await session.execute(stmt)]
+
+
 async def fx_rates(session: AsyncSession, quote: str) -> list[Observation]:
     stmt = select(FxDailyRow).where(FxDailyRow.quote == quote).order_by(FxDailyRow.date)
     return [Observation(date=r.date, value=r.rate) for r in await session.scalars(stmt)]

@@ -596,8 +596,10 @@ Misfire policy: `coalesce=True` and a `misfire_grace_time` per job (for example 
 ### 12.1 Setup
 
 1. Create the bot with `@BotFather` and store the token in `.env` as `TELEGRAM_BOT_TOKEN`.
-2. Send the bot a message and read your chat ID from the agent log (an `/id` handler prints it), then store it as `TELEGRAM_OWNER_CHAT_ID`.
-3. Every handler is wrapped in a filter: updates from any other chat are ignored and logged.
+2. Restart the agent and send the bot any message. While `TELEGRAM_OWNER_CHAT_ID` is empty, every update is ignored and logged as `telegram.ignored` with its `chat_id` (`make logs`). Store that number as `TELEGRAM_OWNER_CHAT_ID` and restart.
+3. A gate runs before every handler (`TypeHandler` in group −1): updates from any other chat are dropped and logged.
+
+Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start so a Telegram outage never blocks the agent; sending never raises), `notify/messages.py` (all texts, pure functions). Without a token, messages only go to the log.
 
 ### 12.2 Commands
 
@@ -612,11 +614,16 @@ Misfire policy: `coalesce=True` and a `misfire_grace_time` per job (for example 
 | `/pause`, `/resume` | Block or allow new entries |
 | `/stop` | Kill switch, after an inline confirm button |
 | `/budget` | LLM spend this month and the current mode |
+| `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
+
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
 🟢 fill · 🔴 stop or exit · ⚠️ limit breach, reconciliation issue, data quality · 🔌 gateway disconnected for more than 10 minutes · 🔐 IBKR re-login with 2FA needed · 💸 LLM budget at 80 % · 📰 morning briefing · 🌙 evening digest.
+
+Since M4: ▶️/⏹ agent start and stop; ⚠️ ingestion failures and restated histories; ⚠️ data quality, once per newly blocked symbol; ⚠️ any scheduled job that raises or misses its run time; 📰 the data-only briefing at 08:30 on days when Xetra or NYSE trades (benchmarks and trend, EUR/USD, earnings in the next 3 sessions, the `baseline_sim` book per sleeve, baseline setups at the last close, data status).
 
 ### 12.4 Privacy
 
@@ -855,9 +862,9 @@ flowchart LR
 | 5 | LLM tracing (Logfire) | Undecided | **Recommendation adopted: local only.** Prompts contain positions and theses, and `llm_calls` + `audit_log` already cover cost and audit. Hosted Logfire can be reconsidered in M9 if debugging prompts gets hard. |
 | 6 | Dashboard | Streamlit is fine | As planned (section 13) |
 
-### 19.1 Open questions from the M3 backtest
+### 19.1 Decisions from the M3 backtest
 
-1. **EU in paper:** at EUR 1,000 every Xetra trade fails the 10 % fee-to-risk rule, so the paper book will contain no EU trades. Options: (a) accept it, since live starts US-only anyway; (b) give EU paper trading its own notional budget of EUR 5,000, where fees fit (69 EU trades in the backtest); (c) relax the fee rule for EU in paper only. Recommendation: (b), because it adds sample size and tests the setup that becomes relevant at EUR 5,000, without loosening any live rule.
-(b)
-2. **Expensive US stocks:** 32 of 101 S&P 100 stocks trade above $330 and can't be bought within the EUR 300 position cap. Fractional shares via the API (checked in M6) would fix this; until then they stay unbuyable. OK?
-ok
+| # | Question | Decision | Consequence |
+|---|---|---|---|
+| 1 | EU in paper: every Xetra trade fails the 10 % fee-to-risk rule at EUR 1,000 | (b) separate notional EU paper budget of EUR 5,000 | `capital.paper_budget_eur: {EU: 5000}` in `risk.yaml`. Paper books and backtests run one simulated account per budget sleeve (US EUR 1,000, EU EUR 5,000). Live rules are unchanged. |
+| 2 | 32 of 101 US stocks can't be bought within the EUR 300 position cap | Accepted | They stay unbuyable until fractional shares via the API are checked in M6. |

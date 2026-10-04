@@ -156,35 +156,40 @@ def backtest(
     end = max(max(x.rows) for x in data.instruments.values())
     start = end - timedelta(days=round(365.25 * years))
     markets: list[Market] = [market] if market else list(risk.markets.paper)
-    result = bt.run(data, cfg, risk, fees, start=start, end=end, markets=markets)
-    capital = float(risk.capital.agent_budget_eur)
-    benchmarks = {
-        f"Buy and hold {universe.benchmarks[m]}": curve
-        for m in markets
-        if m in universe.benchmarks
-        and (curve := bt.benchmark_equity(data, m, start, end, capital)) is not None
-    }
-    text = report.render(
-        title=f"Backtest: {bt.pullback.NAME} ({', '.join(markets)})",
-        start=start,
-        end=end,
-        capital=capital,
-        trades=result.trades,
-        equity=result.equity,
-        invested=result.invested,
-        benchmarks=benchmarks,
-        signals=result.signals,
-        rejections=result.rejections,
-        notes=[
-            "Survivorship bias: today's index members over the whole period, which flatters "
-            "the result.",
-            "Daily bars: if stop and target are both inside a bar the stop counts; on the entry "
-            "bar only the stop is checked.",
-            "Not modelled yet: correlation clusters and loss limits (risk engine, M8), FX "
-            "conversion costs, dividends.",
-            "Prices from Yahoo Finance; third-party fees are estimates (config/fees.yaml).",
-        ],
-    )
+    sections: list[str] = []
+    for sleeve_markets, sleeve_risk in risk.sleeves(markets, "paper"):
+        result = bt.run(data, cfg, sleeve_risk, fees, start=start, end=end, markets=sleeve_markets)
+        capital = float(sleeve_risk.capital.agent_budget_eur)
+        benchmarks = {
+            f"Buy and hold {universe.benchmarks[m]}": curve
+            for m in sleeve_markets
+            if m in universe.benchmarks
+            and (curve := bt.benchmark_equity(data, m, start, end, capital)) is not None
+        }
+        sections.append(
+            report.render(
+                title=f"Backtest: {bt.pullback.NAME} ({', '.join(sleeve_markets)})",
+                start=start,
+                end=end,
+                capital=capital,
+                trades=result.trades,
+                equity=result.equity,
+                invested=result.invested,
+                benchmarks=benchmarks,
+                signals=result.signals,
+                rejections=result.rejections,
+                notes=[
+                    "Survivorship bias: today's index members over the whole period, which "
+                    "flatters the result.",
+                    "Daily bars: if stop and target are both inside a bar the stop counts; on "
+                    "the entry bar only the stop is checked.",
+                    "Not modelled yet: correlation clusters and loss limits (risk engine, M8), "
+                    "FX conversion costs, dividends.",
+                    "Prices from Yahoo Finance; third-party fees are estimates (config/fees.yaml).",
+                ],
+            )
+        )
+    text = "\n".join(sections)
     typer.echo(text)
     if output:
         output.write_text(text, encoding="utf-8")
