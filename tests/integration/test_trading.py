@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select, text
 
-from trading_agent import trading
+from trading_agent import jobs, reports, trading
 from trading_agent.backtest import load_backtest_config
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
@@ -17,6 +17,7 @@ from trading_agent.data.universe import Universe
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as proposals_repo
+from trading_agent.db import reports as reports_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.models import BracketRow
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
@@ -215,6 +216,15 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     assert trade.pnl_net_eur is not None
     assert trade.pnl_net_eur < 0  # breakeven minus fees and slippage
     assert [d for d, _ in history] == [TODAY, day2, day3]
+
+    universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA")])
+    book = jobs.BookContext.load(ROOT / "config", sessions, universe)
+    body = await reports.tax_report(book, 2026, "agent_paper")
+    assert "| 2026-10-09 | AAA | 3 | 2026-10-07 |" in body
+    async with sessions() as s:
+        assert [d for d, _ in await reports_repo.reports(s, "tax:agent_paper")] == [
+            date(2026, 12, 31)
+        ]
 
 
 async def test_time_stop_exits_at_the_next_open(sessions: Sessions) -> None:

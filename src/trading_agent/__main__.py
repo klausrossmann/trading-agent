@@ -395,6 +395,39 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
         typer.echo("nothing to place")
 
 
+@app.command(name="tax-report")
+def tax_report(
+    year: int = typer.Argument(..., help="Calendar year, e.g. 2027."),
+    book: str = typer.Option("agent_live", help="agent_live (taxable) or agent_paper (dry run)."),
+    output: Path | None = OutputOption,
+) -> None:
+    """Yearly tax helper: share sales in EUR at trade-day ECB rates (not tax advice)."""
+    from trading_agent import jobs, reports
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+
+    if book not in ("agent_live", "agent_paper"):
+        raise typer.BadParameter("book must be agent_live or agent_paper")
+    settings = _settings()
+
+    async def _run() -> str:
+        engine = create_engine(settings.database_url)
+        try:
+            ctx = jobs.BookContext.load(
+                settings.config_dir, session_factory(engine), load_universe(settings.config_dir)
+            )
+            return await reports.tax_report(
+                ctx, year, "agent_live" if book == "agent_live" else "agent_paper"
+            )
+        finally:
+            await engine.dispose()
+
+    text = asyncio.run(_run())
+    typer.echo(text)
+    if output:
+        output.write_text(text, encoding="utf-8")
+
+
 @app.command()
 def reset() -> None:
     """End a halt (kill switch): prints a code to confirm with /reset CODE in Telegram."""

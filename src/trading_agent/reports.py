@@ -6,7 +6,7 @@ from decimal import Decimal
 import pandas as pd
 import structlog
 
-from trading_agent import jobs
+from trading_agent import jobs, trading
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as proposals_repo
@@ -17,6 +17,7 @@ from trading_agent.domain.trading import Book, Trade
 from trading_agent.evaluation import weekly
 from trading_agent.evaluation.kpi import max_drawdown_pct
 from trading_agent.notify.telegram import Notifier
+from trading_agent.portfolio import tax
 
 log = structlog.get_logger(__name__)
 
@@ -104,4 +105,13 @@ async def weekly_report(
         await reports_repo.save_report(s, "weekly", week_end, body)
     await notifier.send(weekly.summary(w))
     log.info("weekly_report.stored", week_end=week_end.isoformat())
+    return body
+
+
+async def tax_report(ctx: jobs.BookContext, year: int, book: Book = "agent_live") -> str:
+    """The yearly tax helper for one book, stored as report `tax:<book>` at 31 Dec."""
+    brackets, fills, instruments = await trading.load_book(ctx.sessions, book, ctx.fees)
+    body = tax.render(year, book, tax.sales([b for b, _ in brackets], fills, instruments, year))
+    async with ctx.sessions.begin() as s:
+        await reports_repo.save_report(s, f"tax:{book}", date(year, 12, 31), body)
     return body

@@ -106,12 +106,15 @@ def _rate_on(usd: Sequence[Observation], day: date) -> Decimal:
     raise LookupError("no EUR/USD rate stored")
 
 
-async def _load(ctx: TradingContext) -> _Book:
-    async with ctx.sessions() as s:
-        brackets = await orders_repo.all_brackets(s, ctx.book)
-        fills = await orders_repo.book_fills(s, ctx.book)
+async def load_book(
+    sessions: Sessions, book: Book, fees: FeeSchedule
+) -> tuple[list[tuple[Bracket, datetime]], list[accounting.BookFill], dict[int, Instrument]]:
+    """The book's brackets, its fills in EUR terms (ECB rate of the trade day, fees) and the
+    instruments involved."""
+    async with sessions() as s:
+        brackets = await orders_repo.all_brackets(s, book)
+        fills = await orders_repo.book_fills(s, book)
         instruments = await market_repo.instruments(s, {b.instrument_id for b, _ in brackets})
-        marks = await market_repo.last_closes(s, instruments)
         usd = await market_repo.fx_rates(s, "USD")
     by_id = {b.id: b for b, _ in brackets}
     book_fills: list[accounting.BookFill] = []
@@ -120,7 +123,7 @@ async def _load(ctx: TradingContext) -> _Book:
         cal = calendars.CALENDAR_BY_MARKET[inst.market]
         day = f.ts.astimezone(calendars.calendar(cal).tz).date()
         side = "buy" if kind == "entry" else "sell"
-        fee = f.commission or order_fees(ctx.fees, inst.market, side, f.quantity, f.price)
+        fee = f.commission or order_fees(fees, inst.market, side, f.quantity, f.price)
         book_fills.append(
             accounting.BookFill(
                 bracket_id=bracket_id,
@@ -133,6 +136,14 @@ async def _load(ctx: TradingContext) -> _Book:
                 settles=calendars.session_offset(cal, day, SETTLEMENT_SESSIONS[inst.market]),
             )
         )
+    return brackets, book_fills, instruments
+
+
+async def _load(ctx: TradingContext) -> _Book:
+    brackets, book_fills, instruments = await load_book(ctx.sessions, ctx.book, ctx.fees)
+    async with ctx.sessions() as s:
+        marks = await market_repo.last_closes(s, instruments)
+        usd = await market_repo.fx_rates(s, "USD")
     today = ctx.clock().date()
     rates = {"EUR": Decimal(1), "USD": _rate_on(usd, today) if usd else Decimal(1)}
     return _Book(brackets, book_fills, instruments, marks, rates)
