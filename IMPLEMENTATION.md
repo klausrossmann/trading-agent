@@ -912,6 +912,8 @@ secrets:
 - `make deploy` on the Mac runs `ssh zenbook 'cd ~/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'`.
 - Deploys run outside trading sessions, or the agent is paused first (`/pause`), because a restart triggers reconciliation.
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
+  - `scripts/backup.sh` (`make backup`), run by the deploy user's crontab at 03:15 on the host (not in a container, so the files belong to that user). It dumps with the `postgres` role inside the `db` container, checks the dump with `pg_restore --list`, keeps 14 days in `backups/` (`chmod 700`, files `600`), and on Sundays writes `backups/offsite/trading-<stamp>.dump.age` for `BACKUP_AGE_RECIPIENT` (last 8 kept). Syncing that folder off the machine is up to you; the private key never lives on the host. `BACKUP_HEARTBEAT_URL` gets a ping after each good backup, so a missing backup raises an alert at the heartbeat service.
+  - `scripts/restore.sh check FILE` (`make restore-check FILE=...`) restores a `.dump` or `.dump.age` into a scratch database, prints row counts and the migration version, and drops it. `scripts/restore.sh into FILE` replaces `trading` (agent and dashboard stopped, typed confirmation) with owner, grants and default privileges as before. Both were tested against a throwaway database.
 - Moving to the mini PC: the same preparation as 15.1, copy `.env` and `secrets/`, restore the latest dump, `docker compose up -d`, then confirm reconciliation is clean before shutting down the Zenbook stack.
 
 ### 15.5 First start on the Zenbook (runbook, state after M7)
@@ -948,6 +950,12 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - Since M8 step 2, positions in the paper account that the agent didn't open halt it (reconciliation). Close them in the paper account first, or reset as in step 14.
 14. **Kill switch** (M8 step 2, after `make migrate`): in Telegram, `/pause test`, `/status` (shows `paused (test) until /resume`), `/resume`, then `/stop` and confirm. Then on the Zenbook `docker compose run --rm agent trading-agent reset` prints a code; send `/reset CODE` within 15 minutes. `/status` 📋 shows `Kill switch: active` again.
 15. **Simulated orders** (M8 step 4, after `make migrate`): nothing to set up; `IB_ORDERS_ENABLED` stays `false`. On the next trading day, 15 minutes after each open, a 📤 message lists the placed and rejected proposals; after each close 🟢/🔴/⌛ messages report fills, and the 🌙 digest shows `agent_paper` and the risk engine's rejections. 📋 Send the 📤 messages and the digest of the first two days.
+16. **Backups** (M9):
+    - On the Mac: `brew install age && mkdir -p ~/.config/age && age-keygen -o ~/.config/age/key.txt`. The printed public key (`age1...`) goes into the Zenbook's `.env` as `BACKUP_AGE_RECIPIENT`; keep the key file also in your password manager.
+    - Optional: a second healthchecks.io check (daily, 2 h grace) as `BACKUP_HEARTBEAT_URL`.
+    - On the Zenbook as `trader`: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
+    - `crontab -e`: `15 3 * * * cd ~/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
+    - Copy one `.age` file to the Mac and run `scripts/restore.sh check <file>` there against a local throwaway database once: that is the "restore on another machine" test of section 18.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

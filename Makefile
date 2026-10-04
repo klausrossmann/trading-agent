@@ -1,4 +1,4 @@
-.PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up down logs deploy
+.PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up backup restore-check down logs deploy
 
 ZENBOOK ?= zenbook
 TEST_DB := ta-test-db
@@ -59,6 +59,13 @@ migrate:
 
 up:
 	docker compose up -d
+
+backup:
+	scripts/backup.sh
+
+# FILE=backups/trading-....dump (or .dump.age): restore into a scratch database and drop it
+restore-check:
+	scripts/restore.sh check $(FILE)
 
 down:
 	docker compose down
