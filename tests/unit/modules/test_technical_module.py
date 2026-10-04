@@ -23,7 +23,7 @@ from trading_agent.modules.technical import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
-RULES = PlanRules(min_risk_reward=2.0)
+RULES = PlanRules(min_risk_reward=2.0, stop_atr_min=1.0, stop_atr_max=4.0)
 INST = Instrument(
     symbol="AAA",
     yahoo_symbol="AAA",

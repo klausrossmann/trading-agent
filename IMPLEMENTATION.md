@@ -488,11 +488,13 @@ The agents have **no tools** except read-only data lookups (`get_bars`, `get_lev
 
 ```python
 def evaluate(
-    proposal: TradeProposal,
-    levels: dict[str, Decimal],
-    portfolio: PortfolioState,          # positions, settled cash, open orders, P&L windows
-    market: MarketSnapshot,             # last price, ATR, earnings date, liquidity
-    limits: RiskLimits,                 # from risk.yaml
+    proposal: Proposal,
+    levels: Mapping[str, Decimal],      # level menu; the proposal's refs resolve against it
+    portfolio: PortfolioState,          # holdings incl. pending entries, settled cash, P&L windows
+    market: MarketSnapshot,             # mid, ATR, session times, earnings, liquidity, correlations
+    controls: Controls,                 # kill switch and the paper/live interlock
+    limits: RiskConfig,                 # risk.yaml, for the proposal's budget sleeve
+    fees: FeeSchedule,
     now: datetime,
 ) -> RiskDecision: ...
 ```
@@ -503,7 +505,7 @@ It is a pure function with no I/O and no LLM. Property-based tests (`hypothesis`
 
 1. **Global state**: kill switch off, not paused, live-mode interlock satisfied, inside the trading window (not in the first 15 or last 10 minutes of the session).
 2. **Instrument**: market allowed in the current mode (live: US only), in the universe, not blacklisted, price and liquidity filters met, no earnings within 3 days.
-3. **Levels**: refs resolve, `stop < entry < target`, R:R ≥ 2.0, stop distance within the ATR bounds, entry limit within 1 % of the current mid.
+3. **Levels**: refs resolve, `stop < entry < target`, R:R ≥ 2.0, stop distance within the ATR bounds (`stop_atr_min`/`stop_atr_max` in `risk.yaml`, 1–4 ATR), entry limit at most 1 % above the current mid (any distance below is allowed; the order may simply not fill), and the mid above the stop.
 4. **Sizing**:
 
 $$
@@ -517,6 +519,20 @@ $$
 8. **Rate limits**: at most 6 orders per day, and no duplicate proposal for an instrument that already has an open position or order.
 
 Every check result is stored, and rejections show up in the evening digest.
+
+### 9.4 Implementation, step 1: the pure engine (M8, 2026-10-04)
+
+| Part | Where | Notes |
+|---|---|---|
+| Types | `domain/risk.py` | `Controls`, `Holding`, `PortfolioState` (one budget sleeve), `MarketSnapshot`, `Check`, `RiskDecision`. The caller gathers every fact; the engine does no I/O. |
+| Engine | `risk/engine.py` `evaluate` | Runs all checks in the order of 9.2 (plus a first `proposal` check: status must be `proposed`) and records each as `pass`, `fail` or `skip` (skip: needs a value from a failed check, e.g. sizing after broken levels). Approved only if all pass; quantity and prices are set only then. Sizing and fees reuse `calc/sizing.py` and `calc/fees.py`, so the engine and the books use the same arithmetic. |
+| Sleeves | | `limits` is the sleeve's `RiskConfig` (`RiskConfig.sleeves`): in paper US €1,000 and EU €5,000 notional. Loss limits and the sector and cluster caps are percentages of that sleeve's budget. |
+| Loss limits | | A breach rejects and returns `trip`: `pause_day`, `pause_week` or `halt` (drawdown; the most severe wins). The caller applies it to the kill switch (step 2); a halt from any sleeve stops everything. The trip is reported even when other checks fail. |
+| Correlation | | Holdings with ρ > 0.7 (60 sessions of daily returns, from the caller) count as one cluster with the new position; a holding without an estimate counts as correlated. |
+| Earnings, liquidity | | No entry if the next report is 0–3 sessions away (as in the baseline). The liquidity floor compares the 20-session average close × volume in the instrument currency, as the baseline does. |
+| Tests | `tests/unit/risk/test_risk_engine.py` | One test per rule and boundary, plus a `hypothesis` property test: every approved decision is re-checked against all limits computed independently. `make test` and CI fail below 100 % branch coverage of `trading_agent.risk`. |
+
+Next M8 steps: (2) kill switch state, `/pause`, `/resume`, `/stop`, live interlock; (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker; (4) `place_eu`/`place_us`, `monitor`, stop management, halting on reconciliation mismatches; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
 
 ### 9.3 Kill switch states
 
@@ -963,3 +979,11 @@ flowchart LR
 |---|---|---|---|
 | 1 | EU in paper: every Xetra trade fails the 10 % fee-to-risk rule at EUR 1,000 | (b) separate notional EU paper budget of EUR 5,000 | `capital.paper_budget_eur: {EU: 5000}` in `risk.yaml`. Paper books and backtests run one simulated account per budget sleeve (US EUR 1,000, EU EUR 5,000). Live rules are unchanged. |
 | 2 | 32 of 101 US stocks can't be bought within the EUR 300 position cap | Accepted | They stay unbuyable until fractional shares via the API are checked in M6. |
+
+### 19.2 Decisions for the risk engine (M8, 2026-10-04)
+
+| # | Question | Decision | Consequence |
+|---|---|---|---|
+| 1 | "Entry limit within 1 % of the mid" rejects most support-level entries | At most 1 % above the mid, any distance below; the mid must be above the stop | `max_limit_deviation_pct` is one-sided (9.2 check 3) |
+| 2 | Base for loss limits in paper | Per sleeve; a drawdown breach in any sleeve halts everything | 9.4 |
+| 3 | Stop-distance bounds lived only in the technical module | `per_trade.stop_atr_min: 1.0`, `stop_atr_max: 4.0` in `risk.yaml` | Modules, proposer and risk engine read the same values |

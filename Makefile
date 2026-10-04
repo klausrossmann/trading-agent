@@ -2,6 +2,8 @@
 
 ZENBOOK ?= zenbook
 TEST_DB := ta-test-db
+# The risk engine needs 100 % branch coverage (IMPLEMENTATION.md 16.2).
+RISK_COV := --cov=trading_agent.risk --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
 
 sync:
 	uv sync
@@ -17,7 +19,7 @@ fmt:
 	uv run ruff format
 
 test:
-	uv run pytest -m "not ibkr and not llm"
+	uv run pytest -m "not ibkr and not llm" $(RISK_COV)
 
 # Throwaway Postgres on 127.0.0.1:55432; never touches the real database.
 test-db:

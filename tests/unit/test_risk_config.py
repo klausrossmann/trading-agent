@@ -33,3 +33,10 @@ def test_unknown_keys_are_rejected() -> None:
     raw["per_trade"]["max_risk_pc"] = 2  # typo
     with pytest.raises(ValidationError, match="max_risk_pc"):
         RiskConfig.model_validate(raw)
+
+
+def test_stop_atr_bounds_must_be_ordered() -> None:
+    raw = yaml.safe_load((ROOT / "config" / "risk.yaml").read_text())
+    raw["per_trade"]["stop_atr_min"] = 4
+    with pytest.raises(ValidationError, match="stop_atr_min must be below stop_atr_max"):
+        RiskConfig.model_validate(raw)

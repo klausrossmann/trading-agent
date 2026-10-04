@@ -78,7 +78,7 @@ def _input(**kw: object) -> ProposerInput:
         "candidate_source": "pullback_uptrend",
         "atr14": 2.0,
         "levels": LEVELS,
-        "rules": PlanRules(min_risk_reward=2.0),
+        "rules": PlanRules(min_risk_reward=2.0, stop_atr_min=1.0, stop_atr_max=4.0),
         "technical": TECH,
         "earnings": EARN,
         "earnings_event_in_window": False,

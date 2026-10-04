@@ -44,8 +44,11 @@ async def main() -> None:
     cfg_dir = settings.config_dir
     universe = load_universe(cfg_dir)
     p = backtest.load_backtest_config(cfg_dir).pullback
+    per_trade = load_risk_config(cfg_dir).per_trade
     rules = technical.PlanRules(
-        min_risk_reward=float(load_risk_config(cfg_dir).per_trade.min_risk_reward)
+        min_risk_reward=float(per_trade.min_risk_reward),
+        stop_atr_min=float(per_trade.stop_atr_min),
+        stop_atr_max=float(per_trade.stop_atr_max),
     )
     holding = p.entry_valid_sessions + p.time_stop_sessions
     engine = create_engine(settings.database_url)

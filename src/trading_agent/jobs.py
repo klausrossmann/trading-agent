@@ -522,7 +522,11 @@ class AnalysisContext:
                     settings.prompts_dir, earnings_module.NAME, earnings_module.PROMPT_VERSION
                 )
             ),
-            rules=PlanRules(min_risk_reward=float(risk.per_trade.min_risk_reward)),
+            rules=PlanRules(
+                min_risk_reward=float(risk.per_trade.min_risk_reward),
+                stop_atr_min=float(risk.per_trade.stop_atr_min),
+                stop_atr_max=float(risk.per_trade.stop_atr_max),
+            ),
             holding_sessions=p.entry_valid_sessions + p.time_stop_sessions,
             pullback=p,
             benchmarks=dict(universe.benchmarks),

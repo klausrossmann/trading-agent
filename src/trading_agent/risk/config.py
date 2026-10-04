@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from trading_agent.calc.sizing import SizingLimits
 from trading_agent.domain.market import Market
@@ -31,6 +31,14 @@ class PerTrade(_Strict):
     order_type: Literal["limit_only"]
     max_limit_deviation_pct: Decimal = Field(gt=0)
     min_risk_reward: Decimal = Field(gt=0)
+    stop_atr_min: Decimal = Field(gt=0)
+    stop_atr_max: Decimal = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _stop_atr_range(self) -> "PerTrade":
+        if self.stop_atr_min >= self.stop_atr_max:
+            raise ValueError("stop_atr_min must be below stop_atr_max")
+        return self
 
 
 class Portfolio(_Strict):

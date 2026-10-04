@@ -32,8 +32,8 @@ class PlanRules(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     min_risk_reward: float
-    stop_atr_min: float = 1.0
-    stop_atr_max: float = 4.0
+    stop_atr_min: float
+    stop_atr_max: float
 
 
 class Level(BaseModel):
