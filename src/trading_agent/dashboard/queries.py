@@ -18,7 +18,9 @@ from trading_agent.db.models import (
     InstrumentRow,
     LlmCallRow,
     MacroSeriesRow,
+    ProposalRow,
     TradeRow,
+    UserLabelRow,
 )
 from trading_agent.domain.trading import Trade
 
@@ -183,6 +185,65 @@ async def analyses(s: AsyncSession, limit: int = 500) -> pd.DataFrame:
         "cost_usd",
         "issues",
         "output",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
+    """Agent proposals with your label, latest scan first."""
+    stmt = (
+        select(ProposalRow, InstrumentRow.yahoo_symbol, InstrumentRow.market, UserLabelRow)
+        .join(InstrumentRow, InstrumentRow.id == ProposalRow.instrument_id)
+        .outerjoin(UserLabelRow, UserLabelRow.proposal_id == ProposalRow.id)
+        .order_by(
+            ProposalRow.as_of.desc(), ProposalRow.rank.nulls_last(), InstrumentRow.yahoo_symbol
+        )
+        .limit(limit)
+    )
+    rows: list[dict[str, Any]] = []
+    for p, symbol, market, label in await s.execute(stmt):
+        entry, stop, target = _float(p.entry), _float(p.stop), _float(p.target)
+        rows.append(
+            {
+                "as_of": p.as_of,
+                "symbol": symbol,
+                "market": market,
+                "status": p.status,
+                "rank": p.rank,
+                "confidence": _float(p.confidence),
+                "entry": entry,
+                "stop": stop,
+                "target": target,
+                "risk_reward": (target - entry) / (entry - stop)
+                if entry is not None and stop is not None and target is not None and entry > stop
+                else None,
+                "critic": p.critic_severity,
+                "label": label.label if label else None,
+                "reason": label.reason if label else None,
+                "thesis": p.thesis,
+                "invalidation": p.invalidation,
+                "critic_summary": p.critic_summary,
+                "payload": p.payload,
+            }
+        )
+    columns = [
+        "as_of",
+        "symbol",
+        "market",
+        "status",
+        "rank",
+        "confidence",
+        "entry",
+        "stop",
+        "target",
+        "risk_reward",
+        "critic",
+        "label",
+        "reason",
+        "thesis",
+        "invalidation",
+        "critic_summary",
+        "payload",
     ]
     return pd.DataFrame(rows, columns=columns)
 

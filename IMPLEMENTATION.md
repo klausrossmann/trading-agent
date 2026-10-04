@@ -466,6 +466,20 @@ sequenceDiagram
 
 The agents have **no tools** except read-only data lookups (`get_bars`, `get_levels`, `get_news`) defined in `agents/tools.py`. Every prompt, response, tool call and cost is written to `analyses`, `llm_calls` and `audit_log`.
 
+### 8.1 Implementation (M7, 2026-10-04)
+
+| Part | Where | Notes |
+|---|---|---|
+| Agents | `agents/proposer.py`, `critic.py`, `portfolio.py`, `prompts/{proposer,critic,portfolio_manager}/v1.md` | They run through the same `LlmRunner` as the modules (cache, budget, pacing, validators, one corrective retry), stored in `analyses` under their own module name. No tools yet: every fact comes from the module outputs. |
+| Proposer | | In: the technical input (level menu, ATR, rules), the technical and earnings assessments, held symbols. Out: `propose` with entry/stop/target refs (only menu names validate), or `no_trade` with a reason. Errors: level order, R:R, stop distance, missing refs or reason, `propose` despite `wait_until_after`. Ungrounded numbers cap the confidence at 0.5. |
+| Critic | | In: the same facts plus the plan with prices resolved by code (R:R, stop in ATR). Out: objections (`minor`/`major`/`blocking`), the overall severity (must equal the highest objection), `confidence_delta` (−0.5 to +0.1). Runs on Gemini through `dev_overrides` until an Anthropic key and price are added; if it fails, the proposal stays `proposed` and is marked "no critique". |
+| Portfolio manager | | Ranks the survivors (every candidate exactly once) with a note each; only called when there are at least two. If it fails, the ranking is confidence × R:R. |
+| Pipeline | `pipeline.py`, CLI `trading-agent propose [SYMBOLS] [--market]` | Baseline candidates → technical + earnings → proposer only for `buy`/`strong_buy` ratings of symbols not already held → critic for `propose` → ranking → `proposals`. Scheduled as `scan_eu` (Xetra open − 45 min) and `scan_us` (NYSE open − 45 min), each followed by a Telegram summary. |
+| Proposals | migration `0005`, `db/proposals.py` | One row per instrument and scan day (`status`: `proposed`, `blocked`, `no_trade`), with resolved prices, final confidence, rank, critique, the ids of all analyses involved and the full agent outputs. A re-run of the same day updates the row in place, so labels stay attached. |
+| Shadow book | `jobs.agent_book`, `backtest.run(external=...)` | `agent_shadow` replays every `proposed` trade from the first proposal through the simulator with the baseline book's rules (sizing, fee-to-risk, max positions, sector cap, earnings buffer, settled cash; rank decides when slots are short). Interim until the risk engine (M8). |
+| Labels and digest | `journal.py` | `/proposals`, `/why SYMBOL`, `/review` (Agree/Disagree/Skip buttons, then an optional free-text reason) write `user_labels`. `evening_digest` (NYSE close + 65 min) replays `agent_shadow` and sends the day's proposals, labels to do, entries and exits of both books and the day's LLM spend. |
+| Dashboard | page **Proposals** | All proposals with status, plan, critique and your label; LLM text is shown as plain text. |
+
 ---
 
 ## 9. Risk engine
@@ -631,7 +645,7 @@ Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start 
 | `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
 
-Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. The others arrive with the features they report on.
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
@@ -657,7 +671,7 @@ M6 is split because the IBKR paper login doesn't exist yet: the dashboard comes 
 
 | Part | Where | Notes |
 |---|---|---|
-| Pages | `dashboard/pages.py`, entry `dashboard/app.py` | **Overview** (positions, closed trades, unrealized P&L, LLM spend this month; KPIs per book and market; cumulative realized P&L; data freshness per dataset), **Positions** (open trades marked to the last close, R and P&L in EUR after fees), **Journal** (closed trades, filter by book, market, symbol), **Analyses** (LLM outputs with status, verdict, issues and the full JSON), **Costs** (LLM spend per month, role and model; per day; broker fees per book). Proposals, Risk and Evaluation follow with the data they show (M7/M8). |
+| Pages | `dashboard/pages.py`, entry `dashboard/app.py` | **Overview** (positions, closed trades, unrealized P&L, LLM spend this month; KPIs per book and market; cumulative realized P&L; data freshness per dataset), **Positions** (open trades marked to the last close, R and P&L in EUR after fees), **Journal** (closed trades, filter by book, market, symbol), **Analyses** (LLM outputs with status, verdict, issues and the full JSON), **Costs** (LLM spend per month, role and model; per day; broker fees per book). Since M7 also **Proposals** (8.1). Risk and Evaluation follow with the data they show (M8/M9). |
 | Queries | `dashboard/queries.py`, `dashboard/frames.py` | Own SELECTs on `db.models`; the dashboard imports no repository that writes, and `import-linter` keeps it away from `risk`, `llm`, `agents`, `notify`, `scheduler` and `execution`. Results are cached for 60 s; "Reload data" clears the cache. |
 | Read-only, twice | `docker/db/init/20-dashboard-role.sh`, `queries.read_only_engine` | Role `dashboard`: `SELECT` on all tables, plus default privileges so tables from later migrations are readable too; `default_transaction_read_only=on`, `statement_timeout=30s`. The app's connections also open read-only transactions. |
 | Container | `compose.yaml` service `dashboard` | Same image, `trading-agent dashboard --address 0.0.0.0`. No `.env`, so no API keys; only `dashboard_db_password` as `db_password`. Port `127.0.0.1:8501` on the host only; read-only filesystem, no capabilities. Streamlit usage statistics and the public-IP lookup are off. |
@@ -804,11 +818,11 @@ secrets:
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
 - Moving to the mini PC: the same preparation as 15.1, copy `.env` and `secrets/`, restore the latest dump, `docker compose up -d`, then confirm reconciliation is clean before shutting down the Zenbook stack.
 
-### 15.5 First start on the Zenbook (runbook, state after M6 dashboard v1)
+### 15.5 First start on the Zenbook (runbook, state after M7)
 
 Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋.
 
-> Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; step 11 a few minutes.
+> Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each.
 
 1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl`.
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
@@ -828,6 +842,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - On the Zenbook: `curl -s localhost:8501/_stcore/health` prints `ok`.
     - Publish it to the tailnet: `sudo tailscale serve --bg 8501`, then `tailscale serve status` 📋 shows the `https://…ts.net` URL. The setting survives reboots.
     - Open the URL on the phone (Tailscale app on) and on the Mac 📋 (loads? pages fill?). With Tailscale off it must not load.
+12. **Agent proposals** (M7, needs `LLM_DEV_OVERRIDES=true` so the critic runs on Gemini): `make migrate` (on an existing install), then `docker compose run --rm agent trading-agent propose --market US` 📋. It prints the ranked proposals, the blocked and passed ones, the skipped symbols and the cost. Then in Telegram: `/proposals`, `/why <symbol>`, `/review` (label one, reply with a reason). From the next trading day the scans run before each open and the 🌙 evening digest arrives after the US close. Done when: one week of daily proposals, labelled by you.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

@@ -9,7 +9,7 @@ from streamlit.testing.v1 import AppTest
 from trading_agent.dashboard import frames, pages
 from trading_agent.domain.trading import Trade
 
-PAGES = ["overview", "positions", "journal", "analyses", "costs"]
+PAGES = ["overview", "positions", "proposals", "journal", "analyses", "costs"]
 
 OPEN = Trade(
     book="baseline_sim",
@@ -81,11 +81,38 @@ def _data(empty: bool) -> dict[str, object]:
     status = pd.DataFrame(
         [{"dataset": "Bars US", "last_date": date(2026, 10, 2), "detail": "101 symbols, 0 behind"}]
     )
+    proposals = pd.DataFrame(
+        [
+            {
+                "as_of": date(2026, 10, 2),
+                "symbol": "AAA",
+                "market": "US",
+                "status": "proposed",
+                "rank": 1,
+                "confidence": 0.35,
+                "entry": 100.0,
+                "stop": 96.0,
+                "target": 108.0,
+                "risk_reward": 2.0,
+                "critic": "minor",
+                "label": "agree",
+                "reason": None,
+                "thesis": "[click](https://example.com) pullback",
+                "invalidation": "Below the stop.",
+                "critic_summary": "Fine.",
+                "payload": {
+                    "critic": {"objections": [{"severity": "minor", "point": "Thin."}]},
+                    "portfolio_manager": {"note": "Only one.", "rationale": "r"},
+                },
+            }
+        ]
+    )
     return {
         "_trades": trades,
         "_positions": frames.open_positions(trades, {1: (date(2026, 10, 7), 104.0)}, 1.17),
         "_data_status": status.iloc[0:0] if empty else status,
         "_analyses": analyses.iloc[0:0] if empty else analyses,
+        "_proposals": proposals.iloc[0:0] if empty else proposals,
         "_llm_costs": costs.iloc[0:0] if empty else costs,
     }
 

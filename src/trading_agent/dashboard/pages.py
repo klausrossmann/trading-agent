@@ -51,6 +51,11 @@ def _analyses() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _proposals() -> pd.DataFrame:
+    return _load(queries.proposals)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _llm_costs() -> pd.DataFrame:
     return _load(queries.llm_costs)
 
@@ -209,6 +214,53 @@ def analyses() -> None:
     st.json(row["output"])
 
 
+def proposals() -> None:
+    st.title("Proposals")
+    frame = _proposals()
+    if frame.empty:
+        st.info("No agent proposals yet (`trading-agent propose` or the scheduled scans).")
+        return
+    c1, c2, c3 = st.columns(3)
+    statuses = c1.multiselect("Status", sorted(frame["status"].unique()))
+    labels = c2.multiselect("Label", ["agree", "disagree", "none"])
+    symbol = c3.text_input("Symbol", key="proposal_symbol").strip().upper()
+    if statuses:
+        frame = frame[frame["status"].isin(statuses)]
+    if labels:
+        frame = frame[frame["label"].fillna("none").isin(labels)]
+    if symbol:
+        frame = frame[frame["symbol"].str.contains(symbol, regex=False)]
+    _table(
+        frame.drop(columns=["thesis", "invalidation", "critic_summary", "payload"]),
+        column_config={
+            "entry": PRICE,
+            "stop": PRICE,
+            "target": PRICE,
+            "risk_reward": PRICE,
+            "confidence": PRICE,
+        },
+    )
+    if frame.empty:
+        return
+    records = frame.to_dict("records")
+    names = [f"{r['as_of']} {r['symbol']} ({r['status']})" for r in records]
+    picked = st.selectbox("Details", range(len(records)), format_func=names.__getitem__)
+    row = records[picked or 0]
+    # LLM text is shown as plain text, never rendered as Markdown (links, images).
+    lines = [f"Thesis: {row['thesis']}", f"Invalidation: {row['invalidation']}"]
+    critic = row["payload"].get("critic", {})
+    if row["critic_summary"]:
+        lines.append(f"Critic ({row['critic']}): {row['critic_summary']}")
+        lines += [f"  - {o['severity']}: {o['point']}" for o in critic.get("objections", [])]
+    if pm := row["payload"].get("portfolio_manager"):
+        lines.append(f"Ranking: {pm['note']}")
+    if row["label"]:
+        lines.append(f"Your label: {row['label']} {row['reason'] or ''}")
+    st.text("\n".join(lines))
+    with st.expander("Agent outputs"):
+        st.json(row["payload"])
+
+
 def costs() -> None:
     st.title("Costs")
     calls = _llm_costs()
@@ -244,6 +296,7 @@ def main() -> None:
         [
             st.Page(overview, title="Overview", default=True),
             st.Page(positions, title="Positions"),
+            st.Page(proposals, title="Proposals"),
             st.Page(journal, title="Journal"),
             st.Page(analyses, title="Analyses"),
             st.Page(costs, title="Costs"),

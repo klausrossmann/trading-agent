@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -11,10 +12,12 @@ from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
+from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
+from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.trading import Trade
 from trading_agent.settings import Settings
 
@@ -105,6 +108,25 @@ async def _seed(sessions: Sessions) -> dict[str, int]:
             }
         )
         await trades_repo.replace_book(s, "baseline_sim", [trade, closed])
+        proposal = Proposal(
+            id=uuid4(),
+            source="agent",
+            as_of=date(2026, 10, 6),
+            instrument_id=ids["AAA"],
+            yahoo_symbol="AAA",
+            market="US",
+            sector=None,
+            status="proposed",
+            strategy="pullback_uptrend",
+            entry=100.0,
+            stop=96.0,
+            target=108.0,
+            rank=1,
+            thesis="t",
+            invalidation="i",
+        )
+        (proposal_id,) = await proposals_repo.save_proposals(s, [proposal])
+        await proposals_repo.set_label(s, proposal_id, "agree", "clean")
     await DbAnalysisStore(sessions).save(
         AnalysisRecord(
             module="technical",
@@ -146,8 +168,18 @@ async def test_dashboard_queries(sessions: Sessions, settings: Settings) -> None
             status = await queries.data_status(s)
             analyses = await queries.analyses(s)
             costs = await queries.llm_costs(s)
+            proposals = await queries.proposals(s)
     finally:
         await engine.dispose()
+
+    (p,) = proposals.to_dict("records")
+    assert (p["symbol"], p["status"], p["label"], p["reason"]) == (
+        "AAA",
+        "proposed",
+        "agree",
+        "clean",
+    )
+    assert p["risk_reward"] == pytest.approx(2.0)
 
     assert [(t.yahoo_symbol, t.exit_date) for t in trades] == [
         ("AAA", None),
