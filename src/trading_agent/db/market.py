@@ -73,7 +73,7 @@ async def _upsert(
 # --- instruments ---
 
 
-def _to_instrument(row: InstrumentRow) -> Instrument:
+def to_instrument(row: InstrumentRow) -> Instrument:
     return Instrument.model_validate(
         {
             "id": row.id,
@@ -129,7 +129,7 @@ async def active_instruments(
     stmt = select(InstrumentRow).where(InstrumentRow.active).order_by(InstrumentRow.yahoo_symbol)
     if market is not None:
         stmt = stmt.where(InstrumentRow.market == market)
-    return {r.id: _to_instrument(r) for r in await session.scalars(stmt)}
+    return {r.id: to_instrument(r) for r in await session.scalars(stmt)}
 
 
 async def set_conids(session: AsyncSession, conids: Mapping[int, int]) -> None:

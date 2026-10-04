@@ -36,7 +36,7 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pyright
       - run: uv run lint-imports
-      - run: uv run pytest -m "not ibkr and not llm" --cov=trading_agent.risk --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
+      - run: uv run pytest -m "not ibkr and not llm" --cov=trading_agent.risk --cov=trading_agent.execution --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
 
   docker:
     runs-on: ubuntu-latest

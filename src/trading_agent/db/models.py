@@ -250,3 +250,66 @@ class KillSwitchRow(Base):
     reset_code_sha256: Mapped[str | None] = mapped_column(Text)
     reset_code_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BracketRow(Base):
+    """One approved proposal at the broker (IMPLEMENTATION.md 10.2); the id is the proposal's."""
+
+    __tablename__ = "brackets"
+
+    id: Mapped[UUID] = mapped_column(ForeignKey("proposals.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    book: Mapped[str] = mapped_column(Text, index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    state: Mapped[str] = mapped_column(Text, index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    entry: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    stop: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    initial_stop: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    target: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    expires: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    filled_qty: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    exit_qty: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    exit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    exit_reason: Mapped[str | None] = mapped_column(Text)
+    cancel_reason: Mapped[str | None] = mapped_column(Text)
+    decision: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+
+
+class OrderRow(Base):
+    """Each broker order as sent (spec) plus the broker's last known status."""
+
+    __tablename__ = "orders"
+
+    order_ref: Mapped[str] = mapped_column(Text, primary_key=True)
+    bracket_id: Mapped[UUID] = mapped_column(ForeignKey("brackets.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    kind: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text)
+    order_type: Mapped[str] = mapped_column(Text)
+    quantity: Mapped[int] = mapped_column(Integer)
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    tif: Mapped[str] = mapped_column(Text)
+    good_till: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    parent_ref: Mapped[str | None] = mapped_column(Text)
+    oca_group: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    filled: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    avg_fill_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    broker_order_id: Mapped[int | None] = mapped_column(Integer)
+    perm_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class FillRow(Base):
+    __tablename__ = "fills"
+
+    exec_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    order_ref: Mapped[str] = mapped_column(ForeignKey("orders.order_ref"), index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    quantity: Mapped[int] = mapped_column(Integer)
+    price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    commission: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))

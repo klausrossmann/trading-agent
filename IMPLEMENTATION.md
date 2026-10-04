@@ -532,7 +532,7 @@ Every check result is stored, and rejections show up in the evening digest.
 | Earnings, liquidity | | No entry if the next report is 0–3 sessions away (as in the baseline). The liquidity floor compares the 20-session average close × volume in the instrument currency, as the baseline does. |
 | Tests | `tests/unit/risk/test_risk_engine.py` | One test per rule and boundary, plus a `hypothesis` property test: every approved decision is re-checked against all limits computed independently. `make test` and CI fail below 100 % branch coverage of `trading_agent.risk`. |
 
-Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker; (4) `place_eu`/`place_us`, `monitor`, stop management, applying the engine's `trip`, cancelling entry orders on a halt; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
+Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker (done, 10.6); (4) `place_eu`/`place_us`, `monitor`, stop management, applying the engine's `trip`, cancelling entry orders on a halt; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
 
 ### 9.5 Implementation, step 2: kill switch and interlock (M8, 2026-10-04)
 
@@ -635,6 +635,23 @@ Used for `baseline_sim` and `agent_shadow`, and for tests:
 - Stops fill at the stop or at the open on a gap. Targets fill symmetrically.
 - Slippage: 0.05 % per side. Fees come from `fees.yaml`.
 - IBKR paper fills are also optimistic, so the same slippage is added when evaluating `agent_paper`.
+
+### 10.6 Implementation, step 3: orders and the state machine (M8, 2026-10-04)
+
+Not wired to jobs yet (step 4); everything runs in tests.
+
+| Part | Where | Notes |
+|---|---|---|
+| Types | `domain/orders.py` | `BracketRequest` (what the risk engine approved; its id is the proposal's), `OrderSpec` (one order as intended), `BrokerOrder` and `BrokerFill` (the broker's view), `Bracket` (lifecycle state) and its events. |
+| State machine | `execution/fsm.py` `apply` | 10.2 as pure transitions: `submitted` → `working` → `filled` → `exiting` → `closed`, or `expired`/`cancelled`. Partial entry fills average the price; an entry that ends partly filled keeps that position with its stop and target (19.2). Exits during a still-working entry are counted. Stops only ever tighten. Anything that doesn't fit raises. |
+| Specs | `execution/orders.py` | `bracket_specs`: entry `LMT` `GTD`, target `LMT` and stop `STP` both `GTC`, children of the entry and in one OCA group, stop last. `exit_spec`: `MKT` `DAY` sell of the open quantity in the same OCA group. `orderRef` is `<proposal id>:<kind>`. |
+| Broker interface | `OrderBroker` | `place` (idempotent per `orderRef`), `cancel`, `modify`, `orders` (open and completed), `fills`. |
+| Simulator broker | `execution/sim_broker.py` | Same fill model as the backtest (10.5); only sessions that end after an order was placed can fill it; a market exit fills at the next open. `restore` rebuilds it from the stored orders after a restart. Runs `agent_paper` until the gateway is enabled (19.2). |
+| IBKR orders | `execution/ibkr.py` | Bracket with `parentId`, `transmit` only on the last order, OCA type 1, `outsideRth=False`, GTD in the UTC form `yyyymmdd-hh:mm:ss`. Before sending, it skips every `orderRef` found in open orders, completed orders (`reqCompletedOrders`) or executions. Status mapping: `PreSubmitted`/`Submitted` working, `Filled`, `Cancelled`/`Inactive` inactive. Not connected yet: the link stays read-only until step 5. |
+| Storage | migration `0007`, `db/orders.py` | `brackets` (one per proposal, with the risk decision), `orders` (spec plus last broker status), `fills` (by execution id). Every bracket change goes to `audit_log`. |
+| Executor | `executor.py` | `submit` stores the bracket first, then places it; a repeat only re-sends what the broker doesn't know. `sync` derives events from the change in each order's filled quantity and status (so missed executions after downtime don't matter) and applies a bracket's order updates only if all its events are valid. `cancel_entry`, `request_exit` (repeatable), `move_stop`. |
+
+Open for step 4/5: tick sizes (Xetra price bands) before orders are built, child quantities after a partial IBKR fill, and the GTD format against the real gateway.
 
 ---
 
@@ -925,7 +942,7 @@ After a later `git pull`: `make build && make migrate && make up` (or `make depl
 - **CI (GitHub Actions)**: `ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest -m "not ibkr and not llm"` (DB tests run against a Postgres service container) and a `docker build`. No secrets in CI. DB tests only run when `DB_NAME` ends in `_test`, because they drop tables.
 - **pre-commit**: ruff, end-of-file fixers, and a secret scanner (for example `gitleaks`).
 - Dependabot for dependency updates, with lockfile changes reviewed before deploying.
-- Every risk-engine or execution change needs a test, and those two packages target 100 % branch coverage.
+- Every risk-engine or execution change needs a test, and those two packages have 100 % branch coverage, enforced by `make test` and CI.
 
 ---
 
@@ -1005,3 +1022,6 @@ flowchart LR
 | 1 | "Entry limit within 1 % of the mid" rejects most support-level entries | At most 1 % above the mid, any distance below; the mid must be above the stop | `max_limit_deviation_pct` is one-sided (9.2 check 3) |
 | 2 | Base for loss limits in paper | Per sleeve; a drawdown breach in any sleeve halts everything | 9.4 |
 | 3 | Stop-distance bounds lived only in the technical module | `per_trade.stop_atr_min: 1.0`, `stop_atr_max: 4.0` in `risk.yaml` | Modules, proposer and risk engine read the same values |
+| 4 | `agent_paper` before the IBKR paper login exists | Through the simulator broker until `IB_ENABLED=true` | The whole chain runs daily from step 4; fills from daily bars |
+| 5 | IBKR order side | Built in step 3, tested against a fake IB | The real check is step 5 on the Zenbook |
+| 6 | Entry expires partly filled | Keep the partial position with its stop and target | 10.6 |

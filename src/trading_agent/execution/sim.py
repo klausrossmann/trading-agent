@@ -53,6 +53,11 @@ def time_exit(bar: Bar, slippage_pct: float) -> Fill:
     return Fill(_slip(bar.close, slippage_pct, "sell"), "time")
 
 
+def open_exit(bar: Bar, slippage_pct: float) -> Fill:
+    """A market sell placed before this bar fills at its open."""
+    return Fill(_slip(bar.open, slippage_pct, "sell"), "time")
+
+
 def trailed_stop(bar: Bar, stop: float, entry: float, trigger: float) -> float:
     """Move the stop to breakeven once the high reaches `trigger`. Stops never loosen."""
     return max(stop, entry) if bar.high >= trigger else stop
