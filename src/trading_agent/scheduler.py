@@ -14,13 +14,17 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, pipeline
+from trading_agent import broker, jobs, journal, pipeline, trading
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
+from trading_agent.db import orders as orders_repo
 from trading_agent.db.session import create_engine, session_factory
+from trading_agent.execution.orders import OrderBroker
+from trading_agent.execution.sim_broker import SimBroker
+from trading_agent.executor import Executor
 from trading_agent.notify import heartbeat, messages
 from trading_agent.notify.telegram import (
     Command,
@@ -130,9 +134,11 @@ def job_functions(
     analysis: jobs.AnalysisContext,
     link: broker.BrokerLink | None = None,
     center: ControlCenter | None = None,
+    trade: trading.TradingContext | None = None,
+    expected: broker.Expected | None = None,
 ) -> dict[str, JobFn]:
     halt = center.halt if center else None
-    return {
+    fns: dict[str, JobFn] = {
         "ingest_macro": partial(jobs.macro, data),
         "ingest_earnings": partial(jobs.earnings, data),
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
@@ -142,8 +148,17 @@ def job_functions(
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
-        "reconcile": partial(broker.reconcile_positions, link, data.sessions, notifier, halt),
+        "reconcile": partial(broker.reconcile_positions, link, notifier, expected, halt),
     }
+    if trade is not None:
+        fns |= {
+            "place_eu": partial(trading.place, trade, "EU"),
+            "place_us": partial(trading.place, trade, "US"),
+            "execution_eu": partial(trading.end_of_day, trade, "EU"),
+            "execution_us": partial(trading.end_of_day, trade, "US"),
+            "monitor": partial(trading.monitor, trade),
+        }
+    return fns
 
 
 def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
@@ -155,6 +170,40 @@ def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
         return await review.on_button(data)
 
     return Interaction(on_button, review.on_text)
+
+
+async def trading_context(
+    settings: Settings,
+    sessions: jobs.Sessions,
+    book: jobs.BookContext,
+    center: ControlCenter,
+    notifier: Notifier,
+    link: broker.BrokerLink | None,
+) -> trading.TradingContext:
+    """Orders go to IBKR only with IB_ORDERS_ENABLED; otherwise to the simulator, rebuilt
+    from the stored orders."""
+    sim: SimBroker | None = None
+    if settings.ib_orders_enabled and link is not None:
+        order_broker: OrderBroker = link.broker
+    else:
+        sim = SimBroker(slippage_pct=book.cfg.slippage_pct)
+        async with sessions() as s:
+            sim.restore(await orders_repo.orders(s))
+        order_broker = sim
+    mode = settings.app_mode
+    return trading.TradingContext(
+        sessions=sessions,
+        executor=Executor(
+            sessions, order_broker, "agent_paper" if mode == "paper" else "agent_live"
+        ),
+        center=center,
+        risk=book.risk,
+        fees=book.fees,
+        rules=book.cfg.pullback,
+        mode=mode,
+        notifier=notifier,
+        sim=sim,
+    )
 
 
 def alert_on_job_failures(
@@ -251,15 +300,22 @@ async def serve(
             notifier.start()
         link_task: asyncio.Task[None] | None = None
         if settings.ib_enabled:
-            link = broker.BrokerLink(
-                settings,
-                notifier,
-                on_connect=partial(
-                    broker.on_connect, sessions=sessions, notifier=notifier, halt=center.halt
-                ),
-            )
+            link = broker.BrokerLink(settings, notifier)
             center.gateway_mode = link.mode
             state.gateway = link.status
+        trade = await trading_context(settings, sessions, book, center, notifier, link)
+        expected = (
+            partial(trading.expected_positions, trade) if settings.ib_orders_enabled else None
+        )
+        center.on_halt = partial(trading.cancel_entries, trade, "halted")
+        if link is not None:
+            link.on_connect = partial(
+                broker.on_connect,
+                sessions=sessions,
+                notifier=notifier,
+                expected=expected,
+                halt=center.halt,
+            )
             link_task = asyncio.create_task(link.run(stop))
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
@@ -268,7 +324,7 @@ async def serve(
                 schedule,
                 settings,
                 http,
-                job_functions(ctx, book, notifier, analysis, link, center),
+                job_functions(ctx, book, notifier, analysis, link, center, trade, expected),
                 state,
             )
             state.scheduler = scheduler

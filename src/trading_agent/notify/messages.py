@@ -303,6 +303,8 @@ class Digest:
     to_label: int
     books: list[BookDay]
     llm_usd_today: float
+    placed: list[str] = field(default_factory=list[str])  # approved by the risk engine
+    rejected: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
 
 
 def render_digest(d: Digest) -> str:
@@ -314,6 +316,9 @@ def render_digest(d: Digest) -> str:
         lines.append(f"Proposals ({day_label(d.proposals_as_of)}): {counts or 'none'}")
         if d.to_label:
             lines.append(f"  {d.to_label} to label: /review")
+    if d.placed or d.rejected:
+        lines.append(f"Risk engine: placed {', '.join(d.placed) or 'none'}")
+        lines += [f"  rejected {symbol}: {reason}" for symbol, reason in d.rejected]
     for b in d.books:
         parts = [f"{b.open} open"]
         if b.entered:
@@ -420,3 +425,41 @@ def live_confirm_alert() -> str:
         "🔐 Live mode: no orders until you send /confirm_live CODE. The code is in the host "
         "logs: `docker compose logs agent | grep live.confirm_code`."
     )
+
+
+# --- orders (M8) ---
+
+
+@dataclass(frozen=True)
+class PlacedLine:
+    symbol: str
+    quantity: int
+    entry: float
+    stop: float
+    target: float
+
+
+def placement_summary(
+    market: str, placed: Sequence[PlacedLine], rejected: Sequence[tuple[str, str]], broker: str
+) -> str:
+    lines = [f"📤 Orders {market} ({broker})"]
+    lines += [
+        f"  {p.symbol} {p.quantity} @ {p.entry:.2f}, stop {p.stop:.2f}, target {p.target:.2f}"
+        for p in placed
+    ]
+    if not placed:
+        lines.append("  none placed")
+    lines += [f"  not placed {symbol}: {reason}" for symbol, reason in rejected]
+    return "\n".join(lines)
+
+
+def fill_alert(symbol: str, quantity: int, price: float) -> str:
+    return f"🟢 Bought {symbol} {quantity} @ {price:.2f}"
+
+
+def exit_alert(symbol: str, quantity: int, price: float, reason: str) -> str:
+    return f"🔴 Sold {symbol} {quantity} @ {price:.2f} ({reason})"
+
+
+def entry_ended_alert(symbol: str, outcome: str) -> str:
+    return f"⌛ {symbol}: entry {outcome} without a fill"

@@ -532,7 +532,7 @@ Every check result is stored, and rejections show up in the evening digest.
 | Earnings, liquidity | | No entry if the next report is 0–3 sessions away (as in the baseline). The liquidity floor compares the 20-session average close × volume in the instrument currency, as the baseline does. |
 | Tests | `tests/unit/risk/test_risk_engine.py` | One test per rule and boundary, plus a `hypothesis` property test: every approved decision is re-checked against all limits computed independently. `make test` and CI fail below 100 % branch coverage of `trading_agent.risk`. |
 
-Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker (done, 10.6); (4) `place_eu`/`place_us`, `monitor`, stop management, applying the engine's `trip`, cancelling entry orders on a halt; (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
+Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket orders against the simulator broker (done, 10.6); (4) placement, end-of-day cycle, stop management, trips and halts wired in (done, 9.6); (5) chaos tests on the Zenbook with the paper gateway (`READ_ONLY_API=no`).
 
 ### 9.5 Implementation, step 2: kill switch and interlock (M8, 2026-10-04)
 
@@ -546,7 +546,25 @@ Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket ord
 | Live interlock | 10.4 | In live mode every start logs a new code (`live.confirm_code`, host logs only) and sends 🔐 asking for `/confirm_live CODE`. The gateway's mode comes from the account type (paper ids start with `D`; the id itself isn't kept), not from configuration. Paper mode on a live gateway is refused too. |
 | Reconciliation | `broker.reconcile_positions` | Any difference now also halts (10.3). |
 
-The halt doesn't cancel orders yet, because none exist until step 3; that hook comes with execution.
+The halt doesn't cancel orders yet, because none exist until step 3; that hook comes with execution. Since step 4 it cancels every unfilled entry (9.6).
+
+### 9.6 Implementation, step 4: placement and the daily cycle (M8, 2026-10-04)
+
+`agent_paper` now trades every session, through the simulator broker until `IB_ORDERS_ENABLED=true` (19.2).
+
+| Part | Where | Notes |
+|---|---|---|
+| Placement | `trading.place`, jobs `place_eu`/`place_us` (open + 15 min, 2 min grace: a late run is skipped) | Only today's scan for that market (`as_of` = previous session), in rank order. Per proposal: refresh the book, levels onto the tick grid (entry down, stop and target up, so never more risk than approved; 0.01 until the IBKR market rules arrive in step 5), market facts, `evaluate`, store the decision, apply its `trip`, submit if approved. Entry valid until the close of the next session. 📤 summary in Telegram. |
+| Market facts | `portfolio/snapshot.py` | Mid = last close (no live quote yet), ATR(14), 20-session average close × volume, sessions to the next report, today's ECB rate, ρ of 60 daily returns against each holding (no estimate below 20 common sessions or for a flat series). |
+| Accounting | `portfolio/book.py` | Per sleeve from brackets and fills: cash (sales settle T+1 US, T+2 Xetra), unsettled proceeds, cash reserved for pending entries, positions at the last close, equity. Fees: the broker's commission, else the `fees.yaml` estimate. Day and week P&L against the last equity snapshot before today / before Monday, drawdown against the highest snapshot (the budget at the start). Orders per day count the whole book. |
+| End of day | `trading.end_of_day`, jobs `execution_eu`/`execution_us` (close + 35 min, after the bars) | Simulator fills from the day's bar, broker sync (🟢 bought, 🔴 sold, ⌛ entry ended), then on that bar as in the backtest: breakeven at +1R (not on the entry day), time stop after 15 sessions (market exit at the next open). Then the `agent_paper` trades are rebuilt from the brackets and the sleeve's equity is stored in `equity_daily`. |
+| Monitor | `trading.monitor`, job `monitor` (every 10 min, 09–22 h, weekdays) | Broker sync and alerts; does nothing while the simulator is in use. |
+| Kill switch | `ControlCenter.on_halt` | A halt cancels every unfilled entry (stops stay). The engine's trips pause or halt via `apply_trip`. |
+| Storage | migration `0008` | `risk_decisions` (the latest decision per proposal with every check) and `equity_daily` (per book and sleeve). |
+| Digest | `journal` | Adds the `agent_paper` book and the risk engine's placements and rejections. |
+| Reconciliation | `broker.reconcile_positions` | With `IB_ORDERS_ENABLED`: broker positions vs. open brackets. Without: the paper account must hold nothing. |
+
+Not covered yet: thesis invalidation (needs the LLM re-evaluation job, M9), live quotes for the 1 % check, and the IBKR tick-size rules.
 
 ### 9.3 Kill switch states
 
@@ -589,7 +607,7 @@ Everything below is tested against a fake `IB` object only; `trading-agent ibkr-
 | Contracts | `data/ibkr.py` `contract_for`, `resolve_conids` | SMART-routed stocks; `BRK.B` becomes `BRK B`; Xetra with `primaryExchange=IBIS`. Resolved once and stored in `instruments.conid`. |
 | Account, positions | `execution/ibkr.py` | `NetLiquidation`, `TotalCashValue`, `SettledCash`, `AvailableFunds`; the account number is never kept. |
 | Bars | `data/ibkr.py` `IbkrPriceProvider` | Daily `TRADES` bars, regular hours, same `BarSeries` as Yahoo; at most 60 requests per 10 minutes. Used per market when `config/data.yaml` `prices.sources` says `ibkr` and the gateway is connected; otherwise Yahoo. Stays `yahoo` until the check shows matching closes and volumes. |
-| Reconciliation | `execution/reconcile.py`, job `reconcile` (NYSE close + 40 min) | Broker positions vs. open `agent_paper` trades by conid: unknown, missing, different size → ⚠️ alert and, since M8 step 2, a halt. |
+| Reconciliation | `execution/reconcile.py`, job `reconcile` (NYSE close + 40 min) | Broker positions vs. the agent book by conid: unknown, missing, different size → ⚠️ alert and, since M8 step 2, a halt. Since step 4 the book is the open brackets (only with `IB_ORDERS_ENABLED`; otherwise the paper account must be empty). |
 | Check | `trading-agent ibkr-check [SYMBOLS]` | Server version and time, account values, positions, contracts without conid, the last 5 IBKR bars vs. the stored ones (close difference, volume ratio), and the quote type the API delivers (real-time or delayed). |
 
 Still open for M6 once the login exists: the gateway surviving its daily restart, the re-login alert in practice, and the answers from `ibkr-check`. Fractional shares can't be checked with a read-only API; that moves to M8.
@@ -666,14 +684,14 @@ Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for
 | `ingest_news` | every 30 min, 07:00–22:30 | triage | Flash-Lite scoring |
 | `scan_eu` (paper only) | XETR open − 45 min | yes | Uses the previous EOD bars; batch API where possible |
 | `briefing` | 08:30 | reports | Telegram: portfolio, events today, pending orders |
-| `place_eu` | XETR open + 15 min | no | Risk engine → execution |
+| `place_eu` | XETR open + 15 min | no | Risk engine → execution (since M8 step 4) |
 | `ingest_eod_eu` | XETR close + 30 min | no | |
 | `scan_us` | XNYS open − 45 min | yes | |
 | `place_us` | XNYS open + 15 min | no | |
-| `monitor` | every 10 min in session | no | Stops, time stops, invalidation rules |
+| `monitor` | every 10 min in session | no | Broker sync and alerts (IBKR mode); stops and time stops run at EOD on daily bars (9.6); invalidation rules later |
 | `reevaluate_positions` | XNYS close − 60 min | yes | Only positions with news or events |
 | `ingest_eod_us` | XNYS close + 30 min | no | |
-| `eod` | after `ingest_eod_us` | no | Reconcile, update books and shadow trades, plan stop changes |
+| `eod` | after `ingest_eod_us` | no | Reconcile, update books and shadow trades, plan stop changes (since M8 step 4: `execution_eu`/`execution_us` at close + 35 min) |
 | `evening_digest` | after `eod` | reports | Telegram: fills, rejections, labels to do |
 | `weekly_report` | Saturday 10:00 | reports | KPIs vs baselines, costs |
 | `backup` | daily 03:00 | no | `pg_dump` |
@@ -920,6 +938,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - If something hangs: `ssh -L 5900:localhost:5900 zenbook`, then a VNC viewer on `localhost:5900` with the first 8 characters of `secrets/vnc_password`.
     - Since M8 step 2, positions in the paper account that the agent didn't open halt it (reconciliation). Close them in the paper account first, or reset as in step 14.
 14. **Kill switch** (M8 step 2, after `make migrate`): in Telegram, `/pause test`, `/status` (shows `paused (test) until /resume`), `/resume`, then `/stop` and confirm. Then on the Zenbook `docker compose run --rm agent trading-agent reset` prints a code; send `/reset CODE` within 15 minutes. `/status` 📋 shows `Kill switch: active` again.
+15. **Simulated orders** (M8 step 4, after `make migrate`): nothing to set up; `IB_ORDERS_ENABLED` stays `false`. On the next trading day, 15 minutes after each open, a 📤 message lists the placed and rejected proposals; after each close 🟢/🔴/⌛ messages report fills, and the 🌙 digest shows `agent_paper` and the risk engine's rejections. 📋 Send the 📤 messages and the digest of the first two days.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 
@@ -1025,3 +1044,7 @@ flowchart LR
 | 4 | `agent_paper` before the IBKR paper login exists | Through the simulator broker until `IB_ENABLED=true` | The whole chain runs daily from step 4; fills from daily bars |
 | 5 | IBKR order side | Built in step 3, tested against a fake IB | The real check is step 5 on the Zenbook |
 | 6 | Entry expires partly filled | Keep the partial position with its stop and target | 10.6 |
+| 7 | Stop management and time stop | At EOD on daily bars, as in the backtest | 9.6 |
+| 8 | Portfolio numbers for the risk engine | Own accounting from fills plus daily equity snapshots | 9.6 |
+| 9 | Which proposals get placed | Only today's scan for that market, in rank order | Older proposals are never placed |
+| 10 | Switch from the simulator to IBKR orders | New setting `IB_ORDERS_ENABLED` (needs `IB_ENABLED`) | Switch only with no open `agent_paper` brackets |

@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -16,6 +16,7 @@ from trading_agent.domain.orders import (
     Bracket,
     BrokerFill,
     BrokerOrder,
+    OrderKind,
     OrderSpec,
 )
 
@@ -76,6 +77,38 @@ async def open_brackets(session: AsyncSession, book: str) -> list[Bracket]:
         .order_by(BracketRow.created_at)
     )
     return [_bracket(r) for r in await session.scalars(stmt)]
+
+
+async def all_brackets(session: AsyncSession, book: str) -> list[tuple[Bracket, datetime]]:
+    """Every bracket of the book with its creation time, oldest first."""
+    stmt = select(BracketRow).where(BracketRow.book == book).order_by(BracketRow.created_at)
+    return [(_bracket(r), r.created_at) for r in await session.scalars(stmt)]
+
+
+async def book_fills(session: AsyncSession, book: str) -> list[tuple[UUID, OrderKind, BrokerFill]]:
+    """(bracket id, order kind, fill) for every fill of the book, oldest first."""
+    stmt = (
+        select(FillRow, OrderRow.bracket_id, OrderRow.kind)
+        .join(OrderRow, OrderRow.order_ref == FillRow.order_ref)
+        .join(BracketRow, BracketRow.id == OrderRow.bracket_id)
+        .where(BracketRow.book == book)
+        .order_by(FillRow.ts, FillRow.exec_id)
+    )
+    return [
+        (
+            bracket_id,
+            cast(OrderKind, kind),
+            BrokerFill(
+                exec_id=f.exec_id,
+                order_ref=f.order_ref,
+                ts=f.ts,
+                quantity=f.quantity,
+                price=f.price,
+                commission=f.commission,
+            ),
+        )
+        for f, bracket_id, kind in await session.execute(stmt)
+    ]
 
 
 async def save_bracket(session: AsyncSession, b: Bracket, event: str) -> None:

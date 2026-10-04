@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     ib_host: str = "ib-gateway"
     ib_port: int = 4004  # gnzsnz socat port: 4004 paper, 4003 live
     ib_client_id: int = 11
+    # Orders through IBKR (M8 step 5, READ_ONLY_API=no); otherwise the simulator broker.
+    ib_orders_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _orders_need_the_gateway(self) -> "Settings":
+        if self.ib_orders_enabled and not self.ib_enabled:
+            raise ValueError("IB_ORDERS_ENABLED=true needs IB_ENABLED=true")
+        return self
 
     @property
     def database_url(self) -> URL:

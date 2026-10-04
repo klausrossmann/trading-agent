@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,11 +8,13 @@ from trading_agent import jobs, journal
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
+from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.risk import Check, RiskDecision
 from trading_agent.domain.trading import Trade
 from trading_agent.notify import messages
 
@@ -137,12 +139,23 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
     )
     async with sessions.begin() as s:
         await trades_repo.replace_book(s, "agent_shadow", [trade])
+        aaa = next(p for p in await repo.proposals(s, start=DAY) if p.yahoo_symbol == "AAA")
+        rejected = RiskDecision(
+            approved=False,
+            checks=(
+                Check(name="portfolio", outcome="fail", detail="4 positions and entries open"),
+            ),
+        )
+        await book_repo.save_decision(s, aaa.id, rejected, datetime(2026, 10, 5, 14, tzinfo=UTC))
     book = jobs.BookContext.load(ROOT / "config", sessions, universe)
     text = messages.render_digest(await journal.build_digest(book, DAY))
     assert text.splitlines() == [
         "🌙 Evening digest Mon 5 Oct",
         "Proposals (Mon 5 Oct): 1 no trade, 1 proposed",
         "  2 to label: /review",
+        "Risk engine: placed none",
+        "  rejected AAA: portfolio: 4 positions and entries open",
+        "agent_paper: 0 open",
         "agent_shadow: 0 open; closed AAA +€12.30 (+1.2 %) (target)",
         "baseline_sim: 0 open",
         "LLM today: $0.0000",

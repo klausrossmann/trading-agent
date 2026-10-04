@@ -313,3 +313,29 @@ class FillRow(Base):
     quantity: Mapped[int] = mapped_column(Integer)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
     commission: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+
+
+class RiskDecisionRow(Base):
+    """The risk engine's latest decision per proposal, with every check (9.2)."""
+
+    __tablename__ = "risk_decisions"
+
+    proposal_id: Mapped[UUID] = mapped_column(ForeignKey("proposals.id"), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    approved: Mapped[bool] = mapped_column(Boolean)
+    quantity: Mapped[int] = mapped_column(Integer)
+    trip: Mapped[str | None] = mapped_column(Text)
+    checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+
+class EquityDailyRow(Base):
+    """A book sleeve's equity after a session close; loss limits and drawdown read it."""
+
+    __tablename__ = "equity_daily"
+
+    book: Mapped[str] = mapped_column(Text, primary_key=True)
+    sleeve: Mapped[str] = mapped_column(Text, primary_key=True)  # markets, e.g. "US" or "EU"
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    equity_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    cash_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    invested_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))

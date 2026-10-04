@@ -10,10 +10,8 @@ from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
-from trading_agent.db import trades as trades_repo
 from trading_agent.domain.broker import BrokerPosition
 from trading_agent.domain.market import Instrument
-from trading_agent.domain.trading import Trade
 
 pytestmark = pytest.mark.db
 
@@ -67,32 +65,16 @@ async def test_conids_are_stored_and_positions_reconciled(sessions: Sessions) ->
     ids = {i.yahoo_symbol: k for k, i in instruments.items()}
     assert instruments[ids["AAA"]].conid == 101
 
-    trade = Trade(
-        book="agent_paper",
-        strategy="pullback_uptrend",
-        instrument_id=ids["AAA"],
-        yahoo_symbol="AAA",
-        market="US",
-        sector=None,
-        signal_date=date(2026, 10, 1),
-        entry_date=date(2026, 10, 2),
-        entry_price=10,
-        quantity=4,
-        stop=9,
-        target=12,
-        risk_eur=4,
-        fees=1,
-        fees_eur=1,
-    )
-    async with sessions.begin() as s:
-        await trades_repo.replace_book(s, "agent_paper", [trade])
+    async def expected() -> dict[int, tuple[str, float]]:
+        return {101: ("AAA", 4.0)}
+
     inbox = Inbox()
     halts: list[str] = []
 
     async def halt(reason: str) -> None:
         halts.append(reason)
 
-    report = await broker.reconcile_positions(link, sessions, inbox, halt)
+    report = await broker.reconcile_positions(link, inbox, expected, halt)
     assert report is not None
     assert [p.symbol for p in report.unknown] == ["ZZZ"]
     assert [m.symbol for m in report.missing] == ["AAA"]
@@ -102,3 +84,8 @@ async def test_conids_are_stored_and_positions_reconciled(sessions: Sessions) ->
         "In the book only: AAA 4",
     ]
     assert halts == ["reconciliation mismatch"]
+    # orders still simulated: the paper account must hold nothing
+    report = await broker.reconcile_positions(link, inbox)
+    assert report is not None
+    assert [p.symbol for p in report.unknown] == ["ZZZ"]
+    assert report.missing == []

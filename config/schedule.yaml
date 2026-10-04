@@ -47,3 +47,26 @@ jobs:
     anchor: open
     offset_minutes: -45
     misfire_grace_minutes: 30
+  place_eu:                         # risk engine -> brackets for today's EU proposals (M8)
+    calendar: XETR
+    anchor: open
+    offset_minutes: 15
+    misfire_grace_minutes: 2        # a late placement is skipped, not run late
+  place_us:
+    calendar: XNYS
+    anchor: open
+    offset_minutes: 15
+    misfire_grace_minutes: 2
+  execution_eu:                     # simulator fills, sync, stops, time stops, agent book (M8)
+    calendar: XETR
+    anchor: close
+    offset_minutes: 35
+    misfire_grace_minutes: 360
+  execution_us:
+    calendar: XNYS
+    anchor: close
+    offset_minutes: 35
+    misfire_grace_minutes: 360
+  monitor:                          # broker sync in sessions; IBKR mode only (M8)
+    cron: {day_of_week: mon-fri, hour: "9-22", minute: "*/10"}
+    misfire_grace_minutes: 5

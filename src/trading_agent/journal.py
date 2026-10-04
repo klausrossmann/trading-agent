@@ -9,6 +9,7 @@ import structlog
 
 from trading_agent import jobs
 from trading_agent.data.ingest import Sessions
+from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as repo
 from trading_agent.db import trades as trades_repo
@@ -22,7 +23,7 @@ log = structlog.get_logger(__name__)
 
 TZ = ZoneInfo("Europe/Berlin")
 LABELS: dict[str, Label] = {"a": "agree", "d": "disagree"}
-BOOKS: tuple[Book, ...] = ("agent_shadow", "baseline_sim")
+BOOKS: tuple[Book, ...] = ("agent_paper", "agent_shadow", "baseline_sim")
 
 
 async def latest(sessions: Sessions) -> tuple[date | None, list[Proposal], dict[UUID, Label]]:
@@ -149,6 +150,9 @@ async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
                 )
             )
     start = datetime.combine(today, datetime.min.time(), TZ)
+    async with sessions() as s:
+        decided = await book_repo.decisions(s, [p.id for p in items])
+    symbols = {p.id: p.yahoo_symbol for p in items}
     return messages.Digest(
         day=today,
         proposals_as_of=as_of,
@@ -156,6 +160,12 @@ async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
         to_label=sum(1 for p in items if p.id not in labels),
         books=lines,
         llm_usd_today=await DbAnalysisStore(sessions).spent_usd(start),
+        placed=[symbols[k] for k, d in decided.items() if d.approved],
+        rejected=[
+            (symbols[k], f"{d.failures[0].name}: {d.failures[0].detail}")
+            for k, d in decided.items()
+            if not d.approved and d.failures
+        ],
     )
 
 

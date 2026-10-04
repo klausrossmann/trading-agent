@@ -1,4 +1,6 @@
-"""IB Gateway link (M6, read-only): connection, contract ids, reconciliation, the check."""
+"""IB Gateway link: connection, contract ids, reconciliation, the check.
+
+Read-only unless IB_ORDERS_ENABLED (M8 step 5)."""
 
 import asyncio
 import contextlib
@@ -12,7 +14,6 @@ from ib_async import IB, Ticker
 from trading_agent.data import ibkr as ibkr_data
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import market as market_repo
-from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.risk import Mode
 from trading_agent.execution.ibkr import IbkrBroker
@@ -26,7 +27,6 @@ log = structlog.get_logger(__name__)
 ALERT_AFTER_S = 600  # IMPLEMENTATION.md 12.3: disconnected for more than 10 minutes
 CHECK_EVERY_S = 30
 MAX_BACKOFF_S = 300
-PAPER_BOOK = "agent_paper"
 
 
 class BrokerLink:
@@ -72,7 +72,11 @@ class BrokerLink:
         s = self.settings
         try:
             await self.ib.connectAsync(
-                s.ib_host, s.ib_port, clientId=s.ib_client_id, readonly=True, timeout=15
+                s.ib_host,
+                s.ib_port,
+                clientId=s.ib_client_id,
+                readonly=not s.ib_orders_enabled,
+                timeout=15,
             )
         except (OSError, TimeoutError, ConnectionError) as exc:
             log.warning("ibkr.connect_failed", error=type(exc).__name__)
@@ -128,26 +132,21 @@ async def sync_conids(link: BrokerLink, sessions: Sessions) -> list[str]:
     return missing
 
 
+Expected = Callable[[], Awaitable[dict[int, tuple[str, float]]]]
+
+
 async def reconcile_positions(
     link: BrokerLink | None,
-    sessions: Sessions,
     notifier: Notifier,
+    expected: Expected | None = None,
     halt: Callable[[str], Awaitable[object]] | None = None,
 ) -> ReconcileReport | None:
-    """Broker positions vs. the open agent_paper trades; any difference halts (10.3)."""
+    """Broker positions vs. the agent book (conid -> symbol, quantity); any difference halts
+    (10.3). Without `expected` (orders still simulated) the account must hold nothing."""
     if link is None or not link.connected:
         log.info("reconcile.skipped", reason="gateway not connected")
         return None
-    async with sessions() as s:
-        instruments = await market_repo.active_instruments(s)
-        rows = await trades_repo.book_trades(s, PAPER_BOOK)
-    expected: dict[int, tuple[str, float]] = {}
-    for r in rows:
-        inst = instruments.get(r.instrument_id)
-        if r.exit_date is None and inst is not None and inst.conid is not None:
-            symbol, qty = expected.get(inst.conid, (inst.yahoo_symbol, 0.0))
-            expected[inst.conid] = (symbol, qty + r.quantity)
-    report = reconcile(await link.broker.positions(), expected)
+    report = reconcile(await link.broker.positions(), await expected() if expected else {})
     log.info(
         "reconcile.done",
         clean=report.clean,
@@ -172,10 +171,11 @@ async def on_connect(
     link: BrokerLink,
     sessions: Sessions,
     notifier: Notifier,
+    expected: Expected | None = None,
     halt: Callable[[str], Awaitable[object]] | None = None,
 ) -> None:
     await sync_conids(link, sessions)
-    await reconcile_positions(link, sessions, notifier, halt)
+    await reconcile_positions(link, notifier, expected, halt)
 
 
 # --- one-off check for the runbook (IMPLEMENTATION.md 15.5) ---

@@ -236,7 +236,7 @@ async def test_link_alerts_once_after_ten_minutes_and_on_recovery() -> None:
 
 
 async def test_reconcile_job_skips_without_a_connection() -> None:
-    assert await broker.reconcile_positions(None, cast(Any, None), Inbox()) is None
+    assert await broker.reconcile_positions(None, Inbox()) is None
 
 
 @pytest.mark.parametrize(

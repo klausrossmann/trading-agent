@@ -3,10 +3,12 @@
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from itertools import batched
 from typing import Any, cast
 
 from sqlalchemy import Table, delete, func, literal_column, select, tuple_, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,6 +173,23 @@ async def replace_bars(session: AsyncSession, instrument_id: int, series: BarSer
     """Replace the full history, e.g. after the source restated it for a split."""
     await session.execute(delete(BarDailyRow).where(BarDailyRow.instrument_id == instrument_id))
     return (await upsert_bars(session, instrument_id, series)).inserted
+
+
+async def instruments(session: AsyncSession, ids: Iterable[int]) -> dict[int, Instrument]:
+    """By id, active or not (a deactivated instrument may still have a position)."""
+    stmt = select(InstrumentRow).where(InstrumentRow.id.in_(list(ids)))
+    return {r.id: to_instrument(r) for r in await session.scalars(stmt)}
+
+
+async def last_closes(session: AsyncSession, ids: Iterable[int]) -> dict[int, Decimal]:
+    """The latest stored close per instrument."""
+    stmt = (
+        select(BarDailyRow.instrument_id, BarDailyRow.close)
+        .where(BarDailyRow.instrument_id.in_(list(ids)))
+        .order_by(BarDailyRow.instrument_id, BarDailyRow.date.desc())
+        .ext(distinct_on(BarDailyRow.instrument_id))
+    )
+    return {i: c for i, c in await session.execute(stmt)}
 
 
 async def last_bar_dates(session: AsyncSession) -> dict[int, date]:

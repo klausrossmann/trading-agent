@@ -6,7 +6,7 @@ Telegram commands, alerts, the CLI reset code, and the `Controls` the risk engin
 import hashlib
 import hmac
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -51,6 +51,7 @@ class ControlCenter:
         self.clock = clock
         self.live_code: str | None = None
         self.live_confirmed = False
+        self.on_halt: Callable[[], Awaitable[object]] | None = None  # cancels pending entries
 
     async def _change(
         self, actor: str, step: Callable[[KillSwitch, datetime], KillSwitch]
@@ -64,6 +65,8 @@ class ControlCenter:
                 await repo.save_kill_switch(s, new, actor)
         if new != stored:
             log.info("kill_switch.changed", actor=actor, state=new.state, reason=new.reason)
+        if new.state == "halted" and stored.state != "halted" and self.on_halt is not None:
+            await self.on_halt()
         return stored, new
 
     async def _announce(
