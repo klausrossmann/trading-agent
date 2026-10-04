@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "DHL.DE",
+  "name": "Deutsche Post",
+  "market": "EU",
+  "sector": "Logistics",
+  "as_of": "2026-04-24",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2026-04-30",
+   "timing": "during",
+   "sessions_until": 4,
+   "eps_estimate": 0.66
+  },
+  "event_in_window": true,
+  "history": [
+   {
+    "date": "2026-03-05",
+    "timing": "bmo",
+    "eps_estimate": 1.0,
+    "eps_actual": 0.9,
+    "surprise_pct": -10.0,
+    "gap_pct": -2.33,
+    "move_pct": -4.63
+   },
+   {
+    "date": "2025-11-06",
+    "timing": "bmo",
+    "eps_estimate": 0.6,
+    "eps_actual": 0.75,
+    "surprise_pct": 25.0,
+    "gap_pct": 4.31,
+    "move_pct": 8.63
+   },
+   {
+    "date": "2025-08-05",
+    "timing": "bmo",
+    "eps_estimate": 0.63,
+    "eps_actual": 0.72,
+    "surprise_pct": 14.3,
+    "gap_pct": 3.42,
+    "move_pct": -0.56
+   },
+   {
+    "date": "2025-04-30",
+    "timing": "bmo",
+    "eps_estimate": 0.62,
+    "eps_actual": 0.67,
+    "surprise_pct": 8.1,
+    "gap_pct": 2.1,
+    "move_pct": 0.91
+   },
+   {
+    "date": "2025-03-06",
+    "timing": "amc",
+    "eps_estimate": 0.88,
+    "eps_actual": 0.93,
+    "surprise_pct": 5.7,
+    "gap_pct": -3.37,
+    "move_pct": -2.76
+   },
+   {
+    "date": "2024-11-05",
+    "timing": "bmo",
+    "eps_estimate": 0.66,
+    "eps_actual": 0.63,
+    "surprise_pct": -4.5,
+    "gap_pct": -0.4,
+    "move_pct": -4.04
+   },
+   {
+    "date": "2024-08-01",
+    "timing": "bmo",
+    "eps_estimate": 0.65,
+    "eps_actual": 0.63,
+    "surprise_pct": -3.1,
+    "gap_pct": 0.99,
+    "move_pct": -6.28
+   },
+   {
+    "date": "2024-05-07",
+    "timing": "during",
+    "eps_estimate": 0.6,
+    "eps_actual": 0.62,
+    "surprise_pct": 3.3,
+    "gap_pct": -1.93,
+    "move_pct": 0.44
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 5,
+   "misses": 3,
+   "avg_abs_move_pct": 3.53,
+   "max_abs_move_pct": 8.63,
+   "atr_pct": 2.28
+  },
+  "unknown": []
+ }
+}

@@ -12,3 +12,4 @@ secrets
 tests
 screenshots
 *.md
+!prompts/**/*.md

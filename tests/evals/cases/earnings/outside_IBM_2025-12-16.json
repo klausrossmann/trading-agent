@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "IBM",
+  "name": "IBM",
+  "market": "US",
+  "sector": "Information Technology",
+  "as_of": "2025-12-16",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2026-01-28",
+   "timing": "amc",
+   "sessions_until": 28,
+   "eps_estimate": 4.29
+  },
+  "event_in_window": false,
+  "history": [
+   {
+    "date": "2025-10-22",
+    "timing": "amc",
+    "eps_estimate": 2.45,
+    "eps_actual": 2.65,
+    "surprise_pct": 8.2,
+    "gap_pct": -7.85,
+    "move_pct": -0.87
+   },
+   {
+    "date": "2025-07-23",
+    "timing": "amc",
+    "eps_estimate": 2.65,
+    "eps_actual": 2.8,
+    "surprise_pct": 5.7,
+    "gap_pct": -7.36,
+    "move_pct": -7.62
+   },
+   {
+    "date": "2025-04-23",
+    "timing": "amc",
+    "eps_estimate": 1.43,
+    "eps_actual": 1.6,
+    "surprise_pct": 11.9,
+    "gap_pct": -5.83,
+    "move_pct": -6.58
+   },
+   {
+    "date": "2025-01-29",
+    "timing": "amc",
+    "eps_estimate": 3.78,
+    "eps_actual": 3.92,
+    "surprise_pct": 3.7,
+    "gap_pct": 9.35,
+    "move_pct": 12.96
+   },
+   {
+    "date": "2024-10-23",
+    "timing": "amc",
+    "eps_estimate": 2.23,
+    "eps_actual": 2.3,
+    "surprise_pct": 3.1,
+    "gap_pct": -5.13,
+    "move_pct": -6.17
+   },
+   {
+    "date": "2024-07-24",
+    "timing": "amc",
+    "eps_estimate": 2.17,
+    "eps_actual": 2.43,
+    "surprise_pct": 12.0,
+    "gap_pct": 1.51,
+    "move_pct": 4.33
+   },
+   {
+    "date": "2024-04-24",
+    "timing": "amc",
+    "eps_estimate": 1.6,
+    "eps_actual": 1.68,
+    "surprise_pct": 5.0,
+    "gap_pct": -8.64,
+    "move_pct": -8.25
+   },
+   {
+    "date": "2024-01-24",
+    "timing": "amc",
+    "eps_estimate": 3.8,
+    "eps_actual": 3.87,
+    "surprise_pct": 1.8,
+    "gap_pct": 6.34,
+    "move_pct": 9.49
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 8,
+   "misses": 0,
+   "avg_abs_move_pct": 7.03,
+   "max_abs_move_pct": 12.96,
+   "atr_pct": 2.46
+  },
+  "unknown": []
+ }
+}

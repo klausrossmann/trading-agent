@@ -1,0 +1,201 @@
+{
+ "module": "technical",
+ "expect": {
+  "ratings": [
+   "neutral",
+   "avoid"
+  ]
+ },
+ "input": {
+  "symbol": "RWE.DE",
+  "name": "RWE",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Utilities",
+  "as_of": "2024-11-08",
+  "close": 30.15,
+  "change_pct": {
+   "1d": 0.17,
+   "5d": 1.38,
+   "20d": -4.47,
+   "63d": -6.63
+  },
+  "trend": {
+   "daily": "down",
+   "weekly": "down"
+  },
+  "indicators": {
+   "rsi14": 43.0,
+   "macd": -0.521,
+   "macd_signal": -0.497,
+   "macd_hist": -0.024,
+   "atr14": 0.72,
+   "atr_pct": 2.39,
+   "bb_pct_b": 0.33,
+   "sma100": 32.11,
+   "close_vs_ema20_pct": -1.31,
+   "close_vs_sma50_pct": -4.72,
+   "close_vs_sma200_pct": -6.83,
+   "rs_vs_benchmark_63d_pct": -13.37
+  },
+  "volume": {
+   "avg20": 2305093.0,
+   "avg50": 2094596.0,
+   "avg20_vs_avg50": 1.1,
+   "last_vs_avg20": 0.92,
+   "up_vs_down_volume_20d": 0.68
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 30.15,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 30.44,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 29.9,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 30.55,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 31.64,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 32.36,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 29.15,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 32.22,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 42.33,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 28.15,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 29.07,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 28.71,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 27.99,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 32.31,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 33.03,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 34.47,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "resistance_1",
+    "price": 30.21,
+    "kind": "resistance",
+    "touches": 4
+   },
+   {
+    "name": "resistance_2",
+    "price": 30.8,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_3",
+    "price": 31.17,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 30.08,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 32.09,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 31.12,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 32.04,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 32.95,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

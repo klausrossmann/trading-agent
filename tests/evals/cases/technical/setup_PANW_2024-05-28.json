@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "PANW",
+  "name": "Palo Alto Networks",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Information Technology",
+  "as_of": "2024-05-28",
+  "close": 154.0,
+  "change_pct": {
+   "1d": -4.23,
+   "5d": -4.87,
+   "20d": 4.98,
+   "63d": -2.14
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 53.2,
+   "macd": 3.348,
+   "macd_signal": 3.292,
+   "macd_hist": 0.055,
+   "atr14": 4.82,
+   "atr_pct": 3.13,
+   "bb_pct_b": 0.57,
+   "sma100": 153.26,
+   "close_vs_ema20_pct": 0.63,
+   "close_vs_sma50_pct": 5.9,
+   "close_vs_sma200_pct": 9.51,
+   "rs_vs_benchmark_63d_pct": -6.37
+  },
+  "volume": {
+   "avg20": 8377840.0,
+   "avg50": 7654104.0,
+   "avg20_vs_avg50": 1.09,
+   "last_vs_avg20": 1.1,
+   "up_vs_down_volume_20d": 1.21
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 154.01,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 160.93,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 153.54,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 153.04,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 145.42,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 140.64,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 142.8,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 162.59,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 190.42,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 100.59,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 146.77,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 144.36,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 139.54,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 168.47,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 173.3,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 182.94,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 153.14,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_2",
+    "price": 145.45,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 141.83,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 159.0,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 162.34,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_3",
+    "price": 166.34,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 132.5,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 162.34,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 153.11,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 160.23,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 167.36,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

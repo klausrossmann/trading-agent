@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "AMAT",
+  "name": "Applied Materials",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Information Technology",
+  "as_of": "2023-03-27",
+  "close": 118.87,
+  "change_pct": {
+   "1d": -0.55,
+   "5d": -4.17,
+   "20d": 6.07,
+   "63d": 21.79
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 51.3,
+   "macd": 1.556,
+   "macd_signal": 1.709,
+   "macd_hist": -0.153,
+   "atr14": 4.33,
+   "atr_pct": 3.64,
+   "bb_pct_b": 0.49,
+   "sma100": 109.49,
+   "close_vs_ema20_pct": -0.04,
+   "close_vs_sma50_pct": 2.37,
+   "close_vs_sma200_pct": 17.18,
+   "rs_vs_benchmark_63d_pct": 16.95
+  },
+  "volume": {
+   "avg20": 7443630.0,
+   "avg50": 6760324.0,
+   "avg20_vs_avg50": 1.1,
+   "last_vs_avg20": 0.62,
+   "up_vs_down_volume_20d": 0.95
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 118.87,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 120.98,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 118.32,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 118.92,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 116.11,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 101.45,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 114.01,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 124.03,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 142.01,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 71.12,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 112.38,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 110.21,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 105.88,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 131.86,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 136.18,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 144.84,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 116.71,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_2",
+    "price": 112.17,
+    "kind": "support",
+    "touches": 4
+   },
+   {
+    "name": "support_3",
+    "price": 110.08,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 119.47,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "resistance_2",
+    "price": 121.94,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_3",
+    "price": 124.92,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 111.92,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 121.5,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 104.8,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 98.37,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 91.94,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

@@ -142,3 +142,46 @@ class TradeRow(Base):
     r_multiple: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
     holding_sessions: Mapped[int | None] = mapped_column(Integer)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalysisRow(Base):
+    """One module output per input (`input_hash` is the cache key, IMPLEMENTATION.md 7.5)."""
+
+    __tablename__ = "analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    module: Mapped[str] = mapped_column(Text)
+    prompt_version: Mapped[int] = mapped_column(Integer)
+    model: Mapped[str] = mapped_column(Text)
+    instrument_id: Mapped[int | None] = mapped_column(
+        ForeignKey("instruments.id", ondelete="CASCADE"), index=True
+    )
+    as_of: Mapped[dt.date] = mapped_column(Date)
+    input_hash: Mapped[str] = mapped_column(Text, unique=True)
+    input: Mapped[dict[str, Any]]
+    output: Mapped[dict[str, Any]]
+    issues: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    status: Mapped[str] = mapped_column(Text)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+
+
+class LlmCallRow(Base):
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    role: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    module: Mapped[str] = mapped_column(Text)
+    tokens_in: Mapped[int] = mapped_column(Integer)
+    tokens_out: Mapped[int] = mapped_column(Integer)
+    requests: Mapped[int] = mapped_column(Integer)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    analysis_id: Mapped[int | None] = mapped_column(
+        ForeignKey("analyses.id", ondelete="SET NULL"), index=True
+    )

@@ -1,0 +1,208 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "TMO",
+  "name": "Thermo Fisher Scientific",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Health Care",
+  "as_of": "2024-09-17",
+  "close": 610.49,
+  "change_pct": {
+   "1d": -0.6,
+   "5d": -2.2,
+   "20d": 0.48,
+   "63d": 7.48
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 52.2,
+   "macd": 4.855,
+   "macd_signal": 6.213,
+   "macd_hist": -1.358,
+   "atr14": 10.82,
+   "atr_pct": 1.77,
+   "bb_pct_b": 0.42,
+   "sma100": 582.56,
+   "close_vs_ema20_pct": -0.02,
+   "close_vs_sma50_pct": 2.85,
+   "close_vs_sma200_pct": 7.63,
+   "rs_vs_benchmark_63d_pct": 4.43
+  },
+  "volume": {
+   "avg20": 1126715.0,
+   "avg50": 1391528.0,
+   "avg20_vs_avg50": 0.81,
+   "last_vs_avg20": 1.18,
+   "up_vs_down_volume_20d": 1.0
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 610.49,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 616.58,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 607.0,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 610.62,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 593.58,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 567.21,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 602.04,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 621.98,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 627.88,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 415.6,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 594.26,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 588.85,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 578.03,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 642.95,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 653.77,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 675.41,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 602.36,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_2",
+    "price": 587.4,
+    "kind": "support",
+    "touches": 5
+   },
+   {
+    "name": "support_3",
+    "price": 573.73,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 620.21,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_2",
+    "price": 627.88,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 601.26,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 627.88,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 589.87,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 578.13,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 566.38,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

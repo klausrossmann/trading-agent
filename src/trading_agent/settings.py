@@ -24,10 +24,13 @@ class Settings(BaseSettings):
     app_mode: Literal["paper", "live"] = "paper"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     config_dir: Path = Path("config")
+    prompts_dir: Path = Path("prompts")
     heartbeat_url: SecretStr | None = None
     fred_api_key: SecretStr | None = None
     telegram_bot_token: SecretStr | None = None
     telegram_owner_chat_id: int | None = None  # unset: every chat is ignored and logged (setup)
+    gemini_api_key: SecretStr | None = None
+    llm_dev_overrides: bool = False  # config/models.yaml dev_overrides (Phase 0-1)
 
     db_host: str = "db"
     db_port: int = 5432

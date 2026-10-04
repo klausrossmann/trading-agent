@@ -1,0 +1,208 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "CBK.DE",
+  "name": "Commerzbank",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Financial Services",
+  "as_of": "2026-08-21",
+  "close": 39.01,
+  "change_pct": {
+   "1d": 0.75,
+   "5d": -1.84,
+   "20d": 6.06,
+   "63d": 6.27
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 53.7,
+   "macd": 0.352,
+   "macd_signal": 0.413,
+   "macd_hist": -0.061,
+   "atr14": 0.78,
+   "atr_pct": 1.99,
+   "bb_pct_b": 0.58,
+   "sma100": 36.88,
+   "close_vs_ema20_pct": 0.62,
+   "close_vs_sma50_pct": 2.4,
+   "close_vs_sma200_pct": 10.47,
+   "rs_vs_benchmark_63d_pct": 2.47
+  },
+  "volume": {
+   "avg20": 2247627.0,
+   "avg50": 2537018.0,
+   "avg20_vs_avg50": 0.89,
+   "last_vs_avg20": 0.75,
+   "up_vs_down_volume_20d": 1.77
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 39.01,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 39.19,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 38.71,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 38.77,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 38.1,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 35.31,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 36.99,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 40.44,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 40.13,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 29.01,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 37.85,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 37.46,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 36.68,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 41.34,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 42.12,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 43.67,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 38.17,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 37.39,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_3",
+    "price": 36.84,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "resistance_1",
+    "price": 39.02,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_2",
+    "price": 40.13,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 36.27,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 40.13,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 36.0,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 34.73,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 33.45,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

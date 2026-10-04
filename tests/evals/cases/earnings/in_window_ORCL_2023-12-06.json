@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "ORCL",
+  "name": "Oracle Corporation",
+  "market": "US",
+  "sector": "Information Technology",
+  "as_of": "2023-12-06",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2023-12-11",
+   "timing": "amc",
+   "sessions_until": 3,
+   "eps_estimate": 1.33
+  },
+  "event_in_window": true,
+  "history": [
+   {
+    "date": "2023-09-11",
+    "timing": "amc",
+    "eps_estimate": 1.15,
+    "eps_actual": 1.19,
+    "surprise_pct": 3.5,
+    "gap_pct": -11.55,
+    "move_pct": -13.5
+   },
+   {
+    "date": "2023-06-12",
+    "timing": "amc",
+    "eps_estimate": 1.58,
+    "eps_actual": 1.67,
+    "surprise_pct": 5.7,
+    "gap_pct": 5.92,
+    "move_pct": 0.21
+   },
+   {
+    "date": "2023-03-09",
+    "timing": "amc",
+    "eps_estimate": 1.2,
+    "eps_actual": 1.22,
+    "surprise_pct": 1.7,
+    "gap_pct": -2.83,
+    "move_pct": -3.22
+   },
+   {
+    "date": "2022-12-12",
+    "timing": "amc",
+    "eps_estimate": 1.17,
+    "eps_actual": 1.21,
+    "surprise_pct": 3.4,
+    "gap_pct": 4.5,
+    "move_pct": -0.89
+   },
+   {
+    "date": "2022-09-12",
+    "timing": "amc",
+    "eps_estimate": 1.08,
+    "eps_actual": 1.03,
+    "surprise_pct": -4.6,
+    "gap_pct": -1.32,
+    "move_pct": -1.35
+   },
+   {
+    "date": "2022-06-13",
+    "timing": "amc",
+    "eps_estimate": 1.38,
+    "eps_actual": 1.54,
+    "surprise_pct": 11.6,
+    "gap_pct": 12.41,
+    "move_pct": 10.41
+   },
+   {
+    "date": "2022-03-10",
+    "timing": "amc",
+    "eps_estimate": 1.18,
+    "eps_actual": 1.13,
+    "surprise_pct": -4.2,
+    "gap_pct": 0.07,
+    "move_pct": 1.53
+   },
+   {
+    "date": "2021-12-09",
+    "timing": "amc",
+    "eps_estimate": 1.11,
+    "eps_actual": 1.21,
+    "surprise_pct": 9.0,
+    "gap_pct": 17.48,
+    "move_pct": 15.61
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 6,
+   "misses": 2,
+   "avg_abs_move_pct": 5.84,
+   "max_abs_move_pct": 15.61,
+   "atr_pct": 1.87
+  },
+  "unknown": []
+ }
+}

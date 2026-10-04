@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "AVGO",
+  "name": "Broadcom",
+  "market": "US",
+  "sector": "Information Technology",
+  "as_of": "2024-02-21",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2024-03-07",
+   "timing": "amc",
+   "sessions_until": 11,
+   "eps_estimate": 1.04
+  },
+  "event_in_window": true,
+  "history": [
+   {
+    "date": "2023-12-07",
+    "timing": "amc",
+    "eps_estimate": 1.1,
+    "eps_actual": 1.11,
+    "surprise_pct": 0.9,
+    "gap_pct": 0.61,
+    "move_pct": 2.39
+   },
+   {
+    "date": "2023-08-31",
+    "timing": "amc",
+    "eps_estimate": 1.04,
+    "eps_actual": 1.05,
+    "surprise_pct": 1.0,
+    "gap_pct": -2.28,
+    "move_pct": -5.46
+   },
+   {
+    "date": "2023-06-01",
+    "timing": "amc",
+    "eps_estimate": 1.01,
+    "eps_actual": 1.03,
+    "surprise_pct": 2.0,
+    "gap_pct": 0.09,
+    "move_pct": 2.79
+   },
+   {
+    "date": "2023-03-02",
+    "timing": "amc",
+    "eps_estimate": 1.02,
+    "eps_actual": 1.03,
+    "surprise_pct": 1.0,
+    "gap_pct": 3.18,
+    "move_pct": 5.7
+   },
+   {
+    "date": "2022-12-08",
+    "timing": "amc",
+    "eps_estimate": 1.03,
+    "eps_actual": 1.05,
+    "surprise_pct": 1.9,
+    "gap_pct": 3.74,
+    "move_pct": 2.57
+   },
+   {
+    "date": "2022-09-01",
+    "timing": "amc",
+    "eps_estimate": 0.95,
+    "eps_actual": 0.97,
+    "surprise_pct": 2.1,
+    "gap_pct": 5.28,
+    "move_pct": 1.67
+   },
+   {
+    "date": "2022-05-26",
+    "timing": "bmo",
+    "eps_estimate": 0.87,
+    "eps_actual": 0.91,
+    "surprise_pct": 4.6,
+    "gap_pct": -0.02,
+    "move_pct": 3.58
+   },
+   {
+    "date": "2022-03-03",
+    "timing": "amc",
+    "eps_estimate": 0.81,
+    "eps_actual": 0.84,
+    "surprise_pct": 3.7,
+    "gap_pct": 2.45,
+    "move_pct": 3.01
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 8,
+   "misses": 0,
+   "avg_abs_move_pct": 3.4,
+   "max_abs_move_pct": 5.7,
+   "atr_pct": 2.69
+  },
+  "unknown": []
+ }
+}

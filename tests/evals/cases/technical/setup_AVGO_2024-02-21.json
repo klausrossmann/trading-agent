@@ -1,0 +1,202 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "AVGO",
+  "name": "Broadcom",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Information Technology",
+  "as_of": "2024-02-21",
+  "close": 122.75,
+  "change_pct": {
+   "1d": 0.07,
+   "5d": -1.93,
+   "20d": 0.09,
+   "63d": 25.54
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 54.0,
+   "macd": 2.794,
+   "macd_signal": 3.601,
+   "macd_hist": -0.807,
+   "atr14": 3.3,
+   "atr_pct": 2.69,
+   "bb_pct_b": 0.41,
+   "sma100": 102.77,
+   "close_vs_ema20_pct": 0.08,
+   "close_vs_sma50_pct": 5.88,
+   "close_vs_sma200_pct": 32.31,
+   "rs_vs_benchmark_63d_pct": 13.82
+  },
+  "volume": {
+   "avg20": 25775700.0,
+   "avg50": 33943120.0,
+   "avg20_vs_avg50": 0.76,
+   "last_vs_avg20": 0.8,
+   "up_vs_down_volume_20d": 1.15
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 122.75,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 122.81,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 120.26,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 122.65,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 115.93,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 92.77,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 118.38,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 129.06,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 129.6,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 57.21,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 117.8,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 116.15,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 112.85,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 132.64,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 135.93,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 142.53,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 117.43,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 115.18,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 104.15,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 129.03,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "swing_low_last",
+    "price": 117.43,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 129.6,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 110.46,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 104.55,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 98.64,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.1",
     "pandas>=3.0.6",
     "pydantic>=2.13.5",
+    "pydantic-ai-slim[google]>=2.54.0",
     "pydantic-settings>=2.15.0",
     "python-telegram-bot>=22,<23",
     "pyyaml>=6.0.3",

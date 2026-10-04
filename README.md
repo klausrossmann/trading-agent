@@ -40,7 +40,8 @@ Paper and live use the same code, risk limits and fee model. Live mode needs thr
 | M2 Calculators: indicators, levels, level menu, fees, sizing | done |
 | M3 Baseline strategy, simulator, `baseline_sim` book, backtest report | done; result and decision in [IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3 |
 | M4 Telegram: owner-only bot, `/status`, `/briefing`, alerts, morning briefing | done in the repo; bot token and chat ID pending on the Zenbook |
-| M2–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
+| M5 LLM modules: Gemini via PydanticAI, budget guard, cache, validators, `technical` and `earnings` modules, 30 golden eval cases | done in the repo; first scan and evals pending on the Zenbook |
+| M6–M10 | see [IMPLEMENTATION.md](IMPLEMENTATION.md), section 17 |
 
 ## Documentation
 
@@ -58,11 +59,13 @@ make test                # unit tests
 make test-db             # DB tests against a throwaway Postgres container
 ```
 
-On the runtime host:
+On the runtime host (full first-start runbook: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5):
 
 ```sh
 make secrets                              # create database password files in secrets/
 cp .env.example .env && chmod 600 .env    # then fill in the values
 docker compose up -d db && make migrate && make up
-docker compose run --rm agent trading-agent backfill   # load 5 years of data
+docker compose run --rm agent trading-agent backfill   # load 6 years of data
+docker compose run --rm agent trading-agent analyse    # LLM analysis of today's top setups
+uv run pytest -m llm tests/evals                       # golden-case evals with the real model
 ```

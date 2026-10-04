@@ -289,7 +289,7 @@ Own implementations, pure functions over pandas Series (pyright strict), unit-te
 | `levels.fib_levels(low, high, up_leg)` | 38.2 / 50 / 61.8 % retracements of the largest leg in the last 126 bars |
 | `trend.relative_strength(close, benchmark)` | 63-bar return relative to SPY (US) or EXS1.DE (EU) |
 | `trend.post_earnings_moves(frame, events)` | Gap and close move on the reaction day (event day for before-open, next day for after-close, both for unknown times) |
-| `levels.level_menu(frame)` | Named `LevelRef` list, rounded to cents: `close`, `last_high`, `last_low`, `ema20`, `sma50`, `sma200`, `bb_lower`, `bb_upper`, `high_52w`, `low_52w`, `atr_stop_1_5x`/`2x`/`3x`, `support_1..3`, `resistance_1..3`, `swing_low_last`, `swing_high_last`, `fib_382`/`500`/`618`. Levels without enough history are left out. |
+| `levels.level_menu(frame)` | Named `LevelRef` list, rounded to cents: `close`, `last_high`, `last_low`, `ema20`, `sma50`, `sma200`, `bb_lower`, `bb_upper`, `high_52w`, `low_52w`, `atr_stop_1_5x`/`2x`/`3x`, `atr_target_3x`/`4x`/`6x` (close + k × ATR, added in M5 so a 2R target exists near highs), `support_1..3`, `resistance_1..3`, `swing_low_last`, `swing_high_last`, `fib_382`/`500`/`618`. Levels without enough history are left out. |
 | `fees.order_fees(...)`, `fees.round_trip_fees(...)` | From `config/fees.yaml` (checked against IBKR's pricing page); Tiered or Fixed per market, minimums and caps, estimated third-party and US sell-side regulatory fees, rounded up to the cent |
 | `sizing.position_size(...)` | Formula from section 9.2 in the instrument currency; returns the binding limit, or quantity 0 with a reason. Property tests (`hypothesis`) check that no result breaks a limit and that it is the largest quantity that fits. |
 
@@ -373,7 +373,7 @@ def technical_output_type(menu: list[LevelRef]) -> type[BaseModel]:
 
 ```python
 agent = Agent(
-    models.for_role("analysis"),             # e.g. "google-gla:gemini-3.8-flash"
+    models.for_role("analysis"),             # e.g. "google:gemini-3.8-flash"
     output_type=technical_output_type(menu),
     instructions=load_prompt("technical", version=1),
     retries=2,
@@ -400,13 +400,13 @@ budget.record(result.usage(), role="analysis", module="technical")
 
 ```yaml
 roles:
-  triage:    google-gla:gemini-3.1-flash-lite     # verify provider prefix and model ids at setup
-  analysis:  google-gla:gemini-3.8-flash
-  proposer:  google-gla:gemini-3.8-flash
+  triage:    google:gemini-3.1-flash-lite         # PydanticAI 2.x prefix is "google:" (was "google-gla:")
+  analysis:  google:gemini-3.8-flash
+  proposer:  google:gemini-3.8-flash
   critic:    anthropic:claude-sonnet-5-5
-  reports:   google-gla:gemini-3.8-flash
-dev_overrides:                                     # Phase 0–1, free tier
-  analysis:  google-gla:gemini-3.8-flash
+  reports:   google:gemini-3.8-flash
+dev_overrides:                                     # Phase 0–1 (LLM_DEV_OVERRIDES=true)
+  critic:    google:gemini-3.8-flash
 budget:
   monthly_usd: 16                                  # ≈ €15
   lean_mode_at: 0.8
@@ -423,6 +423,20 @@ batch:
 
 - Unit tests use PydanticAI's `TestModel` / `FunctionModel`, so no API calls and no keys are needed in CI.
 - `tests/evals/`: about 30 golden cases (recorded inputs from real days) with expected validator results and plausibility checks. They run weekly with the real models and cost a few cents.
+
+### 7.7 Implementation (M5, 2026-10-04)
+
+| Part | Where | Notes |
+|---|---|---|
+| Model registry | `config/models.yaml`, `llm/models.py` | Role → model, `dev_overrides` (`LLM_DEV_OVERRIDES`), dated list prices (Gemini 3.8 Flash $0.75/$3.75 per 1M tokens until 2026-12-31, then $1.50/$7.50; 3.1 Flash-Lite $0.25/$1.50), pacing per model (`rate_limits_rpm`), candidates per scan (10, lean 5). A model without a price is never called. Keys go to the provider explicitly, never into `os.environ`. |
+| Runner | `llm/runner.py` | Per analysis: cache lookup → price and budget check → paced call → validators → at most one corrective retry with the errors fed back → `finalize` (caps) → store. HTTP 429/5xx are retried after 20 s and 60 s. Token usage is recorded even for failed runs. |
+| Budget guard | `llm/budget.py` | Month-to-date spend from `llm_calls`: `normal`, `lean` (≥ 80 %), `stopped` (≥ 100 %, no calls). |
+| Prompts, sanitizer | `prompts/<module>/v1.md`, `llm/prompts.py`, `llm/sanitize.py` | Front matter is checked (`version` = file name, known `role`). The sanitizer is ready for news in M7; the M5 modules only see calculator output. |
+| Validators | `llm/validators.py` | Errors (retry, then `rejected`): level order, R:R ≥ `risk.yaml` `min_risk_reward` (1 % slack for cent rounding), stop 1–4 × ATR14, `data_gaps` when the input lists `unknown` fields, earnings stance vs. `event_in_window`. Warning: numbers in free text not found in the input (±0.5 %; small counts and standard indicator periods allowed) cap confidence at 0.5. |
+| Modules | `modules/technical.py`, `modules/earnings.py`, `modules/history.py` | Technical: trend, momentum, volume and the level menu in; rating, `setup_quality`, entry/stop/target refs (dynamic `Literal`, so only menu names validate). Earnings: next report vs. the holding window (entry validity + time stop = 17 sessions; after-close reports react one session later), last 8 reports with surprise, gap and move. History is cut at `as_of`; future EPS actuals never reach the prompt. |
+| Tables | migration `0004` | `analyses` (unique `input_hash`, input and output JSON, issues, status, cost) and `llm_calls` (role, model, tokens, cost, latency, error). |
+| Scan | `trading-agent analyse [SYMBOLS] [--market] [--top]` | Today's top baseline setups (or the given symbols), both modules, cost logged as `scan.done`. Not scheduled yet: the daily scans start with the agents in M7. `/budget` shows the month's spend. |
+| Evals | `tests/evals/`, `scripts/export_eval_cases.py` | 30 cases recorded from real days (18 setups, 2 downtrends that must not be rated buy, 10 earnings cases in and outside the window). The schema check runs in CI; the model run is `pytest -m llm` on the Zenbook. |
 
 ---
 
@@ -617,7 +631,7 @@ Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start 
 | `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
 
-Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. The others arrive with the features they report on.
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
@@ -695,7 +709,8 @@ IB_CLIENT_ID=11
 TWS_USERID=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_OWNER_CHAT_ID=
-GEMINI_API_KEY=                     # check the exact variable name in PydanticAI's Google provider docs
+GEMINI_API_KEY=                     # Google AI Studio key; passed to PydanticAI explicitly
+LLM_DEV_OVERRIDES=true              # Phase 0–1
 ANTHROPIC_API_KEY=
 FINNHUB_API_KEY=
 FRED_API_KEY=
@@ -777,6 +792,27 @@ secrets:
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
 - Moving to the mini PC: the same preparation as 15.1, copy `.env` and `secrets/`, restore the latest dump, `docker compose up -d`, then confirm reconciliation is clean before shutting down the Zenbook stack.
 
+### 15.5 First start on the Zenbook (runbook, state after M5)
+
+Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋.
+
+1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl`.
+2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
+3. **Secrets**: `make secrets` creates the database passwords in `secrets/`.
+4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
+   - `FRED_API_KEY`: free, fred.stlouisfed.org → My Account → API Keys.
+   - `TELEGRAM_BOT_TOKEN`: from `@BotFather` (`/newbot`). Leave `TELEGRAM_OWNER_CHAT_ID` empty for now.
+   - `GEMINI_API_KEY`: aistudio.google.com → Get API key (free tier, no billing needed), and `LLM_DEV_OVERRIDES=true`.
+   - Optional: `HEARTBEAT_URL` (e.g. healthchecks.io). `SEC_EDGAR_USER_AGENT`, `FINNHUB_API_KEY`, `ANTHROPIC_API_KEY` and the IBKR values aren't used yet.
+5. **Build and migrate**: `make build && docker compose up -d db && make migrate`.
+6. **Backfill** (several minutes): `docker compose run --rm agent trading-agent backfill` 📋, then the same command again (should report zero inserts and updates), then `docker compose run --rm agent trading-agent quality` 📋.
+7. **Start**: `make up`, then `make logs` until `agent.started` appears (Ctrl-C leaves the agent running).
+8. **Telegram owner**: send your bot any message, then `docker compose logs agent | grep telegram.ignored` shows your `chat_id`. Put it into `.env` as `TELEGRAM_OWNER_CHAT_ID` and run `docker compose up -d agent` (recreates the container; `restart` would not re-read `.env`). Check `/status`, `/briefing` and `/budget` in Telegram.
+9. **LLM scan** (M5): `docker compose run --rm agent trading-agent analyse --top 3` 📋. Prints the rating, plan and earnings stance per symbol and the cost of the scan.
+10. **Evals** (M5): `curl -LsSf https://astral.sh/uv/install.sh | sh`, open a new shell, then in `~/trading-agent`: `uv sync && uv run pytest -m llm tests/evals` 📋 (the summary at the end lists all 30 cases and the total cost). Uses `GEMINI_API_KEY` from `.env`; with the free tier it takes a few minutes because calls are paced.
+
+After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
+
 ---
 
 ## 16. Development workflow and quality
@@ -792,7 +828,7 @@ secrets:
 ### 16.2 Tooling and checks
 
 - **On the Mac**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). Later `compose.dev.yaml` adds the simulator broker and PydanticAI's `TestModel`. No keys and no broker access are needed.
-- **On the Zenbook**: integration tests against the IBKR paper gateway (`pytest -m ibkr`), and evals against the real models (`pytest -m llm`).
+- **On the Zenbook**: integration tests against the IBKR paper gateway (`pytest -m ibkr`), and evals against the real models (`uv run pytest -m llm tests/evals`, reads `GEMINI_API_KEY` from `.env`; section 15.5).
 - **CI (GitHub Actions)**: `ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest -m "not ibkr and not llm"` (DB tests run against a Postgres service container) and a `docker build`. No secrets in CI. DB tests only run when `DB_NAME` ends in `_test`, because they drop tables.
 - **pre-commit**: ruff, end-of-file fixers, and a secret scanner (for example `gitleaks`).
 - Dependabot for dependency updates, with lockfile changes reviewed before deploying.

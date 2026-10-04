@@ -90,3 +90,19 @@ def test_alerts() -> None:
         "⚠️ Data quality EU: excluded from today's scan: X.DE (stale)"
     )
     assert m.job_alert("ingest_eod_us:2026-10-05", "HTTP 503").endswith("failed: HTTP 503")
+
+
+def test_budget_message() -> None:
+    text = m.render_budget(
+        m.BudgetSnapshot(
+            month=date(2026, 10, 1),
+            spent_usd=4.0,
+            monthly_usd=16.0,
+            mode="normal",
+            by_model=[("google:gemini-3.8-flash", 120, 3.5), ("google:x", 3, 0.5)],
+        )
+    )
+    assert text.splitlines()[0] == "💸 LLM budget Oct 2026: $4.00 of $16.00 (25 %), mode normal"
+    assert "  google:gemini-3.8-flash: 120 calls, $3.5000" in text
+    empty = m.render_budget(m.BudgetSnapshot(date(2026, 10, 1), 0.0, 16.0, "normal", []))
+    assert "no calls this month" in empty

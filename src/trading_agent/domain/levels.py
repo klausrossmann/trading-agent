@@ -6,7 +6,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 LevelKind = Literal[
-    "price", "ma", "band", "support", "resistance", "swing", "fib", "range", "atr_stop"
+    "price",
+    "ma",
+    "band",
+    "support",
+    "resistance",
+    "swing",
+    "fib",
+    "range",
+    "atr_stop",
+    "atr_target",
 ]
 
 

@@ -213,6 +213,24 @@ async def upcoming_earnings(
     return [(i, d, t) for i, d, t in await session.execute(stmt)]
 
 
+async def earnings_events(session: AsyncSession, instrument_id: int) -> list[EarningsEvent]:
+    stmt = (
+        select(EarningsEventRow)
+        .where(EarningsEventRow.instrument_id == instrument_id)
+        .order_by(EarningsEventRow.date)
+    )
+    return [
+        EarningsEvent(
+            date=r.date,
+            ts=r.ts,
+            timing=r.timing,  # pyright: ignore[reportArgumentType]  # validated on insert
+            eps_estimate=r.eps_estimate,
+            eps_actual=r.eps_actual,
+        )
+        for r in await session.scalars(stmt)
+    ]
+
+
 async def fx_rates(session: AsyncSession, quote: str) -> list[Observation]:
     stmt = select(FxDailyRow).where(FxDailyRow.quote == quote).order_by(FxDailyRow.date)
     return [Observation(date=r.date, value=r.rate) for r in await session.scalars(stmt)]

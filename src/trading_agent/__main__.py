@@ -1,7 +1,7 @@
 import asyncio
 from collections import defaultdict
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import typer
 
@@ -9,11 +9,16 @@ from trading_agent.data.quality import QualityIssue
 from trading_agent.domain.market import Market
 from trading_agent.settings import Settings
 
+if TYPE_CHECKING:
+    from trading_agent.jobs import SymbolAnalysis
+
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 MarketOption = typer.Option(None, help="US or EU; default both.")
 YearsOption = typer.Option(5, help="Trading period in years, ending at the last stored bar.")
 OutputOption = typer.Option(None, help="Also write the report to this file.")
+SymbolsArgument = typer.Argument(None, help="Yahoo symbols, e.g. AAPL SAP.DE; default top setups.")
+TopOption = typer.Option(None, help="Number of baseline setups; default from models.yaml.")
 
 
 @app.callback()
@@ -193,6 +198,72 @@ def backtest(
     typer.echo(text)
     if output:
         output.write_text(text, encoding="utf-8")
+
+
+def _plan_line(item: "SymbolAnalysis") -> str:
+    out = item.technical.output
+    if out is None:
+        return f"technical {item.technical.status} ({item.technical.reason})"
+    line = f"{out.rating} q={out.setup_quality:.2f}"
+    if out.entry_ref and out.stop_ref and out.target_ref:
+        price = {lv.name: lv.price for lv in item.technical_input.levels}
+        entry, stop, target = price[out.entry_ref], price[out.stop_ref], price[out.target_ref]
+        rr = (target - entry) / (entry - stop) if entry > stop else float("nan")
+        line += (
+            f"  entry {out.entry_ref} {entry:.2f} / stop {out.stop_ref} {stop:.2f} / "
+            f"target {out.target_ref} {target:.2f} (R:R {rr:.1f})"
+        )
+    return line
+
+
+@app.command()
+def analyse(
+    symbols: list[str] | None = SymbolsArgument,
+    market: Literal["US", "EU"] | None = MarketOption,
+    top: int | None = TopOption,
+) -> None:
+    """LLM technical and earnings analysis of today's top baseline setups (or given symbols)."""
+    from trading_agent import jobs
+    from trading_agent.data.universe import load_universe
+    from trading_agent.db.session import create_engine, session_factory
+
+    settings = _settings()
+
+    async def _run() -> jobs.ScanResult:
+        engine = create_engine(settings.database_url)
+        try:
+            ctx = jobs.AnalysisContext.build(
+                settings, session_factory(engine), load_universe(settings.config_dir)
+            )
+            return await jobs.analyse(ctx, symbols or None, market, top)
+        finally:
+            await engine.dispose()
+
+    result = asyncio.run(_run())
+    for item in result.items:
+        e = item.earnings.output
+        earnings = (
+            f"{e.stance} (risk {e.event_risk})"
+            if e
+            else f"{item.earnings.status} ({item.earnings.reason})"
+        )
+        flags = [
+            f"{o.module} {o.status}"
+            for o in item.outcomes
+            if o.status != "ok" and o.output is not None
+        ]
+        typer.echo(f"{item.symbol:<9} {_plan_line(item)}")
+        typer.echo(f"{'':<9} earnings: {earnings}" + (f"  [{', '.join(flags)}]" if flags else ""))
+    outcomes = [o for i in result.items for o in i.outcomes]
+    typer.echo(
+        f"{len(result.items)} symbols, {len(outcomes)} analyses "
+        f"({sum(1 for o in outcomes if o.cached)} cached), cost ${result.cost_usd:.4f}, "
+        f"budget mode {result.mode}"
+    )
+    if result.missing:
+        typer.echo(f"no data: {', '.join(result.missing)}")
+    if any(o.status in ("failed", "skipped") for o in outcomes):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "ORCL",
+  "name": "Oracle Corporation",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Information Technology",
+  "as_of": "2023-12-06",
+  "close": 112.03,
+  "change_pct": {
+   "1d": -2.18,
+   "5d": -3.6,
+   "20d": 2.79,
+   "63d": -10.44
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 45.0,
+   "macd": 1.423,
+   "macd_signal": 1.922,
+   "macd_hist": -0.498,
+   "atr14": 2.1,
+   "atr_pct": 1.87,
+   "bb_pct_b": 0.02,
+   "sma100": 113.04,
+   "close_vs_ema20_pct": -1.79,
+   "close_vs_sma50_pct": 1.99,
+   "close_vs_sma200_pct": 5.04,
+   "rs_vs_benchmark_63d_pct": -12.39
+  },
+  "volume": {
+   "avg20": 6288165.0,
+   "avg50": 6985942.0,
+   "avg20_vs_avg50": 0.9,
+   "last_vs_avg20": 1.24,
+   "up_vs_down_volume_20d": 1.04
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 112.03,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 114.99,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 111.93,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 114.07,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 109.84,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 106.66,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 111.92,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 118.28,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 127.54,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 78.06,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 108.88,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 107.83,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 105.73,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 118.33,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 120.43,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 124.63,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 111.43,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_2",
+    "price": 107.3,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 103.27,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 113.43,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 117.87,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_3",
+    "price": 121.55,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "swing_low_last",
+    "price": 99.87,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 117.67,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 110.44,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 113.71,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 116.97,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

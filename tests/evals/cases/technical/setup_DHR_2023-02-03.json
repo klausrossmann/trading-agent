@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "DHR",
+  "name": "Danaher Corporation",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Health Care",
+  "as_of": "2023-02-03",
+  "close": 239.23,
+  "change_pct": {
+   "1d": -0.31,
+   "5d": 1.45,
+   "20d": 5.73,
+   "63d": 11.26
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 53.0,
+   "macd": 0.651,
+   "macd_signal": 0.807,
+   "macd_hist": -0.156,
+   "atr14": 6.01,
+   "atr_pct": 2.51,
+   "bb_pct_b": 0.57,
+   "sma100": 234.1,
+   "close_vs_ema20_pct": 0.83,
+   "close_vs_sma50_pct": 1.24,
+   "close_vs_sma200_pct": 1.9,
+   "rs_vs_benchmark_63d_pct": 1.15
+  },
+  "volume": {
+   "avg20": 3282615.0,
+   "avg50": 2810250.0,
+   "avg20_vs_avg50": 1.17,
+   "last_vs_avg20": 0.58,
+   "up_vs_down_volume_20d": 1.54
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 239.23,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 240.51,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 236.15,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 237.25,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 236.31,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 234.77,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 226.7,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 248.78,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 269.34,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 207.19,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 230.21,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 227.2,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 221.18,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 257.27,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 263.29,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 275.32,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 238.83,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 236.75,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_3",
+    "price": 230.16,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 242.54,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 247.05,
+    "kind": "resistance",
+    "touches": 4
+   },
+   {
+    "name": "resistance_3",
+    "price": 250.98,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "swing_low_last",
+    "price": 214.96,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 247.62,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 231.54,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 238.76,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 245.98,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

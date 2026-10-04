@@ -1,0 +1,208 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "MTX.DE",
+  "name": "MTU Aero Engines",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Aerospace & Defence",
+  "as_of": "2025-02-04",
+  "close": 328.8,
+  "change_pct": {
+   "1d": -1.35,
+   "5d": -0.99,
+   "20d": 3.1,
+   "63d": 9.34
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 50.8,
+   "macd": 2.24,
+   "macd_signal": 2.926,
+   "macd_hist": -0.686,
+   "atr14": 7.54,
+   "atr_pct": 2.29,
+   "bb_pct_b": 0.46,
+   "sma100": 309.97,
+   "close_vs_ema20_pct": -0.14,
+   "close_vs_sma50_pct": 1.49,
+   "close_vs_sma200_pct": 18.61,
+   "rs_vs_benchmark_63d_pct": -3.0
+  },
+  "volume": {
+   "avg20": 103780.0,
+   "avg50": 111608.0,
+   "avg20_vs_avg50": 0.93,
+   "last_vs_avg20": 0.4,
+   "up_vs_down_volume_20d": 1.19
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 328.8,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 335.5,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 328.8,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 329.26,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 323.97,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 277.21,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 316.38,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 343.26,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 350.2,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 208.7,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 317.5,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 313.73,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 306.19,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 351.41,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 358.94,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 374.01,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 328.65,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_2",
+    "price": 320.2,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 316.15,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 332.6,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 350.2,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 320.2,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 350.2,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 313.03,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 301.55,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 290.07,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

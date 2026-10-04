@@ -161,8 +161,33 @@ def render_status(s: StatusSnapshot) -> str:
         f"Blocked symbols: {blocked}",
         "Next jobs:",
         *[f"  {name} {when:%a %d %b %H:%M}" for name, when in s.next_jobs],
-        "Broker: not connected (IBKR from M6) · LLM: not in use (M5) · Kill switch: M8",
+        "Broker: not connected (IBKR from M6) · LLM spend: /budget · Kill switch: M8",
     ]
+    return "\n".join(lines)
+
+
+# --- LLM budget ---
+
+
+@dataclass(frozen=True)
+class BudgetSnapshot:
+    month: date
+    spent_usd: float
+    monthly_usd: float
+    mode: str  # normal / lean / stopped
+    by_model: Sequence[tuple[str, int, float]]  # model, calls, USD
+
+
+def render_budget(b: BudgetSnapshot) -> str:
+    used = b.spent_usd / b.monthly_usd * 100 if b.monthly_usd else 0.0
+    lines = [
+        f"💸 LLM budget {b.month:%b %Y}: ${b.spent_usd:.2f} of ${b.monthly_usd:.2f} "
+        f"({used:.0f} %), mode {b.mode}",
+    ]
+    lines += [f"  {model}: {calls} calls, ${usd:.4f}" for model, calls, usd in b.by_model]
+    if not b.by_model:
+        lines.append("  no calls this month")
+    lines.append("Costs are estimated from list prices (config/models.yaml).")
     return "\n".join(lines)
 
 

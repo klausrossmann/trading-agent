@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "COF",
+  "name": "Capital One",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Financials",
+  "as_of": "2023-08-02",
+  "close": 113.25,
+  "change_pct": {
+   "1d": -2.77,
+   "5d": -0.69,
+   "20d": 3.78,
+   "63d": 26.47
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 51.1,
+   "macd": 1.742,
+   "macd_signal": 2.037,
+   "macd_hist": -0.295,
+   "atr14": 2.95,
+   "atr_pct": 2.61,
+   "bb_pct_b": 0.46,
+   "sma100": 101.9,
+   "close_vs_ema20_pct": -0.44,
+   "close_vs_sma50_pct": 2.67,
+   "close_vs_sma200_pct": 10.36,
+   "rs_vs_benchmark_63d_pct": 15.43
+  },
+  "volume": {
+   "avg20": 2786930.0,
+   "avg50": 2769270.0,
+   "avg20_vs_avg50": 1.01,
+   "last_vs_avg20": 0.83,
+   "up_vs_down_volume_20d": 1.45
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 113.25,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 114.74,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 111.66,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 113.75,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 110.31,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 102.62,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 108.05,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 119.44,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 123.09,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 83.93,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 108.82,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 107.35,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 104.4,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 122.1,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 125.05,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 130.95,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 111.48,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_2",
+    "price": 108.33,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 105.35,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 114.66,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_2",
+    "price": 116.55,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_3",
+    "price": 118.68,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "swing_low_last",
+    "price": 105.55,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 118.96,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 98.89,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 103.51,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 108.13,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

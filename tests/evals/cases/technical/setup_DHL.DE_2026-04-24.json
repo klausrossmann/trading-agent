@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "DHL.DE",
+  "name": "Deutsche Post",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Logistics",
+  "as_of": "2026-04-24",
+  "close": 47.79,
+  "change_pct": {
+   "1d": -0.31,
+   "5d": -4.69,
+   "20d": 6.25,
+   "63d": 3.89
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 50.8,
+   "macd": 0.618,
+   "macd_signal": 0.589,
+   "macd_hist": 0.029,
+   "atr14": 1.09,
+   "atr_pct": 2.28,
+   "bb_pct_b": 0.54,
+   "sma100": 47.25,
+   "close_vs_ema20_pct": -0.19,
+   "close_vs_sma50_pct": 0.95,
+   "close_vs_sma200_pct": 9.63,
+   "rs_vs_benchmark_63d_pct": 7.39
+  },
+  "volume": {
+   "avg20": 2066974.0,
+   "avg50": 2420377.0,
+   "avg20_vs_avg50": 0.85,
+   "last_vs_avg20": 0.87,
+   "up_vs_down_volume_20d": 1.34
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 47.79,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 48.07,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 47.22,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 47.88,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 47.34,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 43.59,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 43.89,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 51.17,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 51.72,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 36.34,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 46.16,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 45.61,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 44.52,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 51.06,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 52.15,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 54.33,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 47.5,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 46.36,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 45.74,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 48.48,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "resistance_2",
+    "price": 50.2,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_3",
+    "price": 51.72,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 42.65,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 50.26,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 46.77,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 45.24,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 43.71,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

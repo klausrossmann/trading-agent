@@ -1,0 +1,202 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "SHL.DE",
+  "name": "Siemens Healthineers",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Medical Equipment",
+  "as_of": "2024-03-21",
+  "close": 55.26,
+  "change_pct": {
+   "1d": 0.51,
+   "5d": -2.44,
+   "20d": 1.54,
+   "63d": 3.41
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 48.4,
+   "macd": 0.353,
+   "macd_signal": 0.64,
+   "macd_hist": -0.287,
+   "atr14": 1.0,
+   "atr_pct": 1.82,
+   "bb_pct_b": 0.27,
+   "sma100": 52.74,
+   "close_vs_ema20_pct": -0.84,
+   "close_vs_sma50_pct": 1.77,
+   "close_vs_sma200_pct": 9.28,
+   "rs_vs_benchmark_63d_pct": -4.64
+  },
+  "volume": {
+   "avg20": 662610.0,
+   "avg50": 639020.0,
+   "avg20_vs_avg50": 1.04,
+   "last_vs_avg20": 0.73,
+   "up_vs_down_volume_20d": 1.45
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 55.26,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 55.74,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 54.8,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 55.73,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 54.3,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 50.57,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 54.34,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 57.79,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 58.14,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 44.39,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 53.75,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 53.25,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 52.25,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 58.27,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 59.27,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 61.28,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 55.24,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 54.15,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_3",
+    "price": 53.36,
+    "kind": "support",
+    "touches": 4
+   },
+   {
+    "name": "resistance_1",
+    "price": 57.98,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "swing_low_last",
+    "price": 52.24,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 58.14,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 53.32,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 51.83,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 50.33,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

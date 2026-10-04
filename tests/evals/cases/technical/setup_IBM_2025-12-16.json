@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "IBM",
+  "name": "IBM",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Information Technology",
+  "as_of": "2025-12-16",
+  "close": 303.18,
+  "change_pct": {
+   "1d": -1.78,
+   "5d": -2.35,
+   "20d": 2.02,
+   "63d": 17.02
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 48.6,
+   "macd": 2.599,
+   "macd_signal": 3.014,
+   "macd_hist": -0.415,
+   "atr14": 7.45,
+   "atr_pct": 2.46,
+   "bb_pct_b": 0.48,
+   "sma100": 277.95,
+   "close_vs_ema20_pct": -0.85,
+   "close_vs_sma50_pct": 1.12,
+   "close_vs_sma200_pct": 12.58,
+   "rs_vs_benchmark_63d_pct": 13.63
+  },
+  "volume": {
+   "avg20": 3591750.0,
+   "avg50": 5005610.0,
+   "avg20_vs_avg50": 0.72,
+   "last_vs_avg20": 0.94,
+   "up_vs_down_volume_20d": 1.17
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 303.18,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 307.38,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 300.42,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 305.78,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 299.83,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 269.3,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 289.94,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 317.75,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 324.9,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 214.5,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 292.01,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 288.28,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 280.83,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 325.53,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 332.98,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 347.87,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 301.04,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 295.92,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_3",
+    "price": 288.08,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 315.35,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 319.35,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_3",
+    "price": 324.9,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 288.07,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 315.35,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 289.93,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 279.13,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 268.33,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "MCD",
+  "name": "McDonald's",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Consumer Discretionary",
+  "as_of": "2025-03-12",
+  "close": 299.4,
+  "change_pct": {
+   "1d": -2.4,
+   "5d": -2.62,
+   "20d": -3.48,
+   "63d": 0.14
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 45.3,
+   "macd": 3.218,
+   "macd_signal": 4.085,
+   "macd_hist": -0.867,
+   "atr14": 7.36,
+   "atr_pct": 2.46,
+   "bb_pct_b": 0.07,
+   "sma100": 296.95,
+   "close_vs_ema20_pct": -2.23,
+   "close_vs_sma50_pct": 0.9,
+   "close_vs_sma200_pct": 4.88,
+   "rs_vs_benchmark_63d_pct": 8.91
+  },
+  "volume": {
+   "avg20": 3801635.0,
+   "avg50": 3379182.0,
+   "avg20_vs_avg50": 1.13,
+   "last_vs_avg20": 1.2,
+   "up_vs_down_volume_20d": 0.93
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 299.4,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 306.43,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 296.35,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 306.22,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 296.73,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 285.46,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 297.99,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 317.43,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 326.32,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 243.53,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 288.36,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 284.68,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 277.32,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 321.48,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 328.84,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 343.56,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 296.37,
+    "kind": "support",
+    "touches": 3
+   },
+   {
+    "name": "support_2",
+    "price": 290.3,
+    "kind": "support",
+    "touches": 4
+   },
+   {
+    "name": "support_3",
+    "price": 284.55,
+    "kind": "support",
+    "touches": 5
+   },
+   {
+    "name": "resistance_1",
+    "price": 303.35,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "resistance_2",
+    "price": 306.96,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_3",
+    "price": 313.07,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "swing_low_last",
+    "price": 298.15,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 314.55,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 307.3,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 301.42,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 295.55,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

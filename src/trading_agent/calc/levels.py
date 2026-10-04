@@ -15,6 +15,8 @@ from trading_agent.domain.levels import LevelKind, LevelRef
 
 FIB_RATIOS = {"fib_382": 0.382, "fib_500": 0.5, "fib_618": 0.618}
 ATR_STOPS = {"atr_stop_1_5x": 1.5, "atr_stop_2x": 2.0, "atr_stop_3x": 3.0}
+# Targets above the close: with stops 1.5-3 x ATR below, these allow a 2R plan near highs.
+ATR_TARGETS = {"atr_target_3x": 3.0, "atr_target_4x": 4.0, "atr_target_6x": 6.0}
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,8 @@ def level_menu(
     if math.isfinite(atr_now):
         for name, k in ATR_STOPS.items():
             add(name, close - k * atr_now, "atr_stop")
+        for name, k in ATR_TARGETS.items():
+            add(name, close + k * atr_now, "atr_target")
 
         points = swing_points(recent["high"], recent["low"], swing_lookback)
         found = zones(points, zone_atr_fraction * atr_now)

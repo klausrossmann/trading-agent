@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "CBK.DE",
+  "name": "Commerzbank",
+  "market": "EU",
+  "sector": "Financial Services",
+  "as_of": "2025-07-18",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2025-08-06",
+   "timing": "bmo",
+   "sessions_until": 13,
+   "eps_estimate": 0.62
+  },
+  "event_in_window": true,
+  "history": [
+   {
+    "date": "2025-05-09",
+    "timing": "during",
+    "eps_estimate": 0.64,
+    "eps_actual": 0.76,
+    "surprise_pct": 18.8,
+    "gap_pct": 0.82,
+    "move_pct": 4.36
+   },
+   {
+    "date": "2025-02-13",
+    "timing": "during",
+    "eps_estimate": 0.39,
+    "eps_actual": 0.63,
+    "surprise_pct": 61.5,
+    "gap_pct": 2.5,
+    "move_pct": 1.6
+   },
+   {
+    "date": "2024-11-06",
+    "timing": "bmo",
+    "eps_estimate": 0.42,
+    "eps_actual": 0.54,
+    "surprise_pct": 28.6,
+    "gap_pct": -0.57,
+    "move_pct": -2.98
+   },
+   {
+    "date": "2024-08-07",
+    "timing": "during",
+    "eps_estimate": 0.48,
+    "eps_actual": 0.29,
+    "surprise_pct": -39.6,
+    "gap_pct": -2.69,
+    "move_pct": -3.72
+   },
+   {
+    "date": "2024-05-15",
+    "timing": "bmo",
+    "eps_estimate": 0.52,
+    "eps_actual": 0.62,
+    "surprise_pct": 19.2,
+    "gap_pct": 2.06,
+    "move_pct": 5.13
+   },
+   {
+    "date": "2024-02-15",
+    "timing": "bmo",
+    "eps_estimate": 0.32,
+    "eps_actual": 0.32,
+    "surprise_pct": 0.0,
+    "gap_pct": 3.05,
+    "move_pct": 5.53
+   },
+   {
+    "date": "2023-11-08",
+    "timing": "bmo",
+    "eps_estimate": 0.48,
+    "eps_actual": 0.56,
+    "surprise_pct": 16.7,
+    "gap_pct": 1.97,
+    "move_pct": 0.72
+   },
+   {
+    "date": "2023-08-04",
+    "timing": "bmo",
+    "eps_estimate": 0.53,
+    "eps_actual": 0.3,
+    "surprise_pct": -43.4,
+    "gap_pct": 0.0,
+    "move_pct": -2.64
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 5,
+   "misses": 2,
+   "avg_abs_move_pct": 3.33,
+   "max_abs_move_pct": 5.53,
+   "atr_pct": 3.16
+  },
+  "unknown": []
+ }
+}

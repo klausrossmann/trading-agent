@@ -1,0 +1,208 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "DB1.DE",
+  "name": "Deutsche Börse",
+  "market": "EU",
+  "currency": "EUR",
+  "sector": "Financial Services",
+  "as_of": "2025-04-16",
+  "close": 269.3,
+  "change_pct": {
+   "1d": -0.66,
+   "5d": 7.21,
+   "20d": -0.99,
+   "63d": 16.93
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 54.5,
+   "macd": 1.8,
+   "macd_signal": 2.118,
+   "macd_hist": -0.318,
+   "atr14": 7.27,
+   "atr_pct": 2.7,
+   "bb_pct_b": 0.6,
+   "sma100": 242.51,
+   "close_vs_ema20_pct": 1.64,
+   "close_vs_sma50_pct": 4.16,
+   "close_vs_sma200_pct": 21.05,
+   "rs_vs_benchmark_63d_pct": 14.91
+  },
+  "volume": {
+   "avg20": 678052.0,
+   "avg50": 507299.0,
+   "avg20_vs_avg50": 1.34,
+   "last_vs_avg20": 0.81,
+   "up_vs_down_volume_20d": 1.28
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 269.3,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 271.3,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 264.9,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 264.96,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 258.54,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 222.47,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 250.83,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 281.82,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 284.7,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 175.9,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 258.39,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 254.75,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 247.48,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 291.12,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 298.39,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 312.94,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 262.7,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 245.1,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 225.7,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 274.6,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 284.7,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 245.1,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 284.7,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 254.64,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 245.35,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 236.06,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

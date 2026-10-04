@@ -152,7 +152,10 @@ def alert_on_job_failures(
 
 
 def commands(
-    state: jobs.RuntimeState, sessions: jobs.Sessions, book: jobs.BookContext
+    state: jobs.RuntimeState,
+    sessions: jobs.Sessions,
+    book: jobs.BookContext,
+    analysis: jobs.AnalysisContext | None = None,
 ) -> dict[str, Command]:
     async def status(_: list[str]) -> str:
         return await jobs.status_text(state, sessions)
@@ -160,10 +163,17 @@ def commands(
     async def briefing(_: list[str]) -> str:
         return await jobs.briefing_text(book, state, datetime.now(UTC).date())
 
-    return {
+    out = {
         "status": Command("mode, heartbeat, data and next jobs", status),
         "briefing": Command("the morning briefing, now", briefing),
     }
+    if analysis is not None:
+
+        async def budget(_: list[str]) -> str:
+            return await jobs.budget_text(analysis)
+
+        out["budget"] = Command("LLM spend this month and the budget mode", budget)
+    return out
 
 
 async def serve(
@@ -189,10 +199,11 @@ async def serve(
         )
         state = jobs.RuntimeState(mode=settings.app_mode, started_at=datetime.now(UTC))
         book = jobs.BookContext.load(settings.config_dir, sessions, universe)
+        analysis = jobs.AnalysisContext.build(settings, sessions, universe)
         notifier = build_notifier(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
-            commands(state, sessions, book),
+            commands(state, sessions, book, analysis),
         )
         if isinstance(notifier, TelegramBot):
             notifier.start()

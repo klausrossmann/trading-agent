@@ -72,6 +72,10 @@ def test_level_menu_on_long_history() -> None:
     assert (
         menu["atr_stop_3x"].price < menu["atr_stop_2x"].price < menu["atr_stop_1_5x"].price < close
     )
+    targets = [menu[n].price for n in ("atr_target_3x", "atr_target_4x", "atr_target_6x")]
+    assert close < targets[0] < targets[1] < targets[2]
+    # Symmetric around the close: 3 x ATR up mirrors 3 x ATR down (cent rounding aside).
+    assert abs((targets[0] - close) - (close - menu["atr_stop_3x"].price)) <= Decimal("0.01")
     supports = [menu[n] for n in ("support_1", "support_2", "support_3") if n in menu]
     resistances = [menu[n] for n in ("resistance_1", "resistance_2") if n in menu]
     assert supports

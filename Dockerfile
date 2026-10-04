@@ -17,6 +17,7 @@ COPY --from=build /app/.venv /app/.venv
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY config ./config
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY prompts ./prompts
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYDANTIC_AI_NO_BANNER=1
 USER agent
 CMD ["python", "-m", "trading_agent", "run"]

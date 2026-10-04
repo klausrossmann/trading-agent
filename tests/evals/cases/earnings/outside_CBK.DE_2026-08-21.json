@@ -1,0 +1,102 @@
+{
+ "module": "earnings",
+ "expect": {},
+ "input": {
+  "symbol": "CBK.DE",
+  "name": "Commerzbank",
+  "market": "EU",
+  "sector": "Financial Services",
+  "as_of": "2026-08-21",
+  "holding_window_sessions": 17,
+  "next_report": {
+   "date": "2026-11-05",
+   "timing": "during",
+   "sessions_until": 54,
+   "eps_estimate": 0.79
+  },
+  "event_in_window": false,
+  "history": [
+   {
+    "date": "2026-08-06",
+    "timing": "unknown",
+    "eps_estimate": 0.73,
+    "eps_actual": 0.63,
+    "surprise_pct": -13.7,
+    "gap_pct": -1.8,
+    "move_pct": -0.89
+   },
+   {
+    "date": "2026-05-08",
+    "timing": "bmo",
+    "eps_estimate": 0.74,
+    "eps_actual": 0.85,
+    "surprise_pct": 14.9,
+    "gap_pct": -1.0,
+    "move_pct": -3.93
+   },
+   {
+    "date": "2026-02-11",
+    "timing": "bmo",
+    "eps_estimate": 0.54,
+    "eps_actual": 1.13,
+    "surprise_pct": 109.3,
+    "gap_pct": -1.3,
+    "move_pct": -2.01
+   },
+   {
+    "date": "2025-11-06",
+    "timing": "bmo",
+    "eps_estimate": 0.59,
+    "eps_actual": 0.53,
+    "surprise_pct": -10.2,
+    "gap_pct": -1.72,
+    "move_pct": -2.0
+   },
+   {
+    "date": "2025-08-06",
+    "timing": "bmo",
+    "eps_estimate": 0.62,
+    "eps_actual": 0.35,
+    "surprise_pct": -43.5,
+    "gap_pct": 0.67,
+    "move_pct": 1.15
+   },
+   {
+    "date": "2025-05-09",
+    "timing": "during",
+    "eps_estimate": 0.64,
+    "eps_actual": 0.76,
+    "surprise_pct": 18.8,
+    "gap_pct": 0.82,
+    "move_pct": 4.36
+   },
+   {
+    "date": "2025-02-13",
+    "timing": "during",
+    "eps_estimate": 0.39,
+    "eps_actual": 0.63,
+    "surprise_pct": 61.5,
+    "gap_pct": 2.5,
+    "move_pct": 1.6
+   },
+   {
+    "date": "2024-11-06",
+    "timing": "bmo",
+    "eps_estimate": 0.42,
+    "eps_actual": 0.54,
+    "surprise_pct": 28.6,
+    "gap_pct": -0.57,
+    "move_pct": -2.98
+   }
+  ],
+  "stats": {
+   "reports_with_estimate": 8,
+   "beats": 5,
+   "misses": 3,
+   "avg_abs_move_pct": 2.37,
+   "max_abs_move_pct": 4.36,
+   "atr_pct": 1.99
+  },
+  "unknown": []
+ }
+}

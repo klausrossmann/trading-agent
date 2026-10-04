@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "BMY",
+  "name": "Bristol Myers Squibb",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Health Care",
+  "as_of": "2022-09-22",
+  "close": 71.29,
+  "change_pct": {
+   "1d": 2.63,
+   "5d": -0.68,
+   "20d": -1.56,
+   "63d": -8.24
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "sideways"
+  },
+  "indicators": {
+   "rsi14": 51.1,
+   "macd": -0.495,
+   "macd_signal": -0.715,
+   "macd_hist": 0.219,
+   "atr14": 1.69,
+   "atr_pct": 2.37,
+   "bb_pct_b": 0.73,
+   "sma100": 74.15,
+   "close_vs_ema20_pct": 0.82,
+   "close_vs_sma50_pct": -1.31,
+   "close_vs_sma200_pct": 0.46,
+   "rs_vs_benchmark_63d_pct": -7.3
+  },
+  "volume": {
+   "avg20": 11252460.0,
+   "avg50": 9581376.0,
+   "avg20_vs_avg50": 1.17,
+   "last_vs_avg20": 0.89,
+   "up_vs_down_volume_20d": 0.93
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 71.29,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 71.88,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 69.2,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 70.71,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 72.24,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 70.96,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 66.69,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 72.96,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 80.59,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 53.22,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 68.75,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 67.9,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 66.21,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 76.37,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 78.06,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 81.45,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 69.65,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 68.39,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 67.33,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 71.89,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "resistance_2",
+    "price": 73.49,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_3",
+    "price": 75.04,
+    "kind": "resistance",
+    "touches": 3
+   },
+   {
+    "name": "swing_low_last",
+    "price": 65.95,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 75.99,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 71.54,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 73.27,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 75.0,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

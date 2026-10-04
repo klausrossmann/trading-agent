@@ -1,0 +1,208 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "MMM",
+  "name": "3M",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Industrials",
+  "as_of": "2024-07-10",
+  "close": 101.67,
+  "change_pct": {
+   "1d": 1.99,
+   "5d": 0.05,
+   "20d": 1.0,
+   "63d": 9.78
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 53.6,
+   "macd": 0.403,
+   "macd_signal": 0.66,
+   "macd_hist": -0.258,
+   "atr14": 2.07,
+   "atr_pct": 2.04,
+   "bb_pct_b": 0.56,
+   "sma100": 92.99,
+   "close_vs_ema20_pct": 0.53,
+   "close_vs_sma50_pct": 1.52,
+   "close_vs_sma200_pct": 16.63,
+   "rs_vs_benchmark_63d_pct": 1.57
+  },
+  "volume": {
+   "avg20": 3622190.0,
+   "avg50": 4806664.0,
+   "avg20_vs_avg50": 0.75,
+   "last_vs_avg20": 1.25,
+   "up_vs_down_volume_20d": 1.03
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 101.67,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 101.83,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 98.26,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 101.13,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 100.15,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 87.18,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 99.89,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 103.09,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 106.04,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 71.36,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 98.56,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 97.52,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 95.45,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 107.89,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 109.96,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 114.11,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 99.7,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_2",
+    "price": 96.76,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "support_3",
+    "price": 95.67,
+    "kind": "support",
+    "touches": 1
+   },
+   {
+    "name": "resistance_1",
+    "price": 103.86,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "resistance_2",
+    "price": 106.04,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "swing_low_last",
+    "price": 96.76,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 104.04,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 94.43,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 90.85,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 87.26,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}

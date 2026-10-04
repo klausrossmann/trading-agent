@@ -1,0 +1,214 @@
+{
+ "module": "technical",
+ "expect": {},
+ "input": {
+  "symbol": "EMR",
+  "name": "Emerson Electric",
+  "market": "US",
+  "currency": "USD",
+  "sector": "Industrials",
+  "as_of": "2024-02-06",
+  "close": 94.26,
+  "change_pct": {
+   "1d": 0.92,
+   "5d": -0.52,
+   "20d": -1.58,
+   "63d": 2.49
+  },
+  "trend": {
+   "daily": "up",
+   "weekly": "up"
+  },
+  "indicators": {
+   "rsi14": 50.1,
+   "macd": -0.062,
+   "macd_signal": 0.153,
+   "macd_hist": -0.214,
+   "atr14": 1.65,
+   "atr_pct": 1.75,
+   "bb_pct_b": 0.47,
+   "sma100": 93.05,
+   "close_vs_ema20_pct": -0.04,
+   "close_vs_sma50_pct": 0.87,
+   "close_vs_sma200_pct": 3.34,
+   "rs_vs_benchmark_63d_pct": -9.81
+  },
+  "volume": {
+   "avg20": 2619690.0,
+   "avg50": 2617994.0,
+   "avg20_vs_avg50": 1.0,
+   "last_vs_avg20": 1.06,
+   "up_vs_down_volume_20d": 0.96
+  },
+  "levels": [
+   {
+    "name": "close",
+    "price": 94.26,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_high",
+    "price": 94.38,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "last_low",
+    "price": 93.03,
+    "kind": "price",
+    "touches": null
+   },
+   {
+    "name": "ema20",
+    "price": 94.3,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma50",
+    "price": 93.45,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "sma200",
+    "price": 91.21,
+    "kind": "ma",
+    "touches": null
+   },
+   {
+    "name": "bb_lower",
+    "price": 92.18,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "bb_upper",
+    "price": 96.61,
+    "kind": "band",
+    "touches": null
+   },
+   {
+    "name": "high_52w",
+    "price": 100.62,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "low_52w",
+    "price": 76.94,
+    "kind": "range",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_1_5x",
+    "price": 91.78,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_2x",
+    "price": 90.95,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_stop_3x",
+    "price": 89.3,
+    "kind": "atr_stop",
+    "touches": null
+   },
+   {
+    "name": "atr_target_3x",
+    "price": 99.22,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_4x",
+    "price": 100.87,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "atr_target_6x",
+    "price": 104.18,
+    "kind": "atr_target",
+    "touches": null
+   },
+   {
+    "name": "support_1",
+    "price": 94.2,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_2",
+    "price": 93.15,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "support_3",
+    "price": 92.35,
+    "kind": "support",
+    "touches": 2
+   },
+   {
+    "name": "resistance_1",
+    "price": 95.12,
+    "kind": "resistance",
+    "touches": 1
+   },
+   {
+    "name": "resistance_2",
+    "price": 97.04,
+    "kind": "resistance",
+    "touches": 4
+   },
+   {
+    "name": "resistance_3",
+    "price": 97.8,
+    "kind": "resistance",
+    "touches": 2
+   },
+   {
+    "name": "swing_low_last",
+    "price": 91.99,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "swing_high_last",
+    "price": 96.74,
+    "kind": "swing",
+    "touches": null
+   },
+   {
+    "name": "fib_382",
+    "price": 89.79,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_500",
+    "price": 91.86,
+    "kind": "fib",
+    "touches": null
+   },
+   {
+    "name": "fib_618",
+    "price": 93.93,
+    "kind": "fib",
+    "touches": null
+   }
+  ],
+  "rules": {
+   "min_risk_reward": 2.0,
+   "stop_atr_min": 1.0,
+   "stop_atr_max": 4.0
+  },
+  "unknown": []
+ }
+}
