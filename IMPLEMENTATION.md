@@ -548,6 +548,22 @@ stateDiagram-v2
 - **Stop management**: moving a stop (breakeven at +1R, trailing) modifies the existing stop order and is logged. Stops are only ever tightened, never loosened.
 - **Market data**: daily bars from IBKR. Whether the free US real-time feed (Cboe One/IEX) also reaches the API is checked in milestone M6. If it doesn't, delayed quotes are acceptable for daily-bar entries with limit orders, and the 1 % limit-deviation check uses the last close plus the delayed quote.
 
+#### 10.1.1 Implementation, read side (M6, 2026-10-04, written before the paper login exists)
+
+Everything below is tested against a fake `IB` object only; `trading-agent ibkr-check` verifies it against the real gateway (15.5 step 13).
+
+| Part | Where | Notes |
+|---|---|---|
+| Gateway | `compose.yaml` service `ib-gateway`, profile `ibkr` | `gnzsnz/ib-gateway:stable`, paper, `READ_ONLY_API=yes`, restart 23:45, VNC on `127.0.0.1:5900`. Starts only with `COMPOSE_PROFILES=ibkr`. Password via `make tws-password` (typed, not echoed); `make secrets` creates `vnc_password` (VNC uses its first 8 characters). |
+| Connection | `broker.py` `BrokerLink` | One `ib_async` connection, `readonly=True`, client id `IB_CLIENT_ID`, only with `IB_ENABLED=true`. Checks every 30 s, reconnects with backoff (30 s up to 5 min), 🔌 alert after 10 min down and again when it's back. On every (re)connect: contract ids, then reconciliation. `/status` shows the state. |
+| Contracts | `data/ibkr.py` `contract_for`, `resolve_conids` | SMART-routed stocks; `BRK.B` becomes `BRK B`; Xetra with `primaryExchange=IBIS`. Resolved once and stored in `instruments.conid`. |
+| Account, positions | `execution/ibkr.py` | `NetLiquidation`, `TotalCashValue`, `SettledCash`, `AvailableFunds`; the account number is never kept. |
+| Bars | `data/ibkr.py` `IbkrPriceProvider` | Daily `TRADES` bars, regular hours, same `BarSeries` as Yahoo; at most 60 requests per 10 minutes. Used per market when `config/data.yaml` `prices.sources` says `ibkr` and the gateway is connected; otherwise Yahoo. Stays `yahoo` until the check shows matching closes and volumes. |
+| Reconciliation | `execution/reconcile.py`, job `reconcile` (NYSE close + 40 min) | Broker positions vs. open `agent_paper` trades by conid: unknown, missing, different size → ⚠️ alert. Halting on a mismatch comes with the kill switch in M8. |
+| Check | `trading-agent ibkr-check [SYMBOLS]` | Server version and time, account values, positions, contracts without conid, the last 5 IBKR bars vs. the stored ones (close difference, volume ratio), and the quote type the API delivers (real-time or delayed). |
+
+Still open for M6 once the login exists: the gateway surviving its daily restart, the re-login alert in practice, and the answers from `ibkr-check`. Fractional shares can't be checked with a read-only API; that moves to M8.
+
 ### 10.2 Order state machine
 
 ```mermaid
@@ -721,7 +737,7 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 | `postgres_password` | `db` (superuser, maintenance only) | M0 |
 | `agent_db_password` | `db` init script, `agent` | M0 |
 | `dashboard_db_password` | `db` init script, `dashboard` | M6 (dashboard v1) |
-| `tws_password`, `vnc_password` | `ib-gateway` | M6 |
+| `tws_password`, `vnc_password` | `ib-gateway` | M6: `make tws-password` (typed), `make secrets` (VNC) |
 
 ```dotenv
 # .env.example (abridged; the full file is in the repo)
@@ -743,7 +759,7 @@ FRED_API_KEY=
 SEC_EDGAR_USER_AGENT=               # "Name email", required by SEC
 ```
 
-### 15.3 Compose (target state after M6; `compose.yaml` in the repo has `db`, `agent` and `dashboard` so far)
+### 15.3 Compose (target state after M6; `compose.yaml` in the repo has all four services, `ib-gateway` behind the `ibkr` profile)
 
 ```yaml
 services:
@@ -822,7 +838,7 @@ secrets:
 
 Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋.
 
-> Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each.
+> Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each; step 13 waits for the IBKR paper login.
 
 1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl`.
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
@@ -843,6 +859,12 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - Publish it to the tailnet: `sudo tailscale serve --bg 8501`, then `tailscale serve status` 📋 shows the `https://…ts.net` URL. The setting survives reboots.
     - Open the URL on the phone (Tailscale app on) and on the Mac 📋 (loads? pages fill?). With Tailscale off it must not load.
 12. **Agent proposals** (M7, needs `LLM_DEV_OVERRIDES=true` so the critic runs on Gemini): `make migrate` (on an existing install), then `docker compose run --rm agent trading-agent propose --market US` 📋. It prints the ranked proposals, the blocked and passed ones, the skipped symbols and the cost. Then in Telegram: `/proposals`, `/why <symbol>`, `/review` (label one, reply with a reason). From the next trading day the scans run before each open and the 🌙 evening digest arrives after the US close. Done when: one week of daily proposals, labelled by you.
+13. **IB Gateway** (M6, once the IBKR paper login exists):
+    - `make secrets` (adds `vnc_password`), `make tws-password` (type the paper password), and in `.env`: `TWS_USERID=<paper username>`, `COMPOSE_PROFILES=ibkr`, `IB_ENABLED=true`.
+    - `docker compose up -d`, then `docker compose logs -f ib-gateway` until the login succeeds (a 2FA prompt on the phone needs confirming, if the paper account asks for one).
+    - `docker compose run --rm agent trading-agent ibkr-check` 📋. During US market hours if possible, so the quote line shows whether real-time data reaches the API.
+    - `/status` in Telegram shows `IB Gateway: connected`. The next morning 📋: did the gateway come back after its 23:45 restart without a message from you (`docker compose logs --since 12h ib-gateway | tail -50`)?
+    - If something hangs: `ssh -L 5900:localhost:5900 zenbook`, then a VNC viewer on `localhost:5900` with the first 8 characters of `secrets/vnc_password`.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

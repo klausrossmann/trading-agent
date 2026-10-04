@@ -1,6 +1,6 @@
 """Market-data repositories: idempotent upserts and the reads that ingestion needs."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import batched
@@ -130,6 +130,16 @@ async def active_instruments(
     if market is not None:
         stmt = stmt.where(InstrumentRow.market == market)
     return {r.id: _to_instrument(r) for r in await session.scalars(stmt)}
+
+
+async def set_conids(session: AsyncSession, conids: Mapping[int, int]) -> None:
+    """instrument id -> IBKR contract id, resolved once (IMPLEMENTATION.md 10.1)."""
+    for inst_id, conid in conids.items():
+        await session.execute(
+            update(InstrumentRow)
+            .where(InstrumentRow.id == inst_id)
+            .values(conid=conid, updated_at=func.now())
+        )
 
 
 # --- daily bars ---

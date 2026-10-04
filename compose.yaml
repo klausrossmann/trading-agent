@@ -1,7 +1,7 @@
 name: trading-agent
 
-# db, agent and dashboard. ib-gateway follows in M6 once the IBKR paper login exists
-# (IMPLEMENTATION.md 15.3).
+# db, agent and dashboard; ib-gateway joins with COMPOSE_PROFILES=ibkr once the IBKR paper
+# login exists (IMPLEMENTATION.md 15.3, 15.5).
 services:
   db:
     image: postgres:17
@@ -64,6 +64,27 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [backend, frontend]  # an internal-only network can't publish ports
 
+  # The TWS API port (4004 paper) is reachable only inside the Compose network: the protocol is
+  # unauthenticated. VNC is on the host's loopback for maintenance through an SSH tunnel.
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    profiles: [ibkr]
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${TWS_USERID:-}
+      TWS_PASSWORD_FILE: /run/secrets/tws_password
+      TRADING_MODE: paper
+      READ_ONLY_API: "yes"            # "no" from M8
+      TIME_ZONE: Europe/Berlin
+      TZ: Europe/Berlin
+      AUTO_RESTART_TIME: "11:45 PM"
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      VNC_SERVER_PASSWORD_FILE: /run/secrets/vnc_password
+    secrets: [tws_password, vnc_password]
+    ports: ["127.0.0.1:5900:5900"]
+    networks: [backend, egress]
+
 networks:
   backend:
     internal: true
@@ -80,3 +101,7 @@ secrets:
     file: ./secrets/agent_db_password
   dashboard_db_password:
     file: ./secrets/dashboard_db_password
+  tws_password:
+    file: ./secrets/tws_password
+  vnc_password:
+    file: ./secrets/vnc_password

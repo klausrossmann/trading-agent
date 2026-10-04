@@ -1,4 +1,4 @@
-.PHONY: sync lint fmt test test-db secrets dashboard-role build migrate up down logs deploy
+.PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up down logs deploy
 
 ZENBOOK ?= zenbook
 TEST_DB := ta-test-db
@@ -31,10 +31,17 @@ test-db:
 # container users (postgres uid 999, agent uid 10001) can read their bind mounts.
 secrets:
 	@mkdir -p secrets && chmod 700 secrets
-	@for s in postgres_password agent_db_password dashboard_db_password; do \
+	@for s in postgres_password agent_db_password dashboard_db_password vnc_password; do \
 	  if [ ! -f secrets/$$s ]; then openssl rand -hex 24 > secrets/$$s; echo "created secrets/$$s"; fi; \
 	  chmod 644 secrets/$$s; \
 	done
+
+# The IBKR paper password is typed, never generated or echoed (IMPLEMENTATION.md 15.5).
+tws-password:
+	@mkdir -p secrets && chmod 700 secrets
+	@printf 'IBKR paper password: ' && stty -echo && read pw && stty echo && echo && \
+	  printf '%s' "$$pw" > secrets/tws_password && chmod 644 secrets/tws_password && \
+	  echo "stored secrets/tws_password"
 
 # Creates or updates the read-only dashboard role on an existing database (a fresh volume
 # gets it from docker/db/init). Recreates db first so it mounts the dashboard secret.

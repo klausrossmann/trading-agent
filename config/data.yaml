@@ -2,6 +2,7 @@ prices:
   backfill_years: 6                 # 5 years of backtest + warm-up for the 200-day average
   overlap_sessions: 5               # re-fetched on every update to catch revisions
   restatement_tolerance_pct: 0.5    # larger close differences in the overlap -> refetch full history
+  sources: {US: yahoo, EU: yahoo}   # ibkr once `trading-agent ibkr-check` matches (M6)
 
 fx:                                 # quote currency -> ECB Data Portal series (units per 1 EUR)
   USD: EXR/D.USD.EUR.SP00.A

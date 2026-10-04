@@ -19,6 +19,7 @@ YearsOption = typer.Option(5, help="Trading period in years, ending at the last 
 OutputOption = typer.Option(None, help="Also write the report to this file.")
 SymbolsArgument = typer.Argument(None, help="Yahoo symbols, e.g. AAPL SAP.DE; default top setups.")
 TopOption = typer.Option(None, help="Number of baseline setups; default from models.yaml.")
+CheckSymbolsArgument = typer.Argument(None, help="Yahoo symbols; default AAPL SAP.DE.")
 
 
 @app.callback()
@@ -292,6 +293,26 @@ def propose(
     typer.echo(pipeline.summary(result, market))
     for symbol, reason in result.skipped.items():
         typer.echo(f"  skipped {symbol}: {reason}")
+
+
+@app.command(name="ibkr-check")
+def ibkr_check(symbols: list[str] | None = CheckSymbolsArgument) -> None:
+    """Check the IB Gateway: account, positions, contract ids, bars vs. Yahoo, quote type."""
+    from trading_agent import broker
+    from trading_agent.db.session import create_engine, session_factory
+
+    settings = _settings()
+
+    async def _run() -> list[str]:
+        engine = create_engine(settings.database_url)
+        try:
+            return await broker.check(
+                settings, session_factory(engine), symbols or ["AAPL", "SAP.DE"]
+            )
+        finally:
+            await engine.dispose()
+
+    typer.echo("\n".join(asyncio.run(_run())))
 
 
 @app.command()

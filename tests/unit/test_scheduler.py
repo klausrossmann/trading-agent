@@ -38,6 +38,7 @@ JOBS: dict[str, JobFn] = {
         "briefing",
         "scan_eu",
         "scan_us",
+        "reconcile",
     )
 }
 

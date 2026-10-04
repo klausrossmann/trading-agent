@@ -144,6 +144,7 @@ class StatusSnapshot:
     last_bars: Mapping[str, date | None]
     blocked: Mapping[str, Sequence[str]]  # market -> symbols, from the last quality check
     next_jobs: Sequence[tuple[str, datetime]]
+    gateway: str = "disabled (IB_ENABLED=false)"
 
 
 def render_status(s: StatusSnapshot) -> str:
@@ -164,7 +165,8 @@ def render_status(s: StatusSnapshot) -> str:
         f"Blocked symbols: {blocked}",
         "Next jobs:",
         *[f"  {name} {when:%a %d %b %H:%M}" for name, when in s.next_jobs],
-        "Broker: not connected (IBKR from M6) · LLM spend: /budget · Kill switch: M8",
+        f"IB Gateway: {s.gateway}",
+        "LLM spend: /budget · Kill switch: M8",
     ]
     return "\n".join(lines)
 
@@ -352,3 +354,25 @@ def job_alert(job_id: str, error: str) -> str:
 
 def missed_alert(job_id: str) -> str:
     return f"⚠️ Job {job_id} missed its run time and was skipped"
+
+
+def gateway_down_alert(minutes: int) -> str:
+    return (
+        f"🔌 IB Gateway unreachable for {minutes} min. If it lasts, check "
+        "`docker compose logs ib-gateway`; a re-login may be needed (VNC via SSH tunnel)."
+    )
+
+
+def gateway_up_alert(minutes: int) -> str:
+    return f"🔌 IB Gateway connected again after {minutes} min"
+
+
+def reconcile_alert(unknown: Sequence[str], missing: Sequence[str], qty: Sequence[str]) -> str:
+    lines = ["⚠️ Reconciliation: broker and book differ"]
+    if unknown:
+        lines.append(f"At the broker only: {', '.join(unknown)}")
+    if missing:
+        lines.append(f"In the book only: {', '.join(missing)}")
+    if qty:
+        lines.append(f"Different size: {', '.join(qty)}")
+    return "\n".join(lines)

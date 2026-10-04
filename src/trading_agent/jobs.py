@@ -1,7 +1,7 @@
 """Scheduled and CLI-triggered jobs (orchestration layer): wires providers, config and DB."""
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -20,7 +20,8 @@ from trading_agent.calc.fees import FeeSchedule
 from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.trend import trend_states
 from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import IngestResult, Sessions
+from trading_agent.data.ibkr import IbkrPriceProvider
+from trading_agent.data.ingest import AsyncPriceProvider, IngestResult, PriceProvider, Sessions
 from trading_agent.data.quality import QualityIssue
 from trading_agent.data.series import EcbProvider, FredProvider
 from trading_agent.data.universe import Universe
@@ -64,6 +65,7 @@ class RuntimeState:
     heartbeat_ok: bool | None = None
     blocked: dict[str, list[str]] = field(default_factory=dict[str, list[str]])  # market -> symbols
     scheduler: Any = None  # AsyncIOScheduler, set once built
+    gateway: Callable[[], str] | None = None  # IB Gateway status, when enabled
 
 
 @dataclass
@@ -75,6 +77,7 @@ class DataContext:
     fred: FredProvider | None
     notifier: Notifier = field(default_factory=LogNotifier)
     state: RuntimeState | None = None
+    ibkr: IbkrPriceProvider | None = None
 
     @classmethod
     def build(
@@ -235,11 +238,23 @@ async def _check_quality(ctx: DataContext, market: Market, now: datetime) -> Non
         await ctx.notifier.send(alert)
 
 
+def price_source(ctx: DataContext, market: Market) -> PriceProvider | AsyncPriceProvider:
+    """config/data.yaml prices.sources; Yahoo whenever the gateway isn't connected."""
+    if ctx.cfg.prices.sources.get(market) != "ibkr":
+        return ctx.yahoo
+    if ctx.ibkr is None or not ctx.ibkr.ib.isConnected():
+        log.warning("prices.ibkr_unavailable", market=market, fallback="yahoo")
+        return ctx.yahoo
+    return ctx.ibkr
+
+
 async def eod(ctx: DataContext, market: Market, now: datetime | None = None) -> list[IngestResult]:
     """After an exchange closes: new bars (+ ECB FX for the EU close), then quality checks."""
     now = now or datetime.now(UTC)
     results = [
-        await ingest.ingest_prices(ctx.sessions, ctx.yahoo, ctx.cfg.prices, now=now, market=market)
+        await ingest.ingest_prices(
+            ctx.sessions, price_source(ctx, market), ctx.cfg.prices, now=now, market=market
+        )
     ]
     if market == "EU":
         results.append(
@@ -456,6 +471,7 @@ async def status_text(state: RuntimeState, sessions: Sessions, now: datetime | N
             last_bars=await _last_bars_by_market(sessions),
             blocked=state.blocked,
             next_jobs=next_jobs,
+            **({"gateway": state.gateway()} if state.gateway else {}),
         )
     )
 

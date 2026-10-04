@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import httpx
 import structlog
@@ -35,6 +35,15 @@ class PriceProvider(Protocol):
     source: str
 
     def daily_bars(self, instrument: Instrument, start: date, end: date) -> BarSeries: ...
+
+
+@runtime_checkable
+class AsyncPriceProvider(Protocol):
+    source: str
+
+    async def daily_bars_async(
+        self, instrument: Instrument, start: date, end: date
+    ) -> BarSeries: ...
 
 
 class EarningsProvider(Protocol):
@@ -100,7 +109,7 @@ async def sync_universe(sessions: Sessions, universe: Universe) -> IngestResult:
 
 async def ingest_prices(
     sessions: Sessions,
-    provider: PriceProvider,
+    provider: PriceProvider | AsyncPriceProvider,
     cfg: PricesConfig,
     *,
     now: datetime,
@@ -143,8 +152,13 @@ async def ingest_prices(
     return result
 
 
-async def _fetch(provider: PriceProvider, inst: Instrument, start: date, end: date) -> BarSeries:
-    series = await asyncio.to_thread(provider.daily_bars, inst, start, end)
+async def _fetch(
+    provider: PriceProvider | AsyncPriceProvider, inst: Instrument, start: date, end: date
+) -> BarSeries:
+    if isinstance(provider, AsyncPriceProvider):
+        series = await provider.daily_bars_async(inst, start, end)
+    else:
+        series = await asyncio.to_thread(provider.daily_bars, inst, start, end)
     # Never store a bar for a session that hasn't closed yet (it would be partial).
     return series.model_copy(update={"bars": tuple(b for b in series.bars if b.date <= end)})
 

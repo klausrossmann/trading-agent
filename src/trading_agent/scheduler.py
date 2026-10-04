@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import jobs, journal, pipeline
+from trading_agent import broker, jobs, journal, pipeline
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
 from trading_agent.data.universe import Universe
@@ -120,6 +120,7 @@ def job_functions(
     book: jobs.BookContext,
     notifier: Notifier,
     analysis: jobs.AnalysisContext,
+    link: broker.BrokerLink | None = None,
 ) -> dict[str, JobFn]:
     return {
         "ingest_macro": partial(jobs.macro, data),
@@ -131,6 +132,7 @@ def job_functions(
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
         "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
+        "reconcile": partial(broker.reconcile_positions, link, data.sessions, notifier),
     }
 
 
@@ -215,10 +217,21 @@ async def serve(
         )
         if isinstance(notifier, TelegramBot):
             notifier.start()
+        link: broker.BrokerLink | None = None
+        link_task: asyncio.Task[None] | None = None
+        if settings.ib_enabled:
+            link = broker.BrokerLink(
+                settings,
+                notifier,
+                on_connect=partial(broker.on_connect, sessions=sessions, notifier=notifier),
+            )
+            state.gateway = link.status
+            link_task = asyncio.create_task(link.run(stop))
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
+            ctx.ibkr = link.prices if link else None
             scheduler = build_scheduler(
-                schedule, settings, http, job_functions(ctx, book, notifier, analysis), state
+                schedule, settings, http, job_functions(ctx, book, notifier, analysis, link), state
             )
             state.scheduler = scheduler
             pending_alerts = alert_on_job_failures(scheduler, notifier)
@@ -235,6 +248,8 @@ async def serve(
                 scheduler.shutdown(wait=False)
                 await notifier.send("⏹ Agent stopping")
                 await asyncio.gather(*pending_alerts, return_exceptions=True)
+                if link_task is not None:
+                    await link_task
                 if isinstance(notifier, TelegramBot):
                     await notifier.stop()
         await audit.record(sessions, actor="agent", event="agent.stopped")

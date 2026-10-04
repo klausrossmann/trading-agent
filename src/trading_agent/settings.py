@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
 from trading_agent.calc.fees import FeeSchedule
+from trading_agent.domain.market import Market
 
 _SECRETS_DIR = Path("/run/secrets")
 
@@ -37,6 +38,12 @@ class Settings(BaseSettings):
     db_name: str = "trading"
     db_user: str = "agent"
     db_password: SecretStr
+
+    # IB Gateway (M6). Off until the paper login exists and the gateway runs.
+    ib_enabled: bool = False
+    ib_host: str = "ib-gateway"
+    ib_port: int = 4004  # gnzsnz socat port: 4004 paper, 4003 live
+    ib_client_id: int = 11
 
     @property
     def database_url(self) -> URL:
@@ -88,6 +95,10 @@ class PricesConfig(BaseModel):
     backfill_years: int = Field(ge=1, le=20)
     overlap_sessions: int = Field(ge=1, le=30)
     restatement_tolerance_pct: float = Field(gt=0)
+    # ibkr only takes effect with IB_ENABLED=true and a connected gateway; else Yahoo.
+    sources: dict[Market, Literal["yahoo", "ibkr"]] = Field(
+        default_factory=lambda: {"US": "yahoo", "EU": "yahoo"}
+    )
 
 
 class MacroConfig(BaseModel):
