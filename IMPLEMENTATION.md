@@ -712,18 +712,22 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 
 ## 15. Deployment
 
-### 15.1 Zenbook preparation (once)
+### 15.1 Zenbook preparation (once, on the existing Ubuntu desktop)
 
-1. Reinstall the current Ubuntu Server LTS (minimal), with automatic login disabled and full-disk encryption if you prefer it (the unlock prompt after power loss then needs a person at the machine). The laptop stays plugged in permanently.
-2. Never sleep:
+Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a normal desktop for browsing; the stack runs alongside under its own user.
+
+1. Ubuntu version (`lsb_release -d`): 24.04 or 26.04 LTS stays as it is. 22.04: upgrade in place once with `sudo do-release-upgrade` (back up personal files first); older releases one LTS step at a time. At least 15 GB free (`df -h /`).
+2. A separate user `trader` runs the stack and owns `~/trading-agent`, `.env` and `secrets/`. Only `trader` is in the `docker` group (that membership equals root rights); your own user browses as before and never gets the secrets.
+3. Never sleep:
    - `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`
-   - In `/etc/systemd/logind.conf`, set `HandleLidSwitch=ignore`, `HandleLidSwitchExternalPower=ignore` and `HandleLidSwitchDocked=ignore`, then restart `systemd-logind`.
-3. Time: `timedatectl set-timezone Europe/Berlin` and confirm NTP is active.
-4. Docker Engine and the Compose plugin from Docker's official apt repository; `systemctl enable docker`; log rotation in `/etc/docker/daemon.json` (`json-file`, `max-size: 10m`, `max-file: 5`).
-5. A 4 GB swap file.
-6. Tailscale for SSH and the dashboard; `ufw` denies all incoming traffic except on the Tailscale interface.
-7. `unattended-upgrades` for security updates, with automatic reboot restricted to Sunday 04:00.
-8. The battery works as a small UPS, if it still holds a charge. After a power loss, Docker's `restart: unless-stopped` brings the stack back, and reconciliation repairs any missing stops.
+   - In `/etc/systemd/logind.conf`, set `HandleLidSwitch=ignore`, `HandleLidSwitchExternalPower=ignore` and `HandleLidSwitchDocked=ignore`, then reboot (restarting `systemd-logind` would end the desktop session). Screen blanking and locking stay on.
+4. Time: `timedatectl set-timezone Europe/Berlin` and confirm NTP is active.
+5. Docker Engine and the Compose plugin from Docker's official apt repository (not Docker Desktop, not the snap); `systemctl enable docker`; log rotation in `/etc/docker/daemon.json` (`json-file`, `max-size: 10m`, `max-file: 5`).
+6. A 4 GB swap file (Ubuntu's `/swap.img` is usually 2 GB).
+7. Tailscale and `openssh-server` for SSH from the Mac and the dashboard; `ufw` denies all incoming traffic except on the Tailscale interface. Compose publishes ports only on `127.0.0.1`, so Docker's bypass of `ufw` doesn't matter.
+8. `unattended-upgrades` for security updates, with automatic reboot at 04:00 when an update needs it (outside all sessions and scans).
+9. The battery works as a small UPS, if it still holds a charge. After a power loss, Docker's `restart: unless-stopped` brings the stack back, and reconciliation repairs any missing stops.
+10. Memory: the stack needs about 2 GB, 3.5 GB with the IB Gateway; a desktop and a browser fit next to it, swap covers peaks. The existing install has no full-disk encryption; the mini PC for the live phase gets a fresh, encrypted install (15.4).
 
 ### 15.2 Secrets
 
@@ -840,7 +844,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 
 > Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each; step 13 waits for the IBKR paper login.
 
-1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl`.
+1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as `trader` (`sudo -iu trader`, or `ssh zenbook` from the Mac).
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
 3. **Secrets**: `make secrets` creates the database passwords in `secrets/` (`postgres_password`, `agent_db_password`, `dashboard_db_password`).
 4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
@@ -946,7 +950,7 @@ flowchart LR
 
 | # | Question | Answer | Consequence |
 |---|---|---|---|
-| 1 | Ubuntu on the Zenbook | Reinstall an LTS; keep it plugged in | Fresh Ubuntu Server LTS (15.1). Battery health is irrelevant as long as it stays plugged in. |
+| 1 | Ubuntu on the Zenbook | Reinstall an LTS; keep it plugged in. Revised 2026-10-04: keep the existing desktop install (no USB stick; the notebook stays usable for browsing) | Existing Ubuntu desktop, upgraded in place if older than 24.04, stack under a separate `trader` user (15.1). Battery health is irrelevant as long as it stays plugged in. |
 | 2 | Universe size | Start smaller | S&P 100 + DAX 40 (about 140 symbols); larger indices later (section 5) |
 | 3 | Telegram amounts | Both | `−€15.20 (−1.5 %)` format (12.4) |
 | 4 | IBKR account | Application started, not ready yet | M0–M5 don't need IBKR (`yfinance` + simulator). M6 starts once the paper login exists. |
