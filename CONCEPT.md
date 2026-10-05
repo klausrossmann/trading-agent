@@ -34,7 +34,7 @@ On top of the modules sits an **agent layer**. It screens, proposes and critique
 | Notifications | Web dashboard plus a Telegram bot. The Signal number is personal, so Signal is not used (section 8.2). |
 | Existing holdings | Out of scope. Only the agent's account is tracked. |
 | Review time | 1–2 hours per day |
-| Hosting | Code is written on the Mac (no secrets). The stack runs on a Zenbook UX301LA (Ubuntu, 8 GB RAM) for paper trading and moves to a mini PC before going live (section 14.4). |
+| Hosting | Code is written on a development machine (no secrets). The stack runs on a Zenbook UX301LA (Ubuntu, 8 GB RAM) for paper trading and moves to a mini PC before going live (section 14.4). |
 | Implementation | See [IMPLEMENTATION.md](IMPLEMENTATION.md) |
 | Tax residence | Germany |
 
@@ -663,7 +663,7 @@ The Zenbook UX301LA (Ubuntu, x86_64, 8 GB RAM) runs the stack during development
 - **Knows when it's down**: the agent pings an external heartbeat service. If the pings stop during market hours, the service sends an alert.
 - **Before going live**: move to an x86_64 mini PC with 8–16 GB RAM and an SSD (about €100–150 once). The Docker Compose stack moves unchanged.
 
-The Mac only holds code. Secrets exist only on the runtime host. The full setup checklist is in [IMPLEMENTATION.md](IMPLEMENTATION.md), section 15.
+The development machine only holds code. Secrets exist only on the runtime host. The full setup checklist is in [IMPLEMENTATION.md](IMPLEMENTATION.md), section 15.
 
 ---
 
@@ -757,7 +757,7 @@ Buy a mini PC
 | API accounts | Google AI Studio now, Anthropic in Phase 2, both with prepaid credit and a monthly cap |
 | Runtime host | Zenbook UX301LA with Ubuntu, 8 GB RAM, plugged in and awake |
 | Live host | Mini PC, bought before Phase 3 |
-| Development | Code is written on the Mac and pushed to the private GitHub repo; it runs on the Zenbook. Copilot writes most of the code; you review it and make the architecture decisions. |
+| Development | Code is written on a development machine and pushed to the private GitHub repo; it runs on the Zenbook. Copilot writes most of the code; you review it and make the architecture decisions. |
 
 The answers to the next round of questions are in [IMPLEMENTATION.md](IMPLEMENTATION.md), section 19.
 

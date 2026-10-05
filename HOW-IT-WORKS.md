@@ -513,7 +513,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 
 ### 11.3 Dashboard
 
-Open it on your phone or Mac through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
+Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
 
 ### 11.4 Daily routine (about 1 hour)
 
@@ -527,7 +527,7 @@ Open it on your phone or Mac through Tailscale. Pages: **Overview** (positions, 
 
 ### 12.1 How to change a setting
 
-- **Files in `config/` and `prompts/`** are part of the code and built into the Docker image. Change them on the Mac, commit, push, then `make deploy` (or on the Zenbook: `git pull && make build && make up`). The agent reads them at start.
+- **Files in `config/` and `prompts/`** are part of the code and built into the Docker image. A change is committed and pushed to GitHub, then on the Zenbook: `git pull && make build && make up` ([RUNNING.md](RUNNING.md) section 6). The agent reads them at start.
 - **`.env`** lives only on the Zenbook. Edit it there, then `docker compose up -d` (a plain `restart` doesn't re-read `.env`).
 - Change things outside trading sessions, or `/pause` first.
 - **`config/risk.yaml` needs extra care**: every change gets its own commit with a reason, never mixed with other changes. Unknown or invalid keys stop the agent from starting, so a typo can't silently turn off a limit.

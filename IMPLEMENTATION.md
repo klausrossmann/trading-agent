@@ -1,6 +1,6 @@
 # Trading Agent – Implementation Concept
 
-> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested on the Mac, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack); the Zenbook runbook (15.5) hasn't started. Open questions answered in section 19.
+> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack). The stack runs on the Zenbook with the IBKR paper gateway connected (15.5 step 13, 2026-10-05); the remaining checks are listed in [RUNNING.md](RUNNING.md) section 4. Open questions answered in section 19.
 > Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes the built system in plain language, including every setting.
 > Disclaimer: technical concept, not financial or tax advice.
 
@@ -12,7 +12,7 @@
 |---|---|
 | Runtime host (paper phase) | Asus Zenbook UX301LA: Ubuntu LTS, x86_64, 8 GB RAM, always plugged in |
 | Runtime host (live phase) | x86_64 mini PC with 8–16 GB RAM and an SSD. Same stack, moved over. |
-| Development | VS Code on the Mac, **code only, no secrets**. Pushed to the private GitHub repo `klausrossmann/trading-agent` and pulled on the Zenbook. |
+| Development | VS Code on a development machine, **code only, no secrets**. Pushed to the private GitHub repo `klausrossmann/trading-agent` and pulled on the Zenbook. |
 | Who writes the code | Copilot writes most of it, including tests. You review every change and make the architecture decisions (section 16.1). |
 | Language and tooling | Python 3.13, `uv` (environments and lockfile), `ruff`, `pyright`, `pytest`, `hypothesis`, `import-linter` |
 | Broker | IBKR cash account; IB Gateway in Docker (`gnzsnz/ib-gateway`) plus `ib_async` |
@@ -33,7 +33,7 @@ Why Telegram instead of Signal: your Signal number belongs to your personal acco
 
 ```mermaid
 flowchart LR
-    subgraph Mac["Mac (development, no secrets)"]
+    subgraph Dev["Development machine (no secrets)"]
         VS[VS Code + Copilot]
     end
     GH[(GitHub private repo<br/>+ Actions CI)]
@@ -49,7 +49,7 @@ flowchart LR
     TG[(Telegram Bot API)]
     DATA[(Data APIs<br/>yfinance, EDGAR, FRED, Finnhub, RSS)]
     HC[(Heartbeat service)]
-    Phone[Phone / Mac via Tailscale]
+    Phone[Phone via Tailscale]
 
     VS -- git push --> GH
     GH -- git pull / deploy --> Zen
@@ -99,7 +99,7 @@ trading-agent/
 ├── pyproject.toml / uv.lock
 ├── Dockerfile
 ├── compose.yaml                 # production-like stack (Zenbook, mini PC)
-├── compose.dev.yaml             # Mac: local stack with the offline fake LLM (16.2)
+├── compose.dev.yaml             # development machine: local stack with the offline fake LLM (16.2)
 ├── .env.example                 # documented keys, no values
 ├── Makefile                     # lint, test, deploy, backup, migrate
 ├── config/
@@ -253,7 +253,7 @@ Two DB roles: `agent` (read/write) and `dashboard` (read-only, `SELECT` only).
 
 | Data | Phase 0–1 source | Phase 2+ source | Refresh |
 |---|---|---|---|
-| Universe lists (start: S&P 100, DAX 40; later: S&P 500, Nasdaq-100, MDAX) | `scripts/build_universe.py` (Wikipedia constituent tables, every symbol verified on Yahoo) → `config/universe.yaml`, committed | same | monthly, on the Mac |
+| Universe lists (start: S&P 100, DAX 40; later: S&P 500, Nasdaq-100, MDAX) | `scripts/build_universe.py` (Wikipedia constituent tables, every symbol verified on Yahoo) → `config/universe.yaml`, committed | same | monthly, on the development machine |
 | Benchmarks | SPY (US), EXS1.DE (iShares Core DAX UCITS ETF) in `universe.yaml` | same | with bars |
 | Daily bars US | `yfinance` | IBKR `reqHistoricalData` (daily, incremental) | XNYS close + 30 min |
 | Daily bars EU (`.DE`, Xetra) | `yfinance` | IBKR | XETR close + 30 min |
@@ -699,7 +699,7 @@ Not wired to jobs yet (step 4); everything runs in tests.
 
 Open for step 4/5: tick sizes (Xetra price bands) before orders are built, child quantities after a partial IBKR fill, and the GTD format against the real gateway.
 
-Prepared on the Mac for step 5 (M9 session): `data/ibkr.MarketInfo` reads each contract's price increments from its IBKR market rule (the primary exchange's rule, cached) and quotes ((bid + ask) / 2, else last; real-time or delayed). Placement and stop moves round to those increments and the 1 % check uses the quote whenever the gateway is connected, also in read-only mode; without it 0.01 and the last close apply. `trading-agent ibkr-check` prints the increments, and `--order-test` places a 1-share buy limit at half the price and cancels it. `IB_READ_ONLY_API` in `.env` now sets the gateway's `READ_ONLY_API`.
+Prepared for step 5 (M9 session): `data/ibkr.MarketInfo` reads each contract's price increments from its IBKR market rule (the primary exchange's rule, cached) and quotes ((bid + ask) / 2, else last; real-time or delayed). Placement and stop moves round to those increments and the 1 % check uses the quote whenever the gateway is connected, also in read-only mode; without it 0.01 and the last close apply. `trading-agent ibkr-check` prints the increments, and `--order-test` places a 1-share buy limit at half the price and cancels it. `IB_READ_ONLY_API` in `.env` now sets the gateway's `READ_ONLY_API`.
 
 ---
 
@@ -783,7 +783,7 @@ Bot chats are not end-to-end encrypted. Messages therefore never contain account
 
 Pages: **Overview** (equity curves of the three books plus a benchmark, drawdown) · **Positions** · **Proposals** (filterable, with risk checks and critic notes) · **Journal** (full trace per trade) · **Risk** (limit usage, correlation heatmap) · **Costs** (LLM spend per role and model, fees) · **Evaluation** (KPIs, calibration plot).
 
-It uses the read-only DB role and has no write actions; control happens through Telegram or the CLI. It is published to your tailnet with `tailscale serve`, so it's reachable from your phone and the Mac but not from the internet.
+It uses the read-only DB role and has no write actions; control happens through Telegram or the CLI. It is published to your tailnet with `tailscale serve`, so it's reachable from your phone and other tailnet devices but not from the internet.
 
 ### 13.1 Implementation (dashboard v1, M6, 2026-10-04)
 
@@ -843,7 +843,7 @@ Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a no
 4. Time: `timedatectl set-timezone Europe/Berlin` and confirm NTP is active.
 5. Docker Engine and the Compose plugin from Docker's official apt repository (not Docker Desktop, not the snap); `systemctl enable docker`; log rotation in `/etc/docker/daemon.json` (`json-file`, `max-size: 10m`, `max-file: 5`).
 6. A 4 GB swap file (Ubuntu's `/swap.img` is usually 2 GB).
-7. Tailscale and `openssh-server` for SSH from the Mac and the dashboard; `ufw` denies all incoming traffic except on the Tailscale interface. Compose publishes ports only on `127.0.0.1`, so Docker's bypass of `ufw` doesn't matter.
+7. Tailscale and `openssh-server` for SSH and the dashboard from tailnet devices; `ufw` denies all incoming traffic except on the Tailscale interface. Compose publishes ports only on `127.0.0.1`, so Docker's bypass of `ufw` doesn't matter.
 8. `unattended-upgrades` for security updates, with automatic reboot at 04:00 when an update needs it (outside all sessions and scans).
 9. The battery works as a small UPS, if it still holds a charge. After a power loss, Docker's `restart: unless-stopped` brings the stack back, and reconciliation repairs any missing stops.
 10. Memory: the stack needs about 2 GB, 3.5 GB with the IB Gateway; a desktop and a browser fit next to it, swap covers peaks. The existing install has no full-disk encryption; the mini PC for the live phase gets a fresh, encrypted install (15.4).
@@ -952,7 +952,7 @@ secrets:
 
 ### 15.4 Deploy and backup
 
-- `make deploy` on the Mac runs `ssh zenbook 'cd projects/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'` (`ZENBOOK_DIR` overrides the path).
+- `make deploy` on the development machine runs `ssh zenbook 'cd projects/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'` (`ZENBOOK_DIR` overrides the path). On the Zenbook itself: `git pull && make build && make migrate && make up` ([RUNNING.md](RUNNING.md) section 6).
 - Deploys run outside trading sessions, or the agent is paused first (`/pause`), because a restart triggers reconciliation.
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
   - `scripts/backup.sh` (`make backup`), run by the deploy user's crontab at 03:15 on the host (not in a container, so the files belong to that user). It dumps with the `postgres` role inside the `db` container, checks the dump with `pg_restore --list`, keeps 14 days in `backups/` (`chmod 700`, files `600`), and on Sundays writes `backups/offsite/trading-<stamp>.dump.age` for `BACKUP_AGE_RECIPIENT` (last 8 kept). Syncing that folder off the machine is up to you; the private key never lives on the host. `BACKUP_HEARTBEAT_URL` gets a ping after each good backup, so a missing backup raises an alert at the heartbeat service.
@@ -965,7 +965,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 
 > Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each; step 13 waits for the IBKR paper login.
 
-1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as `trader` (`sudo -iu trader`, or `ssh zenbook` from the Mac).
+1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as `trader` (`sudo -iu trader`).
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/projects/trading-agent && cd ~/projects/trading-agent`.
 3. **Secrets**: `make secrets` creates the database passwords in `secrets/` (`postgres_password`, `agent_db_password`, `dashboard_db_password`).
 4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
@@ -982,7 +982,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 11. **Dashboard** (M6): on a fresh install, steps 3, 5 and 7 already created the password, the read-only role and the `dashboard` container. Only if the database existed before this step (installed at M5 or earlier): `git pull && make secrets && make build && make dashboard-role && make up` (`dashboard-role` recreates `db` with the new secret and creates the role; pause the agent or run it outside sessions). Then:
     - On the Zenbook: `curl -s localhost:8501/_stcore/health` prints `ok`.
     - Publish it to the tailnet: `sudo tailscale serve --bg 8501`, then `tailscale serve status` 📋 shows the `https://…ts.net` URL. The setting survives reboots.
-    - Open the URL on the phone (Tailscale app on) and on the Mac 📋 (loads? pages fill?). With Tailscale off it must not load.
+    - Open the URL on the phone (Tailscale app on) 📋 (loads? pages fill?). With Tailscale off it must not load.
 12. **Agent proposals** (M7, needs `LLM_DEV_OVERRIDES=true` so the critic runs on Gemini): `make migrate` (on an existing install), then `docker compose run --rm agent trading-agent propose --market US` 📋. It prints the ranked proposals, the blocked and passed ones, the skipped symbols and the cost. Then in Telegram: `/proposals`, `/why <symbol>`, `/review` (label one, reply with a reason). From the next trading day the scans run before each open and the 🌙 evening digest arrives after the US close. Done when: one week of daily proposals, labelled by you.
 13. **IB Gateway** (M6, once the IBKR paper login exists):
     - `make secrets` (adds `vnc_password`), `make tws-password` (type the paper password), and in `.env`: `TWS_USERID=<paper username>`, `COMPOSE_PROFILES=ibkr`, `IB_ENABLED=true`.
@@ -994,11 +994,11 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 14. **Kill switch** (M8 step 2, after `make migrate`): in Telegram, `/pause test`, `/status` (shows `paused (test) until /resume`), `/resume`, then `/stop` and confirm. Then on the Zenbook `docker compose run --rm agent trading-agent reset` prints a code; send `/reset CODE` within 15 minutes. `/status` 📋 shows `Kill switch: active` again.
 15. **Simulated orders** (M8 step 4, after `make migrate`): nothing to set up; `IB_ORDERS_ENABLED` stays `false`. On the next trading day, 15 minutes after each open, a 📤 message lists the placed and rejected proposals; after each close 🟢/🔴/⌛ messages report fills, and the 🌙 digest shows `agent_paper` and the risk engine's rejections. 📋 Send the 📤 messages and the digest of the first two days.
 16. **Backups** (M9):
-    - On the Mac: `brew install age && mkdir -p ~/.config/age && age-keygen -o ~/.config/age/key.txt`. The printed public key (`age1...`) goes into the Zenbook's `.env` as `BACKUP_AGE_RECIPIENT`; keep the key file also in your password manager.
+    - Key pair on the Zenbook, private key only in your password manager: `age-keygen -o /tmp/age-key.txt`, copy the file's content into the password manager, `shred -u /tmp/age-key.txt`. The printed public key (`age1...`) goes into `.env` as `BACKUP_AGE_RECIPIENT`.
     - Optional: a second healthchecks.io check (daily, 2 h grace) as `BACKUP_HEARTBEAT_URL`.
     - On the Zenbook as `trader`: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
     - `crontab -e`: `15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
-    - Copy one `.age` file to the Mac and run `scripts/restore.sh check <file>` there against a local throwaway database once: that is the "restore on another machine" test of section 18.
+    - Decrypt test: paste the private key into `/tmp/age-key.txt`, `AGE_KEY=/tmp/age-key.txt make restore-check FILE=backups/offsite/<newest>.dump.age` 📋, `shred -u /tmp/age-key.txt`. The "restore on another machine" test of section 18 follows on the mini PC.
 17. **IBKR orders and chaos tests** (M8 step 5, after step 13 works; outside US hours for the switch, the tests during a session):
     - Switch: `/positions` shows nothing open (otherwise wait until the simulated brackets are closed). In `.env`: `IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`. `docker compose up -d` (recreates gateway and agent). `/status` shows the gateway connected.
     - `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check --order-test AAPL` 📋: placed `working`, after cancel `inactive`, and the price increments for AAPL and SAP.DE.
@@ -1010,7 +1010,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 
 18. **News and position review** (M9, after `make migrate`): a free key at finnhub.io (Dashboard → API key) as `FINNHUB_API_KEY` in `.env`, then `docker compose up -d agent`. With an open US position, `docker compose logs agent | grep -E "news|review"` 📋 after a few hours shows fetches and triage; 📰 and 🧐 messages arrive only for important news or a report within 3 sessions. `/exit SYMBOL` is the only way the review leads to a sale.
 
-After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
+After a later `git pull`: `make build && make migrate && make up`.
 
 ---
 
@@ -1021,12 +1021,12 @@ After a later `git pull`: `make build && make migrate && make up` (or `make depl
 - Copilot implements one milestone (section 17) at a time, split into small, reviewable steps. Each step comes with tests and a short summary of what changed and why.
 - You review each step before it's committed, and decide on any open architecture questions. Copilot asks instead of guessing when a decision changes the design or the risk rules.
 - Changes to `risk/`, `execution/` and `config/risk.yaml` always get your explicit sign-off. They never ride along with unrelated changes.
-- Copilot works only on the Mac: no secrets, no broker access, no real API keys. Anything that needs the Zenbook (gateway, real LLM evals, deploys) is handed to you as exact commands to run, and you report the output back.
+- Copilot works only on the development machine: no secrets, no broker access, no real API keys. Anything that needs the Zenbook (gateway, real LLM evals, deploys) is handed to you as exact commands to run, and you report the output back.
 - Pushes to GitHub and deploys are done by you, or by Copilot only after you confirm.
 
 ### 16.2 Tooling and checks
 
-- **On the Mac**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). No keys and no broker access are needed.
+- **On the development machine**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). No keys and no broker access are needed.
 - **Local stack** (`compose.dev.yaml`, project `ta-dev`): `make dev-up` creates throwaway secrets in `.dev/`, builds, migrates and starts db, agent and dashboard (http://127.0.0.1:8502, Postgres on 127.0.0.1:55433); `make dev-backfill` loads Yahoo/ECB/earnings history; `make dev-down` removes containers, volume and secrets. The agent runs with `LLM_FAKE=true` (`llm/fake.py`: deterministic, rule-following answers for every output schema, no API calls), no Telegram (messages go to the log) and the simulator broker. Useful for the scheduler, dashboard and backtests on real data; the fake proposals mean nothing.
 - **On the Zenbook**: integration tests against the IBKR paper gateway (`pytest -m ibkr`), and evals against the real models (`uv run pytest -m llm tests/evals`, reads `GEMINI_API_KEY` from `.env`; section 15.5).
 - **CI (GitHub Actions)**: `ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest -m "not ibkr and not llm"` (DB tests run against a Postgres service container) and a `docker build`. No secrets in CI. DB tests only run when `DB_NAME` ends in `_test`, because they drop tables.

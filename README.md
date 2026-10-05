@@ -47,33 +47,33 @@ Paper and live use the same code, risk limits and fee model. Live mode needs thr
 
 ## Status (2026-10-05)
 
-All milestones up to M9 and the M10 preparation are built and tested on the Mac. Nothing has run on the Zenbook yet: the first-start runbook ([IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5) starts at step 1.
+All milestones up to M9 and the M10 preparation are built and tested. The stack runs on the Zenbook with the market data loaded and the IBKR paper account connected (2026-10-05). The remaining checks are in [RUNNING.md](RUNNING.md) section 4.
 
 | Milestone | State |
 |---|---|
-| M0 Bootstrap: project, Docker stack, database, heartbeat, CI | done in the repo; Zenbook setup pending |
-| M1 Data foundation: universe, prices, FX, macro, earnings, quality checks | done in the repo; first real backfill pending |
+| M0 Bootstrap: project, Docker stack, database, heartbeat, CI | done; running on the Zenbook |
+| M1 Data foundation: universe, prices, FX, macro, earnings, quality checks | done; real data loaded on the Zenbook |
 | M2 Calculators: indicators, levels, level menu, fees, sizing | done |
 | M3 Baseline strategy, simulator, `baseline_sim` book, backtest report | done; no edge found, kept as the bar to beat ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3) |
 | M4 Telegram: owner-only bot, alerts, morning briefing | done in the repo; bot token and chat id pending |
 | M5 LLM modules: technical and earnings analysts, budget guard, cache, validators, 30 eval cases | done in the repo; first real scan and evals pending |
-| M6 IBKR read side and dashboard | dashboard done; IBKR side tested against fakes, waits for the paper login |
+| M6 IBKR read side and dashboard | done; the paper account is connected, delayed quotes arrive; the overnight-restart check is pending |
 | M7 Agents: proposer, critic, portfolio manager, `/review` labels, evening digest | done in the repo; the week of labelled proposals is pending |
-| M8 Risk engine, kill switch, orders, simulator broker, daily trading cycle | done in the repo; `agent_paper` trades through the simulator. IBKR orders and the chaos tests wait for the paper login. |
+| M8 Risk engine, kill switch, orders, simulator broker, daily trading cycle | done in the repo; `agent_paper` trades through the simulator. IBKR orders and the chaos tests follow after a few stable days. |
 | M9 Paper operations: weekly report and go-live gate, `/positions`, `/pnl`, news triage, position review, `/exit`, backups, dashboard Risk/Evaluation/Reports | done in the repo; the 3-month paper period hasn't started |
 | M10 Mini PC and go-live | tax report done; the rest follows after the paper phase |
 
 ## Documentation
 
 - [HOW-IT-WORKS.md](HOW-IT-WORKS.md): **start here**. The system in plain language: workflow, buy and sell rules, agents, safety nets, every setting.
-- [RUNNING.md](RUNNING.md): where each part runs and how to reach it, and how to set up, run, update and troubleshoot the app on the Zenbook, step by step.
+- [RUNNING.md](RUNNING.md): where each part runs and how to reach it, and step by step how to set up, start, test, update and troubleshoot the app on the Zenbook.
 - [MAS-DESIGN.md](MAS-DESIGN.md): the multi-agent system design: agent inventory, communication, shared memory, coordination, trust, evaluation, code map.
 - [CONCEPT.md](CONCEPT.md): why it's designed this way (broker choice, risk limits, costs, evaluation, roadmap, research).
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): how it's built (architecture, data model, risk engine, deployment, runbook, build plan).
 
 ## Development
 
-Code is written on the Mac (no secrets) and runs on an always-on Linux host with Docker.
+Code is written on a development machine (no secrets) and runs on an always-on Linux host with Docker.
 
 ```sh
 uv sync                  # Python 3.13 environment
@@ -82,7 +82,7 @@ make test                # unit tests
 make test-db             # DB tests against a throwaway Postgres container
 ```
 
-On the runtime host (full first-start runbook: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5):
+On the runtime host (step by step, with explanations: [RUNNING.md](RUNNING.md)):
 
 ```sh
 make secrets                              # create database password files in secrets/

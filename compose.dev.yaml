@@ -1,4 +1,4 @@
-# Local stack on the Mac (IMPLEMENTATION.md 16.2): `make dev-up`, `make dev-backfill`,
+# Local stack on the development machine (IMPLEMENTATION.md 16.2): `make dev-up`, `make dev-backfill`,
 # `make dev-down`. Offline fake LLM, no Telegram (log only), simulator broker, throwaway
 # secrets in .dev/, Postgres on the loopback for psql and `uv run trading-agent ...`.
 # Never on the Zenbook: the fake model's proposals mean nothing.

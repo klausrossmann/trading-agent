@@ -1,20 +1,36 @@
 # Running the Trading Agent
 
-What you do, in order, to run the app, and what every step does. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains how the system behaves once it runs. [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 is the short checklist of the same steps with the outputs to report back (📋).
+Everything you do on the Zenbook, step by step, and what each step does:
+
+1. [Where what runs and how to reach it](#1-where-what-runs-and-how-to-reach-it)
+2. [One-time setup](#2-one-time-setup)
+3. [Starting the app](#3-starting-the-app)
+4. [Testing that everything works](#4-testing-that-everything-works)
+5. [Daily operation](#5-daily-operation)
+6. [Updating the app](#6-updating-the-app)
+7. [Troubleshooting](#7-troubleshooting)
+
+[HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains how the system behaves once it runs.
+
+Every command runs on the Zenbook as the user `trader`, in the folder `~/projects/trading-agent`. From your normal desktop user:
+
+```sh
+sudo -iu trader                 # become trader (the only user allowed to run Docker and read the keys)
+cd ~/projects/trading-agent     # the app's folder: code, .env, secrets/, backups/
+```
 
 ---
 
 ## 1. Where what runs and how to reach it
 
-### 1.1 The machines
+### 1.1 The parts
 
 | Where | What happens there |
 |---|---|
-| **Mac** | You (and Copilot) change the code in `~/Projects/trading-agent`, run the tests and push to GitHub. No keys, no passwords, no trading. |
-| **GitHub** | Holds the code (private repo `klausrossmann/trading-agent`). CI checks every push (lint, types, tests, Docker build); a failed run sends you an e-mail. |
-| **Zenbook** | Runs the app around the clock in Docker, under the user `trader`, in `~/projects/trading-agent`. Only this machine has `.env` (keys) and `secrets/` (passwords). Your normal desktop user keeps browsing as before. |
+| **Zenbook** | Runs the app around the clock in Docker, under the user `trader`. Only this machine has `.env` (API keys and switches) and `secrets/` (passwords). Your normal desktop user keeps browsing as before. |
+| **GitHub** | Holds the code (private repo `klausrossmann/trading-agent`). The Zenbook downloads it with `git pull`. CI checks every change; a failed check sends you an e-mail. |
 | **IBKR** | The paper account on IBKR's servers. The IB Gateway on the Zenbook logs in to it; the agent talks only to the gateway. |
-| **Phone** | Telegram (messages and commands), the IBKR app (2FA, manual emergency exits), the dashboard over Tailscale. |
+| **Phone** | Telegram (messages and commands), the IBKR app (2FA, emergency exits), the dashboard over Tailscale. |
 
 The app is four Docker containers on the Zenbook, started together with Docker Compose:
 
@@ -23,18 +39,14 @@ The app is four Docker containers on the Zenbook, started together with Docker C
 | `db` | PostgreSQL: all prices, analyses, proposals, orders, trades and settings. Its data survives restarts and rebuilds (Docker volume `pgdata`). |
 | `agent` | The app itself: scheduler, data jobs, AI agents, risk engine, simulator or IBKR orders, Telegram bot. |
 | `dashboard` | The read-only web dashboard (Streamlit). |
-| `ib-gateway` | IBKR's gateway program with an auto-login helper (IBC). Started only with `COMPOSE_PROFILES=ibkr`. |
+| `ib-gateway` | IBKR's gateway program with an auto-login helper (IBC). Started only with `COMPOSE_PROFILES=ibkr` in `.env`. |
 
 ```mermaid
 flowchart LR
     subgraph Phone
         TG[Telegram]
         IBApp[IBKR app]
-        Browser1[Browser]
-    end
-    subgraph Mac
-        Code[Code + tests]
-        Browser2[Browser]
+        Browser[Browser]
     end
     GH[GitHub<br/>code + CI]
     subgraph Zenbook["Zenbook (user trader)"]
@@ -52,10 +64,8 @@ flowchart LR
         TGAPI[Telegram API]
         IBKR[IBKR servers]
     end
-    Code -- git push --> GH
     GH -- git pull --> Zenbook
-    Mac -- SSH via tailnet --> TS
-    Browser1 & Browser2 -- https via tailnet --> TS --> Dash
+    Browser -- https via tailnet --> TS --> Dash
     Agent --> DB
     Dash -- read-only --> DB
     Agent -- API --> GW --> IBKR
@@ -64,26 +74,26 @@ flowchart LR
     IBApp --> IBKR
 ```
 
-Nothing on the Zenbook accepts connections from the internet or the home network. You reach it only through your private Tailscale network (tailnet), and the containers publish their ports only on the Zenbook itself (`127.0.0.1`). The agent and the gateway make outgoing connections only: market data, AI providers, Telegram, IBKR.
+Nothing on the Zenbook accepts connections from the internet or the home network. Other devices reach it only through your private Tailscale network (tailnet), and the containers publish their ports only on the Zenbook itself (`127.0.0.1`). The agent and the gateway only make outgoing connections: market data, AI providers, Telegram, IBKR.
 
 ### 1.2 How to reach each part
 
-| What | Runs where | From the Zenbook | From the Mac | From the phone |
-|---|---|---|---|---|
-| **Telegram bot** | `agent` container (polls Telegram, no open port) | Telegram | Telegram | Telegram. Only your chat (`TELEGRAM_OWNER_CHAT_ID`) is answered. |
-| **Dashboard** | `dashboard` container, port 8501 on `127.0.0.1` | Browser: `http://localhost:8501` | Browser with Tailscale on: the `https://….ts.net` address that `tailscale serve status` shows | Same address, Tailscale app on. No login: the tailnet is the lock. |
-| **Shell on the Zenbook** | Zenbook | Terminal, then `sudo -iu trader` | `ssh zenbook` (or `ssh trader@100.116.207.96`), Tailscale on | Optional: an SSH app over Tailscale |
-| **Agent log** | `agent` container | `cd ~/projects/trading-agent && make logs` | `ssh zenbook`, then the same | |
-| **Database** | `db` container, port 5432 only inside Docker | `docker compose exec db psql -U dashboard -d trading` (read-only); `-U agent` can change data, so only with care | via `ssh zenbook` | Use the dashboard |
-| **Gateway screen (VNC)** | `ib-gateway` container, port 5900 on `127.0.0.1` | Remmina: VNC, `localhost:5900` | `ssh -L 5901:localhost:5900 zenbook`, then `open vnc://localhost:5901` | |
-| **Gateway API** | `ib-gateway`, port 4004 only inside Docker | Through the agent only (`trading-agent ibkr-check`) | | |
-| **IBKR account** | IBKR's servers | Client Portal in the browser | Client Portal | IBKR app (also 2FA and emergency exits) |
-| **Code** | GitHub; copies on the Mac and the Zenbook | `git pull` (read-only deploy key) | `~/Projects/trading-agent`, `git push` | |
-| **CI results** | GitHub Actions | | github.com/klausrossmann/trading-agent/actions, or the failure e-mail | E-mail |
-| **Heartbeat** | e.g. healthchecks.io | | Its website | Its alert e-mail when the agent stops pinging |
-| **Backups** | Zenbook: `backups/` (14 days), `backups/offsite/*.age` (weekly, encrypted) | `ls backups/` | Copy an `.age` file off the machine; the decryption key is on the Mac (`~/.config/age/key.txt`) | |
+| What | Runs where | On the Zenbook | From the phone (or any device in your tailnet) |
+|---|---|---|---|
+| **Telegram bot** | `agent` container (polls Telegram, no open port) | Telegram | Telegram. Only your chat (`TELEGRAM_OWNER_CHAT_ID`) is answered. |
+| **Dashboard** | `dashboard` container, port 8501 on `127.0.0.1` | Browser: `http://localhost:8501` | The `https://….ts.net` address that `tailscale serve status` shows, with Tailscale on. No login: the tailnet is the lock. |
+| **Shell** | Zenbook | Terminal, then `sudo -iu trader` | Optional: an SSH app to `trader@100.116.207.96` (the Zenbook's Tailscale address, `tailscale ip -4`) |
+| **Agent log** | `agent` container | `make logs` | |
+| **Database** | `db` container, port 5432 only inside Docker | `docker compose exec db psql -U dashboard -d trading` (read-only); `-U agent` can change data, so only with care | Use the dashboard |
+| **Gateway screen (VNC)** | `ib-gateway` container, port 5900 on `127.0.0.1` | Remmina: protocol VNC, server `localhost:5900` | |
+| **Gateway API** | `ib-gateway`, port 4004 only inside Docker | Through the agent only (`trading-agent ibkr-check`) | |
+| **IBKR account** | IBKR's servers | Client Portal in the browser | IBKR app (also 2FA and emergency exits) |
+| **Code** | GitHub; a copy on the Zenbook | `git pull` (read-only deploy key) | |
+| **CI results** | GitHub Actions | github.com/klausrossmann/trading-agent/actions | The failure e-mail |
+| **Heartbeat** | e.g. healthchecks.io | Its website | Its alert e-mail when the agent stops pinging |
+| **Backups** | `backups/` (14 days) and `backups/offsite/*.age` (weekly, encrypted) | `ls backups/ backups/offsite/` | Copy the `.age` files to any cloud drive; they're encrypted |
 
-The VNC password is the first 8 characters of `secrets/vnc_password`: `head -c 8 secrets/vnc_password; echo` as `trader`.
+The VNC password is the first 8 characters of `secrets/vnc_password`. As `trader`: `head -c 8 secrets/vnc_password; echo`. From your desktop user: `sudo head -c 8 ~trader/projects/trading-agent/secrets/vnc_password; echo`.
 
 ### 1.3 Ports
 
@@ -96,26 +106,24 @@ The VNC password is the first 8 characters of `secrets/vnc_password`: `head -c 8
 | 4004 | `ib-gateway` API (paper) | Other containers only. The API has no password, so it's never published. |
 | 5432 | `db` | Other containers only |
 
-The local test stack on the Mac (`make dev-up`) uses its own ports: dashboard `127.0.0.1:8502`, database `127.0.0.1:55433`.
-
 ### 1.4 Logins and where they're kept
 
 | Login | Stored where | Used for |
 |---|---|---|
-| IBKR username and password | `.env` (`TWS_USERID`) and `secrets/tws_password` on the Zenbook | The gateway's automatic login (paper mode) |
+| IBKR username and password | `.env` (`TWS_USERID`) and `secrets/tws_password` | The gateway's automatic login (paper mode) |
 | Database passwords | `secrets/postgres_password`, `agent_db_password`, `dashboard_db_password` | Each container reads only its own |
 | VNC password | `secrets/vnc_password` | Viewing the gateway's screen |
-| API keys (Gemini, FRED, Finnhub, Telegram bot, heartbeat) | `.env` on the Zenbook | The agent's outgoing calls |
-| GitHub deploy key | `~trader/.ssh/` on the Zenbook | Reading the repo for `git pull` |
-| Backup decryption key | `~/.config/age/key.txt` on the Mac, plus your password manager | Restoring an off-site backup |
+| API keys (Gemini, FRED, Finnhub, Telegram bot, heartbeat) | `.env` | The agent's outgoing calls |
+| GitHub deploy key | `~trader/.ssh/` | Reading the repo for `git pull` |
+| Backup decryption key | Only in your password manager, never on the Zenbook | Restoring an encrypted off-site backup |
 
 `.env` and `secrets/` never go to GitHub (`.gitignore`) and are readable only by `trader`.
-
-Every command below runs on the Zenbook as `trader` in `~/projects/trading-agent`, unless it says "on the Mac". `sudo -iu trader` switches to that user from your desktop user.
 
 ---
 
 ## 2. One-time setup
+
+Done once per machine. Steps 1–10 are done on this Zenbook; step 11 (backups) is still open.
 
 ### Step 1: Prepare the Zenbook
 
@@ -127,8 +135,8 @@ The details are in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.1. In short:
 | Sleep and lid-close suspend disabled | A trading robot that sleeps misses its jobs. |
 | Time zone `Europe/Berlin`, NTP on | All schedules are in Berlin time and follow the exchange calendars. |
 | Docker Engine with the Compose plugin, log rotation | Runs the containers; rotation keeps logs from filling the disk. |
-| 4 GB swap | The stack plus the IB Gateway needs about 3.5 GB of memory; swap covers peaks. |
-| Tailscale and `openssh-server`, `ufw` allowing only the tailnet | You reach the Zenbook (SSH, dashboard) only through your private Tailscale network, never from the internet or the home network. |
+| 4 GB swap | The app plus the IB Gateway needs about 3.5 GB of memory; swap covers peaks. |
+| Tailscale and `openssh-server`, `ufw` allowing only the tailnet | Other devices reach the Zenbook (SSH, dashboard) only through your private Tailscale network, never from the internet or the home network. |
 | Automatic security updates | Patches without your attention, with reboots at 04:00, outside all trading jobs. |
 
 ### Step 2: Get the code
@@ -141,7 +149,7 @@ git config pull.ff only
 ```
 
 - The **deploy key** lets the Zenbook read the private repository, and only that repository, without your GitHub password. Read-only means a compromised Zenbook can't change your code.
-- `pull.ff only` makes `git pull` refuse instead of mixing changes when the Zenbook's copy was edited locally. The Zenbook only ever receives code; it never changes it (see 6.1 if it refuses).
+- `pull.ff only` makes `git pull` refuse instead of mixing changes when the Zenbook's copy was edited locally. The Zenbook only ever receives code; it never changes it (see 7.1 if it refuses).
 
 ### Step 3: Create the passwords
 
@@ -181,29 +189,27 @@ make migrate
 
 - `make build` builds the app's Docker image from the code: Python, all libraries and the app. Takes 5–15 minutes the first time, under a minute later when only code changed.
 - `docker compose up -d db` starts PostgreSQL. On its first start it creates the database and the agent and dashboard logins.
-- `make migrate` creates or updates the tables (Alembic migrations). Safe to repeat: it only applies what's missing.
+- `make migrate` creates or updates the tables. Safe to repeat: it only applies what's missing.
 
 ### Step 6: Load the market data
 
 ```sh
 docker compose run --rm agent trading-agent backfill
 docker compose run --rm agent trading-agent backfill      # second run: should change nothing
-docker compose run --rm agent trading-agent quality
 ```
 
 - `backfill` loads the stock universe (S&P 100, DAX 40, two benchmark ETFs), 6 years of daily prices from Yahoo, EUR/USD from the ECB, macro series from FRED and the earnings calendar. A few minutes.
 - The second run proves the import is **idempotent**: it reports zero inserts and updates. That matters because the daily jobs re-run the same import.
-- `quality` lists data problems (missing days, impossible prices, big jumps). Stocks with a recent problem are left out of the scan.
 - `docker compose run --rm agent ...` starts a throwaway copy of the agent container for one command and removes it afterwards; the running agent isn't affected.
 
-### Step 7: Start the app
+### Step 7: Start the app for the first time
 
 ```sh
 make up
 make logs          # wait for "agent.started", then Ctrl-C (the agent keeps running)
 ```
 
-`make up` starts all containers in the background. `restart: unless-stopped` means Docker restarts them after a crash or a reboot, until you stop them yourself. `make logs` follows the agent's log.
+`make up` starts all containers in the background. `make logs` follows the agent's log. Section 3 explains starting in detail.
 
 ### Step 8: Connect Telegram
 
@@ -214,23 +220,22 @@ nano .env                                                # TELEGRAM_OWNER_CHAT_I
 docker compose up -d agent
 ```
 
-The bot ignores every chat except the owner's, so it first ignores you too and logs your chat id. After you enter it, `docker compose up -d agent` recreates the agent container with the new `.env`; a plain `restart` would keep the old values. Test in Telegram: `/status`, `/briefing`, `/budget`.
+The bot ignores every chat except the owner's, so it first ignores you too and logs your chat id. After you enter it, `docker compose up -d agent` recreates the agent container with the new `.env`; a plain `restart` would keep the old values.
 
 ### Step 9: Publish the dashboard
 
 ```sh
-curl -s localhost:8501/_stcore/health                   # prints "ok"
 sudo tailscale serve --bg 8501
 tailscale serve status                                  # shows the https://….ts.net address
 ```
 
-The dashboard listens only on the Zenbook itself. `tailscale serve` makes it reachable at a private HTTPS address inside your tailnet, from the phone (Tailscale app on) or the Mac, and nowhere else. The setting survives reboots.
+The dashboard listens only on the Zenbook itself. `tailscale serve` makes it reachable at a private HTTPS address inside your tailnet, for example from the phone with the Tailscale app on, and nowhere else. The setting survives reboots. `sudo` needs your desktop user (the one with admin rights), not `trader`.
 
 ### Step 10: Connect the IBKR paper account
 
 ```sh
 make secrets                     # adds secrets/vnc_password if missing
-make tws-password                # type your IBKR password (not echoed); stored in secrets/tws_password
+make tws-password                # type your IBKR password (not shown); stored in secrets/tws_password
 nano .env
 ```
 
@@ -241,60 +246,245 @@ In `.env`:
 | `TWS_USERID` | your normal IBKR username | The gateway logs in with it **in paper mode** (fixed in `compose.yaml`), so it reaches the paper account (ID starting with `DU`). The separate paper username was rejected. |
 | `COMPOSE_PROFILES` | `ibkr` | Starts the `ib-gateway` container together with the others. |
 | `IB_ENABLED` | `true` | The agent connects to the gateway: account and positions, contract ids, quotes, reconciliation. |
-| `IB_ORDERS_ENABLED` | `false` | Orders still go to the simulator. Switch later (section 5). |
+| `IB_ORDERS_ENABLED` | `false` | Orders still go to the simulator. Switch later (section 4, test 13). |
 | `IB_READ_ONLY_API` | `yes` | The gateway itself refuses all orders: a second lock while orders are simulated. |
 
-Then:
+Then `docker compose up -d` starts the gateway (section 3 shows how to follow its login), and test 5 in section 4 checks the connection.
 
-```sh
-docker compose up -d
-docker compose logs -f ib-gateway | grep -v "Connection refused"     # wait for "Login has completed"; confirm 2FA on the phone
-docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check
-```
-
-- "Connection refused" lines are normal while the gateway is still logging in: the agent keeps trying until the gateway's API is up.
-- `ibkr-check` connects with client id 12 because the running agent already uses 11, and IBKR allows each id only once. It prints the account (paper: about €1,000,000 play money; the agent uses only its own €1,000 / €5,000 budgets), positions, IBKR's daily prices next to Yahoo's, quotes and price increments. Run it while the markets are open to see delayed quotes.
-- Telegram `/status` should now show `IB Gateway: connected`.
 - The gateway restarts every night at 23:45 by itself. About once a week IBKR asks for a full login: confirm the 2FA prompt on your phone.
 - Using your normal username has one side effect: a login with the same username elsewhere (IBKR app, Client Portal) can log the gateway out. Later, a second IBKR user only for the API avoids this.
 - The paper account must not hold positions the agent didn't open; otherwise the reconciliation halts the agent.
 
 ### Step 11: Set up backups
 
-On the Mac:
-
 ```sh
-brew install age && mkdir -p ~/.config/age && age-keygen -o ~/.config/age/key.txt
+sudo apt install age                                       # as your desktop user
+age-keygen -o /tmp/age-key.txt                             # as trader; prints "Public key: age1…"
+cat /tmp/age-key.txt                                       # copy the whole content into your password manager
+shred -u /tmp/age-key.txt                                  # the private key must not stay on the Zenbook
+nano .env                                                  # BACKUP_AGE_RECIPIENT=age1… (the public key)
+crontab -e                                                 # add the line below
 ```
 
-On the Zenbook:
-
-```sh
-sudo apt install age
-nano .env                  # BACKUP_AGE_RECIPIENT=age1… (the public key printed on the Mac)
-make backup                # prints "backup ok: …"
-crontab -e                 # add: 15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1
+```
+15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1
 ```
 
-- `make backup` dumps the database into `backups/` and checks that the dump is readable. 14 days are kept.
-- The cron line runs it every night at 03:15. On Sundays it also writes an encrypted copy to `backups/offsite/`. Only the private key on your Mac (keep a copy in your password manager) can decrypt it, so you can store that copy anywhere off the machine.
-- `make restore-check FILE=backups/<file>.dump` restores a backup into a scratch database and deletes it again: proof that the backup really works.
-
-### Step 12: Prepare the Mac for updates
-
-Add to `~/.ssh/config` on the Mac:
-
-```
-Host zenbook
-    HostName 100.116.207.96
-    User trader
-```
-
-The address is the Zenbook's Tailscale IP (`tailscale ip -4` on the Zenbook); the Mac needs Tailscale too. Then `ssh zenbook` works, and so does `make deploy` (section 4).
+- **age** encrypts files. The **public key** (`age1…`) can only encrypt, so it may sit in `.env`. The **private key** decrypts; it lives only in your password manager. A stolen Zenbook or a leaked off-site copy is useless without it.
+- The **cron line** runs `scripts/backup.sh` every night at 03:15. It dumps the database into `backups/` (14 days kept) and checks that each dump is readable. On Sundays it also writes an encrypted copy to `backups/offsite/`; copy those files to any cloud drive.
+- Test the backup right away with test 10 in section 4.
 
 ---
 
-## 3. Daily operation
+## 3. Starting the app
+
+The app starts by itself after a reboot or a crash (Docker's `restart: unless-stopped`). Do these steps after `make down`, after an update, or whenever you want to be sure it runs.
+
+**Step 1: Start the containers**
+
+```sh
+make up
+```
+
+Runs `docker compose up -d`: starts `db`, `agent`, `dashboard` and, with `COMPOSE_PROFILES=ibkr`, `ib-gateway`, all in the background. Containers that already run with unchanged settings are left alone; containers whose `.env` or image changed are recreated.
+
+**Step 2: Check the containers**
+
+```sh
+docker compose ps
+```
+
+Lists the containers. Expected: all four `Up` (the database `Up (healthy)`). `Restarting` means a container crashes again and again; its log shows why (`docker compose logs <name> | tail -50`).
+
+**Step 3: Follow the gateway's login**
+
+```sh
+docker compose logs -f ib-gateway | grep -v "Connection refused"
+```
+
+Shows the gateway's log as it happens, without the noise. Wait for `Login has completed` (about 30–90 seconds). If your phone shows an IBKR 2FA prompt, confirm it. "Connection refused" lines, which this command hides, are normal until the login is done: the agent keeps knocking until the gateway's API opens. Ctrl-C ends the view; the gateway keeps running. No `Login has completed` after 3 minutes: see 7.2.
+
+**Step 4: Follow the agent's start**
+
+```sh
+make logs
+```
+
+Shows the agent's log as it happens. Expected within a minute: `agent.started`, `scheduler.planned` (today's jobs) and `ibkr.connected`. One `ibkr.connect_failed` before that is normal while the gateway is still logging in. Ctrl-C ends the view.
+
+**Step 5: Ask the agent**
+
+In Telegram: `/status`. Expected: mode `paper`, kill switch `active`, the dates of the last prices, the next jobs and `IB Gateway: connected`. This is the quickest check that everything works together; use it whenever you're unsure.
+
+**Stopping the app**
+
+```sh
+make down
+```
+
+Stops and removes all containers. The database (volume `pgdata`), `.env`, `secrets/` and `backups/` stay; `make up` brings everything back. Stop outside trading sessions: orders already at IBKR stay active there, but nothing on the Zenbook watches them while the app is down.
+
+---
+
+## 4. Testing that everything works
+
+Do these tests once, in this order, after the setup. Each says what to do, what you should see, and what it proves. Repeat a test whenever you suspect a problem in its area.
+
+| # | Test | When | Done |
+|---|---|---|---|
+| 1 | Containers run | Now | ☐ |
+| 2 | Telegram answers | Now | ☐ |
+| 3 | Market data is complete | Now | ☐ |
+| 4 | Dashboard opens | Now | ☐ |
+| 5 | IBKR connection | Now, ideally during market hours | ☑ 2026-10-05 |
+| 6 | AI analysts | Now | ☐ |
+| 7 | Agent pipeline and labels | Now | ☐ |
+| 8 | Briefing and AI budget | Now | ☐ |
+| 9 | Kill switch | Outside 09:15 and 15:45 | ☐ |
+| 10 | Backup and restore | After step 11 | ☐ |
+| 11 | Gateway survives the night | The next morning | ☐ |
+| 12 | A full trading day | The next two trading days | ☐ |
+| 13 | IBKR orders and chaos tests | After a few stable days | ☐ |
+| 14 | Paper phase and go-live gate | 3 months | ☐ |
+
+### Test 1: Containers run
+
+```sh
+docker compose ps
+```
+
+**Expect** `db`, `agent`, `dashboard` and `ib-gateway` all `Up`. **Proves** the app and its database are running and Docker isn't restarting anything in a loop.
+
+### Test 2: Telegram answers
+
+In Telegram: `/status`, then `/help`.
+
+**Expect** the status (mode `paper`, kill switch `active`, last prices, next jobs, `IB Gateway: connected`) and the command list. **Proves** the bot reaches you, only your chat is accepted, and the agent's scheduler is running.
+
+### Test 3: Market data is complete
+
+```sh
+docker compose run --rm agent trading-agent quality
+```
+
+Checks every stored price history for missing days, impossible prices (a low above the high), jumps over 40 % and stale data.
+
+**Expect** a short report; ideally no blocked stocks. A few blocked stocks are fine: they're left out of the scan until the problem is 20 sessions old. **Proves** the price data the screen and the AI rely on is sound.
+
+### Test 4: Dashboard opens
+
+```sh
+curl -s localhost:8501/_stcore/health          # prints "ok"
+tailscale serve status                         # shows the https://….ts.net address
+```
+
+Open that address on the phone with the Tailscale app on, then turn Tailscale off and reload.
+
+**Expect** `ok`, the pages filling with data, and no page with Tailscale off. **Proves** the dashboard works and is reachable only through your tailnet.
+
+### Test 5: IBKR connection
+
+```sh
+docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check
+```
+
+Connects to the gateway as a second client (id 12; the running agent already uses 11 and IBKR allows each id once) and reads the account, positions, IBKR's daily prices next to the stored ones, live quotes and price increments. It changes nothing.
+
+**Expect** `Account (EUR): net liquidation 1000000.0` (paper play money; the agent only uses its own €1,000 / €5,000 budgets), `Positions: 0`, `Contracts without conid: none`, and during market hours `AAPL: delayed, last …, bid …, ask …`. Outside market hours the quotes may say `no data`. Warnings 10167 ("displaying delayed market data") and `tickType 88` errors are harmless. **Proves** the agent can read the account and get prices for the 1 % entry check.
+
+### Test 6: AI analysts
+
+```sh
+docker compose run --rm agent trading-agent analyse --top 3
+```
+
+Runs the technical and earnings analysts (Gemini) on today's three strongest setups. Costs a few cents.
+
+**Expect** per stock a rating, a plan (entry, stop, target) and an earnings stance, plus the total cost. **Proves** the Gemini key works and the AI's answers pass the code checks.
+
+### Test 7: Agent pipeline and labels
+
+```sh
+docker compose run --rm agent trading-agent propose --market US
+```
+
+Runs the whole AI chain for US stocks: screen → analysts → proposer → critic → portfolio manager. It stores proposals but places no orders; the placement only uses that morning's scan, so these proposals are never ordered.
+
+**Expect** ranked proposals, blocked ones and passes, skipped stocks and the cost. Then in Telegram: `/proposals` (the list), `/why SYMBOL` (thesis, critique, plan), `/review` (label one Agree or Disagree, reply with a reason). **Proves** all agents work together and your labels are stored. From now on the scans run by themselves before each open.
+
+### Test 8: Briefing and AI budget
+
+In Telegram: `/briefing`, then `/budget`.
+
+**Expect** the morning briefing (markets, EUR/USD, earnings ahead, the rule-based book, data status) and the AI spend this month against the $16 budget. **Proves** the reports work and the budget guard counts the AI costs.
+
+### Test 9: Kill switch
+
+Outside the placement times (09:15 and 15:45), in Telegram:
+
+1. `/pause test`, then `/status`: shows `paused (test)`. No new entries.
+2. `/resume`: entries allowed again.
+3. `/stop` and confirm: `/status` shows `halted`. No new entries, unfilled entries cancelled.
+4. On the Zenbook: `docker compose run --rm agent trading-agent reset` prints a code.
+5. In Telegram within 15 minutes: `/reset CODE`. `/status` shows `Kill switch: active`.
+
+**Proves** you can stop the agent from your phone at any time, and only someone with both the Zenbook and your phone can restart it after a halt. Don't leave it halted: then nothing trades.
+
+### Test 10: Backup and restore
+
+```sh
+OFFSITE=1 make backup
+make restore-check FILE=$(ls -1t backups/*.dump | head -1)
+```
+
+The first command makes a backup now, including an encrypted off-site copy. The second restores the newest backup into a scratch database, prints the row counts and deletes the scratch database again; the real database isn't touched.
+
+Then test the encrypted copy: paste the private key from your password manager into `/tmp/age-key.txt`, and run
+
+```sh
+AGE_KEY=/tmp/age-key.txt make restore-check FILE=$(ls -1t backups/offsite/*.age | head -1)
+shred -u /tmp/age-key.txt
+```
+
+**Expect** `backup ok: …` and twice the row counts of the main tables. **Proves** that backups are written, readable and can be decrypted with the key from your password manager.
+
+### Test 11: Gateway survives the night
+
+The morning after the gateway's first start:
+
+```sh
+docker compose logs --since 12h ib-gateway | grep -v "Connection refused" | tail -50
+```
+
+**Expect** the restart at 23:45 and a new `Login has completed` without you doing anything (unless IBKR asked for the weekly 2FA). Telegram `/status` shows `IB Gateway: connected`. **Proves** the gateway runs unattended.
+
+### Test 12: A full trading day
+
+Nothing to type; watch Telegram on the next two trading days:
+
+| Time | Expect | Shows that |
+|---|---|---|
+| 08:15 | 🧠 EU proposals | The EU scan ran by itself |
+| 08:30 | 📰 Morning briefing | The daily report works |
+| 09:15 | 📤 EU orders (simulator) and rejections with reasons | The risk engine decides and the simulator receives the orders |
+| 14:45 | 🧠 US proposals | The US scan ran |
+| 15:45 | 📤 US orders | As at 09:15 |
+| 18:05 / 22:35 | 🟢 bought, 🔴 sold, ⌛ entry ended (if anything happened) | Fills and exits are processed after each close |
+| 23:05 | 🌙 Evening digest | The day's summary, both books, AI spend |
+
+Not every day has proposals or orders; "no trades" is a valid result. The dashboard's Positions and Proposals pages show the same. **Proves** the whole chain from data to order runs on its own.
+
+### Test 13: IBKR orders and chaos tests
+
+After a few days without gateway problems, and when `/positions` shows nothing open: switch the orders from the simulator to the IBKR paper account (`IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`) and run the three chaos tests (gateway restart with open orders, reboot during a session, replaying the same proposals). Exact steps: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17. **Proves** that no order is lost, duplicated or left without a stop.
+
+### Test 14: Paper phase and go-live gate
+
+Three months of paper trading with the daily routine (section 5), until the Saturday report shows the go-live gate met: 91 days, 50 closed trades, positive after all costs, better than the rule-based book. Real money only follows after the go-live checklist in [IMPLEMENTATION.md](IMPLEMENTATION.md) section 18.
+
+---
+
+## 5. Daily operation
 
 Once running, the app needs no buttons. The daily schedule is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4: scans before each open, placement 15 minutes after it, end-of-day processing after each close, the 🌙 evening digest, the Saturday report.
 
@@ -309,14 +499,14 @@ Your part (about an hour a day, [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 11.4):
 
 ### Commands you'll use
 
-| Command (on the Zenbook) | What it does |
+| Command | What it does |
 |---|---|
 | `docker compose ps` | Shows which containers run and whether they restart in a loop |
 | `make logs` | Follows the agent's log (Ctrl-C ends only the view) |
 | `docker compose logs --since 2h ib-gateway \| grep -v "Connection refused"` | The gateway's recent log without the noise |
-| `docker compose up -d` | Starts everything, or recreates containers whose settings (`.env`, image) changed |
+| `make up` | Starts everything, or recreates containers whose settings (`.env`, image) changed |
 | `docker compose restart agent` | Restarts the agent with unchanged settings |
-| `make down` | Stops everything (data stays). `make up` starts it again. |
+| `make down` | Stops everything (data stays) |
 | `docker compose run --rm agent trading-agent propose --market US` | Runs the US agent pipeline now: proposals, no orders |
 | `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent place US` | Runs today's US placement now. Safe to repeat: nothing is ordered twice. |
 | `docker compose run --rm agent trading-agent weekly-report` | Builds and sends the weekly report now |
@@ -327,55 +517,35 @@ In Telegram: `/status`, `/positions`, `/pnl`, `/proposals`, `/why SYMBOL`, `/rev
 
 ---
 
-## 4. Updating the app
+## 6. Updating the app
 
-1. **On the Mac**: change the code, `make lint && make test`, commit, push. GitHub CI runs the same checks; wait for the green tick (or watch for the failure e-mail).
-2. **Deploy**, outside trading sessions or after `/pause`:
-   - from the Mac: `make deploy`, or
-   - on the Zenbook: `git pull && make build && make migrate && make up`.
-3. **Check**: `/status` in Telegram, `make logs` for errors. `/resume` if you paused.
+When new code is on GitHub (and its CI run is green), outside trading sessions or after `/pause`:
 
-What each part does: `git pull` fetches the new code, `make build` builds a new image from it, `make migrate` updates the tables if the update needs it, `make up` replaces the running containers with the new image. A restart triggers a reconciliation with IBKR, which is why deploys happen outside sessions.
+```sh
+git pull
+make build
+make migrate
+make up
+```
 
-Changes to `.env` need only `docker compose up -d` (no build). Changes in `config/` or `prompts/` are part of the image: commit, push, deploy.
+| Command | What it does |
+|---|---|
+| `git pull` | Downloads the new code from GitHub |
+| `make build` | Builds a new image from it (under a minute when only code changed) |
+| `make migrate` | Updates the database tables if the update needs it; otherwise does nothing |
+| `make up` | Replaces the running containers with ones from the new image |
 
----
+Then check with `/status` in Telegram and `make logs`, and `/resume` if you paused. A restart triggers a reconciliation with IBKR, which is why updates happen outside sessions.
 
-## 5. Checklist: from setup to real money
-
-Section 2 gets the app running. These checks prove that it works, in this order. Tick them off as you go; the 📋 outputs in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 are what to send back.
-
-**Setup (section 2)**
-
-- [ ] Steps 1–9: Zenbook prepared, data loaded, app running, Telegram answers `/status`, dashboard opens on the phone
-- [x] Step 10: IBKR paper account connected; `ibkr-check` shows delayed quotes (2026-10-05)
-- [ ] Step 11: backups set up, `make restore-check` passed
-- [ ] Step 12: `ssh zenbook` works from the Mac
-
-**First days**
-
-- [ ] **Gateway survives the night**: the morning after step 10, `docker compose logs --since 12h ib-gateway | grep -v "Connection refused" | tail -50` shows the 23:45 restart and a new login without your help. Proves the gateway runs unattended.
-- [ ] **AI scan works**: `docker compose run --rm agent trading-agent analyse --top 3` prints a rating, a plan and the cost per stock. Proves the Gemini key, the budget guard and the analysts.
-- [ ] **Proposals**: `docker compose run --rm agent trading-agent propose --market US`, then `/proposals`, `/why SYMBOL`, `/review` in Telegram. From then on the scans run by themselves before each open.
-- [ ] **Kill switch**: `/pause test`, `/status`, `/resume`, then `/stop` and confirm; `docker compose run --rm agent trading-agent reset` prints a code; `/reset CODE`. `/status` shows `Kill switch: active`. Proves you can stop the agent and only you can restart it.
-- [ ] **Simulated orders**: on the next trading days, 📤 messages 15 minutes after each open, 🟢 🔴 ⌛ after each close, and the 🌙 digest. Send the first two days. Proves the whole chain from scan to order runs.
-- [ ] **One week of proposals, labelled by you** with `/review`. Gives the first evidence whether the AI's judgement matches yours.
-
-**Before real orders at IBKR**
-
-- [ ] **IBKR orders and the three chaos tests** (gateway restart with open orders, reboot during a session, replaying the same proposals): [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17. Prerequisites: the gateway ran a few days without problems and `/positions` shows nothing open. Proves that no order is lost, duplicated or left without a stop.
-- [ ] Optional: Anthropic key for the critic, then `LLM_DEV_OVERRIDES=false` ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.2).
-
-**Paper phase and go-live**
-
-- [ ] **3 months of paper trading** with the daily routine (section 3) until the weekly report shows the go-live gate met: 91 days, 50 closed trades, positive after all costs, better than the rule-based book.
-- [ ] **Go-live checklist**: mini PC, funded live account, interlock and kill switch tested live, restore tested on another machine ([IMPLEMENTATION.md](IMPLEMENTATION.md) section 18).
+- Changes to `.env` need only `make up` (no build).
+- Changes in `config/` or `prompts/` are part of the code: they come with `git pull` and need the build.
+- Updates that only change documentation need just `git pull`.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
-### 6.1 `git pull` says "divergent branches" or refuses
+### 7.1 `git pull` says "divergent branches" or refuses
 
 Something was changed or committed on the Zenbook. The Zenbook should only receive code, so reset it to GitHub's state (`.env`, `secrets/`, `backups/` and the database aren't touched):
 
@@ -383,37 +553,33 @@ Something was changed or committed on the Zenbook. The Zenbook should only recei
 git fetch origin && git reset --hard origin/main
 ```
 
-### 6.2 The gateway doesn't log in
+### 7.2 The gateway doesn't log in
+
+Look at its screen first (7.3), then:
 
 | Symptom | Meaning and fix |
 |---|---|
-| Only "Connection refused" lines for more than 5 minutes | The login didn't finish. Look at the gateway's screen (6.3). |
-| "Invalid username or password" (on the gateway screen) | Wrong username or password: check `TWS_USERID` in `.env` and run `make tws-password` again, then `docker compose up -d --force-recreate ib-gateway`. Stop the gateway (`docker compose stop ib-gateway`) while you sort it out; repeated failures can lock the login. |
+| Only "Connection refused" lines for more than 5 minutes | The login didn't finish; the gateway's screen shows why. |
+| "Invalid username or password" | Wrong username or password: check `TWS_USERID` in `.env`, run `make tws-password` again, then `docker compose up -d --force-recreate ib-gateway`. Stop the gateway (`docker compose stop ib-gateway`) while you sort it out; repeated failures can lock the login. |
 | Waits for "second factor" | Confirm the 2FA prompt in the IBKR app. |
 | "Existing session" | The same username is logged in elsewhere; log out there. |
 
-### 6.3 Seeing the gateway's screen
+### 7.3 Seeing the gateway's screen
 
-The gateway runs a small screen you can view with VNC. On the Zenbook's desktop: open **Remmina**, protocol VNC, server `localhost:5900`. The password is the first 8 characters of the VNC secret:
+The gateway runs a small screen you can view with VNC. On the Zenbook's desktop: open **Remmina** (`sudo apt install remmina remmina-plugin-vnc` if missing), protocol VNC, server `localhost:5900`, password from 1.2.
 
-```sh
-sudo head -c 8 ~trader/projects/trading-agent/secrets/vnc_password; echo
-```
-
-From the Mac (with Tailscale): `ssh -L 5901:localhost:5900 zenbook`, then `open vnc://localhost:5901`.
-
-### 6.4 `ibkr-check` fails with "API connection failed: TimeoutError"
+### 7.4 `ibkr-check` fails with "API connection failed: TimeoutError"
 
 The running agent already uses client id 11. Run the check with its own id: `-e IB_CLIENT_ID=12`.
 
-### 6.5 Errors 10089 / 354 about market data
+### 7.5 Errors 10089 / 354, warning 10167 about market data
 
-The account has no paid real-time data for the API. The app asks for free delayed quotes (15–20 minutes old) and uses the last close when none arrive. Nothing to fix.
+The account has no paid real-time data for the API. The app uses free delayed quotes (15–20 minutes old) and the last close when none arrive. Nothing to fix.
 
-### 6.6 No Telegram messages
+### 7.6 No Telegram messages
 
-`docker compose ps` (is the agent running?), `make logs` (errors?), `TELEGRAM_OWNER_CHAT_ID` set? After changing `.env`: `docker compose up -d agent`.
+`docker compose ps` (is the agent running?), `make logs` (errors?), `TELEGRAM_OWNER_CHAT_ID` set in `.env`? After changing `.env`: `make up`.
 
-### 6.7 CI failure e-mail after a push
+### 7.7 CI failure e-mail
 
-Open the run on GitHub (Actions tab). If a step like "Set up job" failed, it's the CI setup, not your code; otherwise the failing check (lint, types, tests) shows what to fix. Run `make lint && make test` on the Mac to reproduce it.
+The latest code on GitHub failed a check. Don't update the Zenbook to that version; wait until a fix is pushed and the run is green (github.com/klausrossmann/trading-agent/actions).
