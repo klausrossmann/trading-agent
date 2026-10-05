@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_owner_chat_id: int | None = None  # unset: every chat is ignored and logged (setup)
     gemini_api_key: SecretStr | None = None
+    finnhub_api_key: SecretStr | None = None  # company news for position re-evaluation (M9)
     llm_dev_overrides: bool = False  # config/models.yaml dev_overrides (Phase 0-1)
 
     db_host: str = "db"

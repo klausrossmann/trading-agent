@@ -73,3 +73,11 @@ jobs:
   weekly_report:                    # KPIs vs. baselines, costs, calibration, go-live gate (M9)
     cron: {day_of_week: sat, hour: 10, minute: 0}
     misfire_grace_minutes: 720
+  ingest_news:                      # Finnhub headlines for held positions, triaged (M9)
+    cron: {day_of_week: mon-fri, hour: "7-22", minute: "0,30"}
+    misfire_grace_minutes: 20
+  reevaluate_positions:             # positions with important news or a report soon (M9)
+    calendar: XNYS
+    anchor: close
+    offset_minutes: -60
+    misfire_grace_minutes: 30

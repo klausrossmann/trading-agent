@@ -350,3 +350,22 @@ class ReportRow(Base):
     period_end: Mapped[dt.date] = mapped_column(Date, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     body: Mapped[str] = mapped_column(Text)
+
+
+class NewsRow(Base):
+    """Company headlines (untrusted text) and the triage model's relevance."""
+
+    __tablename__ = "news"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("instruments.id", ondelete="CASCADE"), index=True
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    headline: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    relevance: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)

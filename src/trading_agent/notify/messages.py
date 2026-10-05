@@ -465,6 +465,17 @@ def entry_ended_alert(symbol: str, outcome: str) -> str:
     return f"⌛ {symbol}: entry {outcome} without a fill"
 
 
+def news_alert(symbol: str, headline: str, note: str) -> str:
+    return f"📰 {symbol}, important news: {headline}\nWhy: {note}"
+
+
+def review_alert(symbol: str, confidence: float, reasons: str) -> str:
+    return (
+        f"🧐 Review {symbol}: the thesis no longer holds (confidence {confidence:.2f}).\n"
+        f"{reasons}\nTo sell at the next open: /exit {symbol}. Otherwise nothing happens."
+    )
+
+
 @dataclass(frozen=True)
 class HeldLine:
     symbol: str

@@ -683,7 +683,7 @@ Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for
 |---|---|---|---|
 | `heartbeat` | every 5 min | no | Ping the heartbeat URL |
 | `ingest_macro`, `earnings_calendar` | 07:00 / 07:15 trading days | no | |
-| `ingest_news` | every 30 min, 07:00–22:30 | triage | Flash-Lite scoring |
+| `ingest_news` | every 30 min, 07:00–22:30 | triage | Flash-Lite scoring (since M9: Finnhub, held US positions only) |
 | `scan_eu` (paper only) | XETR open − 45 min | yes | Uses the previous EOD bars; batch API where possible |
 | `briefing` | 08:30 | reports | Telegram: portfolio, events today, pending orders |
 | `place_eu` | XETR open + 15 min | no | Risk engine → execution (since M8 step 4) |
@@ -691,7 +691,7 @@ Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for
 | `scan_us` | XNYS open − 45 min | yes | |
 | `place_us` | XNYS open + 15 min | no | |
 | `monitor` | every 10 min in session | no | Broker sync and alerts (IBKR mode); stops and time stops run at EOD on daily bars (9.6); invalidation rules later |
-| `reevaluate_positions` | XNYS close − 60 min | yes | Only positions with news or events |
+| `reevaluate_positions` | XNYS close − 60 min | yes | Only positions with news or events (since M9; advice only, `/exit` is yours) |
 | `ingest_eod_us` | XNYS close + 30 min | no | |
 | `eod` | after `ingest_eod_us` | no | Reconcile, update books and shadow trades, plan stop changes (since M8 step 4: `execution_eu`/`execution_us` at close + 35 min) |
 | `evening_digest` | after `eod` | reports | Telegram: fills, rejections, labels to do |
@@ -730,7 +730,7 @@ Implementation (M4): `notify/telegram.py` (bot, gate, retrying background start 
 | `/briefing` | The morning briefing on demand (M4) |
 | `/help` | Command list |
 
-Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. Since M8 step 2: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`. Since M9: `/positions`, `/pnl`. The others arrive with the features they report on.
+Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbols, next jobs), `/briefing`, `/help`. Since M5: `/budget`. Since M7: `/proposals`, `/why`, `/review`. Since M8 step 2: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`. Since M9: `/positions`, `/pnl`, `/exit SYMBOL` (market sell of that open position at the next open). The others arrive with the features they report on.
 
 ### 12.3 Alerts
 
@@ -789,6 +789,8 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 | Gate | `weekly.gate` | Four checks: 91 days since the paper start, 50 closed trades in the agent sample, net expectancy after all LLM costs > 0, and above `baseline_sim`'s expectancy. |
 | Telegram | `trading.commands` | `/positions`: open positions with entry, stop, target, last close, R and unrealized P&L; pending entries with their limit and expiry. `/pnl`: per sleeve day, week, month and since start from the equity snapshots, with `baseline_sim`'s closed P&L for the same windows. |
 | Tax helper (M10 prep) | `portfolio/tax.py`, `reports.tax_report`, CLI `trading-agent tax-report YEAR [--book agent_live\|agent_paper] [--output]` | One row per sale: the sale at the ECB rate of its trade day against the average cost of the shares bought (their trade days' rates), fees on both sides. Gains, losses and net of the share pot (shares only offset shares), tax at 26.375 % before allowance and church tax. Stored as report `tax:<book>`. Dividends, withholding tax and FX results on the USD cash balance come from the IBKR Flex Query. Not tax advice. |
+| News | `data/news.py` (Finnhub company news, free tier: US only), migration `0010` `news`, job `ingest_news` | For held positions only: the last 3 days of headlines, stored once per id. `modules/news_triage.py` (role `triage`, Flash-Lite) rates each new item `none`/`low`/`high` for the position's thesis; headline and summary go in as `<untrusted>` blocks. A `high` item sends 📰 with the headline and the reason. Without `FINNHUB_API_KEY` the job only logs. |
+| Position review | `modules/position_review.py` (role `analysis`), `review.py`, job `reevaluate_positions` | Positions with a `high` item in the last 24 h or a report within 3 sessions. Facts by code: entry, stops, target, last close, R now, last 10 closes, SMA 20/50, ATR, next report; plus the triaged news of the last 5 days, the thesis and its invalidation. Output `hold`/`exit` with `thesis_intact` (must agree) and grounded reasons. An `exit` sends 🧐 with the reasons and `/exit SYMBOL`; nothing is sold without you (19.2 #14). `/exit` places a market sell for the next open via the executor. |
 
 ---
 
@@ -970,6 +972,8 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
       2. Reboot during a session: `sudo reboot`. Expected: the stack comes back by itself, ▶️ message, reconciliation clean, stops still at IBKR (they are GTC there), nothing duplicated.
       3. Replay the same proposals: `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent place US` during the session, after the scheduled placement. Expected: every proposal that already has a bracket is rejected (`rate_limits: already held or pending`), and IBKR shows no second order for any `orderRef`.
     - Also check once: an entry that expires (`GTD`) shows ⌛ the day after, and the GTD time IBKR shows is the next session's close.
+
+18. **News and position review** (M9, after `make migrate`): a free key at finnhub.io (Dashboard → API key) as `FINNHUB_API_KEY` in `.env`, then `docker compose up -d agent`. With an open US position, `docker compose logs agent | grep -E "news|review"` 📋 after a few hours shows fetches and triage; 📰 and 🧐 messages arrive only for important news or a report within 3 sessions. `/exit SYMBOL` is the only way the review leads to a sale.
 
 After a later `git pull`: `make build && make migrate && make up` (or `make deploy` from the Mac).
 

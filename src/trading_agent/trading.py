@@ -501,7 +501,32 @@ def commands(ctx: TradingContext) -> dict[str, Command]:
     async def pnl(_: list[str]) -> str:
         return await pnl_text(ctx)
 
+    async def exit_(args: list[str]) -> str:
+        if not args:
+            return "Usage: /exit SYMBOL, e.g. /exit AAPL"
+        return await manual_exit(ctx, args[0])
+
     return {
         "positions": Command("open positions and pending entries of the agent book", positions),
         "pnl": Command("P&L by day, week, month and since start, with the baseline", pnl),
+        "exit": Command("sell SYMBOL's open position at the next open (market order)", exit_),
     }
+
+
+async def manual_exit(ctx: TradingContext, symbol: str) -> str:
+    """Your decision after a review alert: a market exit for the open position in `symbol`."""
+    loaded = await _load(ctx)
+    wanted = symbol.strip().upper()
+    for b, _ in loaded.brackets:
+        inst = loaded.instruments[b.instrument_id]
+        if inst.yahoo_symbol.upper() != wanted or b.open_qty <= 0:
+            continue
+        if b.state != "filled":
+            return f"{inst.yahoo_symbol}: an exit is already under way ({b.state})."
+        await ctx.executor.request_exit(b.id, "manual")
+        log.info("exit.manual", symbol=inst.yahoo_symbol, quantity=b.open_qty)
+        return (
+            f"Exit order for {inst.yahoo_symbol}: sell {b.open_qty} at the market, "
+            "at the next open. Stop and target are cancelled when it fills."
+        )
+    return f"No open position in {wanted}."

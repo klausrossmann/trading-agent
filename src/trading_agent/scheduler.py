@@ -14,10 +14,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, pipeline, reports, trading
+from trading_agent import broker, jobs, journal, pipeline, reports, review, trading
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
+from trading_agent.data.news import FinnhubNews
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
 from trading_agent.db import orders as orders_repo
@@ -25,6 +26,10 @@ from trading_agent.db.session import create_engine, session_factory
 from trading_agent.execution.orders import OrderBroker
 from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
+from trading_agent.llm.prompts import load_prompt
+from trading_agent.modules import news_triage, position_review
+from trading_agent.modules.news_triage import NewsTriageModule
+from trading_agent.modules.position_review import PositionReviewModule
 from trading_agent.notify import heartbeat, messages
 from trading_agent.notify.telegram import (
     Command,
@@ -137,6 +142,7 @@ def job_functions(
     center: ControlCenter | None = None,
     trade: trading.TradingContext | None = None,
     expected: broker.Expected | None = None,
+    review_ctx: review.ReviewContext | None = None,
 ) -> dict[str, JobFn]:
     halt = center.halt if center else None
     fns: dict[str, JobFn] = {
@@ -160,6 +166,11 @@ def job_functions(
             "execution_us": partial(trading.end_of_day, trade, "US"),
             "monitor": partial(trading.monitor, trade),
         }
+    if review_ctx is not None:
+        fns |= {
+            "ingest_news": partial(review.ingest_news, review_ctx),
+            "reevaluate_positions": partial(review.reevaluate_positions, review_ctx),
+        }
     return fns
 
 
@@ -172,6 +183,26 @@ def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
         return await review.on_button(data)
 
     return Interaction(on_button, review.on_text)
+
+
+def review_context(
+    settings: Settings,
+    trade: trading.TradingContext,
+    analysis: jobs.AnalysisContext,
+    http: httpx.AsyncClient,
+) -> review.ReviewContext:
+    key = settings.finnhub_api_key
+    return review.ReviewContext(
+        trade=trade,
+        runner=analysis.runner,
+        triage=NewsTriageModule(
+            load_prompt(settings.prompts_dir, news_triage.NAME, news_triage.PROMPT_VERSION)
+        ),
+        review=PositionReviewModule(
+            load_prompt(settings.prompts_dir, position_review.NAME, position_review.PROMPT_VERSION)
+        ),
+        news=FinnhubNews(http, key) if key is not None and key.get_secret_value() else None,
+    )
 
 
 async def trading_context(
@@ -330,7 +361,17 @@ async def serve(
                 schedule,
                 settings,
                 http,
-                job_functions(ctx, book, notifier, analysis, link, center, trade, expected),
+                job_functions(
+                    ctx,
+                    book,
+                    notifier,
+                    analysis,
+                    link,
+                    center,
+                    trade,
+                    expected,
+                    review_context(settings, trade, analysis, http),
+                ),
                 state,
             )
             state.scheduler = scheduler
