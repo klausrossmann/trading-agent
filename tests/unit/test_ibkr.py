@@ -46,9 +46,13 @@ class FakeIB:
         self.summary: list[Any] = []
         self.position_list: list[Any] = []
         self.accounts: list[str] = []
+        self.data_type: int | None = None
 
     def isConnected(self) -> bool:
         return self.connected
+
+    def reqMarketDataType(self, data_type: int) -> None:
+        self.data_type = data_type
 
     def managedAccounts(self) -> list[str]:
         return self.accounts
@@ -231,6 +235,7 @@ async def test_link_alerts_once_after_ten_minutes_and_on_recovery() -> None:
     assert await link.step() == 30
     assert inbox.sent[-1] == "🔌 IB Gateway connected again after 21 min"
     assert connected == ["connected (ib-gateway:4004)"]
+    assert fake.data_type == broker.DELAYED
     assert await link.step() == 30  # stays connected, no new messages
     assert len(inbox.sent) == 2
 

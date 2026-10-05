@@ -674,6 +674,6 @@ The instructions for each AI role, one file per version (`prompts/proposer/v2.md
 - **No automatic sale on bad news or before earnings.** The position review advises; you decide with `/exit`.
 - **Macro data only informs the proposer** (and the optional market filter). Company fundamentals (revenue, valuation) aren't used.
 - **News covers held US stocks only** (Finnhub's free tier).
-- **The 1 % entry check uses the last close** until the IBKR gateway delivers live quotes.
+- **The 1 % entry check uses a delayed price** (15–20 minutes old) while the IBKR gateway is connected, and the last close without it. Real-time prices would need a paid market-data subscription.
 - **Paper fills are simulated from daily bars** until the IBKR paper login is set up (runbook in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5).
 - **No proven edge.** The whole point of the paper phase is to find out whether there is one.

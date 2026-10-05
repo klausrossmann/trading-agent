@@ -622,7 +622,7 @@ stateDiagram-v2
 - **Bracket orders**: parent `LMT` with `tif=GTD` (2 trading days); children `STP` (stop) and `LMT` (target), both `GTC` and linked as OCA. `outsideRth=False`. Routing is `SMART`, which is required for Tiered pricing via the API.
 - **Idempotency**: `orderRef = <proposal_id>:<kind>`. Before submitting, the adapter checks open orders and executions for that `orderRef`, so a retry never creates a duplicate order.
 - **Stop management**: moving a stop (breakeven at +1R, trailing) modifies the existing stop order and is logged. Stops are only ever tightened, never loosened.
-- **Market data**: daily bars from IBKR. Whether the free US real-time feed (Cboe One/IEX) also reaches the API is checked in milestone M6. If it doesn't, delayed quotes are acceptable for daily-bar entries with limit orders, and the 1 % limit-deviation check uses the last close plus the delayed quote.
+- **Market data**: daily bars stay on Yahoo (`ibkr-check` 2026-10-05: AAPL closes identical but IBKR volume about half of Yahoo's, which would shift the liquidity filter; SAP.DE closes 0.1–0.3 % off the Xetra close). The account has no API market-data subscription, so every connection requests market data type 3 (`broker.DELAYED`): real-time where subscribed, otherwise quotes delayed by 15–20 minutes, which is enough for daily-bar entries with limit orders. The 1 % limit-deviation check uses that quote, and the last close when none arrives.
 
 #### 10.1.1 Implementation, read side (M6, 2026-10-04, written before the paper login exists)
 
@@ -987,7 +987,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 13. **IB Gateway** (M6, once the IBKR paper login exists):
     - `make secrets` (adds `vnc_password`), `make tws-password` (type the paper password), and in `.env`: `TWS_USERID=<paper username>`, `COMPOSE_PROFILES=ibkr`, `IB_ENABLED=true`.
     - `docker compose up -d`, then `docker compose logs -f ib-gateway` until the login succeeds (a 2FA prompt on the phone needs confirming, if the paper account asks for one).
-    - `docker compose run --rm agent trading-agent ibkr-check` 📋. During US market hours if possible, so the quote line shows whether real-time data reaches the API.
+    - `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check` 📋 (its own client id: the running agent already holds 11, and a second connection with the same id times out). During US market hours if possible, so the quote line shows whether real-time data reaches the API.
     - `/status` in Telegram shows `IB Gateway: connected`. The next morning 📋: did the gateway come back after its 23:45 restart without a message from you (`docker compose logs --since 12h ib-gateway | tail -50`)?
     - If something hangs: `ssh -L 5900:localhost:5900 zenbook`, then a VNC viewer on `localhost:5900` with the first 8 characters of `secrets/vnc_password`.
     - Since M8 step 2, positions in the paper account that the agent didn't open halt it (reconciliation). Close them in the paper account first, or reset as in step 14.
@@ -1001,7 +1001,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - Copy one `.age` file to the Mac and run `scripts/restore.sh check <file>` there against a local throwaway database once: that is the "restore on another machine" test of section 18.
 17. **IBKR orders and chaos tests** (M8 step 5, after step 13 works; outside US hours for the switch, the tests during a session):
     - Switch: `/positions` shows nothing open (otherwise wait until the simulated brackets are closed). In `.env`: `IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`. `docker compose up -d` (recreates gateway and agent). `/status` shows the gateway connected.
-    - `docker compose run --rm agent trading-agent ibkr-check --order-test AAPL` 📋: placed `working`, after cancel `inactive`, and the price increments for AAPL and SAP.DE.
+    - `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check --order-test AAPL` 📋: placed `working`, after cancel `inactive`, and the price increments for AAPL and SAP.DE.
     - The next placements go to IBKR (📤 says `IBKR`). Once a bracket is working or filled, run the three chaos tests 📋:
       1. Gateway restart with open orders: `docker compose restart ib-gateway`. Expected: 🔌 alerts only if it stays down more than 10 min; after reconnect a clean reconciliation (no ⚠️, no halt), `/positions` unchanged, in TWS/the IBKR app each order exists once.
       2. Reboot during a session: `sudo reboot`. Expected: the stack comes back by itself, ▶️ message, reconciliation clean, stops still at IBKR (they are GTC there), nothing duplicated.

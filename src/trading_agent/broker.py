@@ -4,6 +4,7 @@ Read-only unless IB_ORDERS_ENABLED (M8 step 5)."""
 
 import asyncio
 import contextlib
+import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ log = structlog.get_logger(__name__)
 ALERT_AFTER_S = 600  # IMPLEMENTATION.md 12.3: disconnected for more than 10 minutes
 CHECK_EVERY_S = 30
 MAX_BACKOFF_S = 300
+DELAYED = 3  # IBKR market data type: real-time where subscribed, else 15-20 min delayed
 
 
 class BrokerLink:
@@ -85,6 +87,7 @@ class BrokerLink:
         except (OSError, TimeoutError, ConnectionError) as exc:
             log.warning("ibkr.connect_failed", error=type(exc).__name__)
             return False
+        self.ib.reqMarketDataType(DELAYED)
         return True
 
     async def step(self) -> float:
@@ -195,10 +198,12 @@ async def _instrument(sessions: Sessions, symbol: str) -> tuple[int, Instrument]
 
 async def _quote_type(ib: IB, inst: Instrument) -> str:
     contract = ibkr_data.contract_for(inst)
-    ib.reqMarketDataType(1)  # real-time if the account may; IBKR falls back to delayed
     ticker: Ticker = ib.reqMktData(contract)
     await asyncio.sleep(5)
     ib.cancelMktData(contract)
+    prices = (ticker.last, ticker.bid, ticker.ask)
+    if not any(math.isfinite(p) and p > 0 for p in prices):
+        return f"{inst.yahoo_symbol}: no data (the last close is used)"
     kind = DATA_TYPES.get(ticker.marketDataType, str(ticker.marketDataType))
     return f"{inst.yahoo_symbol}: {kind}, last {ticker.last}, bid {ticker.bid}, ask {ticker.ask}"
 
