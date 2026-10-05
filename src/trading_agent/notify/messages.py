@@ -169,7 +169,7 @@ def render_status(s: StatusSnapshot) -> str:
         f"Data: last bars {bars}",
         f"Blocked symbols: {blocked}",
         "Next jobs:",
-        *[f"  {name} {when:%a %d %b %H:%M}" for name, when in s.next_jobs],
+        *[f"  {name} {when.astimezone(BERLIN):%a %d %b %H:%M}" for name, when in s.next_jobs],
         f"IB Gateway: {s.gateway}",
         f"Kill switch: {s.kill_switch}",
         *([f"Live interlock: {s.interlock}"] if s.interlock else []),

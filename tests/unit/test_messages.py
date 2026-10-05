@@ -77,7 +77,7 @@ def test_status_text() -> None:
     assert "Heartbeat: ok, 3 min ago" in text
     assert "last bars US 02 Oct, EU -" in text
     assert "EU: EXS1.DE" in text
-    assert "ingest_eod_eu:2026-10-05 Mon 05 Oct 16:00" in text
+    assert "ingest_eod_eu:2026-10-05 Mon 05 Oct 18:00" in text  # Berlin time
     assert "Kill switch: unknown" in text
     assert "Live interlock" not in text
 
