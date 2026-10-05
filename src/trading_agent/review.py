@@ -62,14 +62,10 @@ async def held_positions(ctx: ReviewContext) -> list[Held]:
     t = ctx.trade
     brackets, fills, instruments = await trading.load_book(t.sessions, t.book, t.fees)
     entered = {f.bracket_id: f.day for f in reversed(fills) if f.kind == "entry"}
-    out: list[Held] = []
-    for b, _ in brackets:
-        if b.open_qty <= 0 or b.id not in entered:
-            continue
-        async with t.sessions() as s:
-            p = await proposals_repo.get(s, b.id)
-        out.append(Held(b, instruments[b.instrument_id], p, entered[b.id]))
-    return out
+    held = [b for b, _ in brackets if b.open_qty > 0 and b.id in entered]
+    async with t.sessions() as s:
+        proposals = await proposals_repo.by_ids(s, [b.id for b in held])
+    return [Held(b, instruments[b.instrument_id], proposals.get(b.id), entered[b.id]) for b in held]
 
 
 async def ingest_news(ctx: ReviewContext) -> int:
@@ -170,10 +166,8 @@ async def reevaluate_positions(ctx: ReviewContext) -> list[str]:
         async with ctx.trade.sessions() as s:
             news = await news_repo.recent(s, inst_id, now - timedelta(days=REVIEW_NEWS_DAYS))
             bars = await market_repo.bars(s, inst_id, today - timedelta(days=HISTORY_DAYS))
-            reports = [
-                d for d in (await market_repo.earnings_dates(s)).get(inst_id, []) if d >= today
-            ]
-        report = min(reports) if reports else None
+            dates = (await market_repo.earnings_dates(s, [inst_id])).get(inst_id, [])
+        report = next((d for d in dates if d >= today), None)
         if not bars:
             continue
         facts = _facts(h, bars, bars[-1].date, report)

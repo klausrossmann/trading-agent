@@ -14,6 +14,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_agent.backtest import SETTLEMENT_SESSIONS
 from trading_agent.calc.fees import FeeSchedule, order_fees
@@ -31,7 +32,7 @@ from trading_agent.domain.market import Bar, Increments, Instrument, Market, Obs
 from trading_agent.domain.orders import Bracket, BracketRequest
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
-from trading_agent.domain.trading import Book, Trade
+from trading_agent.domain.trading import Book, Trade, book_for_mode
 from trading_agent.execution import sim
 from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
@@ -69,7 +70,7 @@ class TradingContext:
 
     @property
     def book(self) -> Book:
-        return "agent_paper" if self.mode == "paper" else "agent_live"
+        return book_for_mode(self.mode)
 
     def sleeve(self, market: Market) -> tuple[list[Market], RiskConfig]:
         markets = self.risk.markets.paper if self.mode == "paper" else self.risk.markets.live
@@ -107,16 +108,18 @@ def _rate_on(usd: Sequence[Observation], day: date) -> Decimal:
     raise LookupError("no EUR/USD rate stored")
 
 
-async def load_book(
-    sessions: Sessions, book: Book, fees: FeeSchedule
-) -> tuple[list[tuple[Bracket, datetime]], list[accounting.BookFill], dict[int, Instrument]]:
-    """The book's brackets, its fills in EUR terms (ECB rate of the trade day, fees) and the
-    instruments involved."""
-    async with sessions() as s:
-        brackets = await orders_repo.all_brackets(s, book)
-        fills = await orders_repo.book_fills(s, book)
-        instruments = await market_repo.instruments(s, {b.instrument_id for b, _ in brackets})
-        usd = await market_repo.fx_rates(s, "USD")
+async def _read_book(
+    s: AsyncSession, book: Book, fees: FeeSchedule
+) -> tuple[
+    list[tuple[Bracket, datetime]],
+    list[accounting.BookFill],
+    dict[int, Instrument],
+    list[Observation],
+]:
+    brackets = await orders_repo.all_brackets(s, book)
+    fills = await orders_repo.book_fills(s, book)
+    instruments = await market_repo.instruments(s, {b.instrument_id for b, _ in brackets})
+    usd = await market_repo.fx_rates(s, "USD")
     by_id = {b.id: b for b, _ in brackets}
     book_fills: list[accounting.BookFill] = []
     for bracket_id, kind, f in fills:
@@ -137,17 +140,26 @@ async def load_book(
                 settles=calendars.session_offset(cal, day, SETTLEMENT_SESSIONS[inst.market]),
             )
         )
-    return brackets, book_fills, instruments
+    return brackets, book_fills, instruments, usd
+
+
+async def load_book(
+    sessions: Sessions, book: Book, fees: FeeSchedule
+) -> tuple[list[tuple[Bracket, datetime]], list[accounting.BookFill], dict[int, Instrument]]:
+    """The book's brackets, its fills in EUR terms (ECB rate of the trade day, fees) and the
+    instruments involved."""
+    async with sessions() as s:
+        brackets, fills, instruments, _ = await _read_book(s, book, fees)
+    return brackets, fills, instruments
 
 
 async def _load(ctx: TradingContext) -> _Book:
-    brackets, book_fills, instruments = await load_book(ctx.sessions, ctx.book, ctx.fees)
     async with ctx.sessions() as s:
+        brackets, fills, instruments, usd = await _read_book(s, ctx.book, ctx.fees)
         marks = await market_repo.last_closes(s, instruments)
-        usd = await market_repo.fx_rates(s, "USD")
     today = ctx.clock().date()
-    rates = {"EUR": Decimal(1), "USD": _rate_on(usd, today) if usd else Decimal(1)}
-    return _Book(brackets, book_fills, instruments, marks, rates)
+    rates = {"EUR": Decimal(1)} | ({"USD": _rate_on(usd, today)} if usd else {})
+    return _Book(brackets, fills, instruments, marks, rates)
 
 
 async def _sleeve_state(
@@ -162,9 +174,8 @@ async def _sleeve_state(
     )
     async with ctx.sessions() as s:
         history = await book_repo.equity_history(s, ctx.book, key)
-    local = BERLIN
     orders_today = sum(
-        1 for _, created in loaded.brackets if created.astimezone(local).date() == today
+        1 for _, created in loaded.brackets if created.astimezone(BERLIN).date() == today
     )
     state = accounting.portfolio_state(acct, budget, history, today, orders_today)
     return acct, state, cfg, key
@@ -188,8 +199,9 @@ async def _decide(
         inst = (await market_repo.instruments(s, [p.instrument_id]))[p.instrument_id]
         bars = await market_repo.bars(s, p.instrument_id, start)
         held = {i: await market_repo.bars(s, i, start) for i in held_ids}
-        earnings = (await market_repo.earnings_dates(s)).get(p.instrument_id, [])
-        usd = await market_repo.fx_rates(s, "USD")
+        earnings = (await market_repo.earnings_dates(s, [p.instrument_id])).get(p.instrument_id, [])
+    if inst.currency not in loaded.rates:
+        raise LookupError(f"no EUR/{inst.currency} rate stored")
     market = snapshot(
         inst,
         bars,
@@ -197,7 +209,7 @@ async def _decide(
         session_open=calendars.session_time(cal, today, "open"),
         session_close=calendars.session_time(cal, today, "close"),
         sessions_to_earnings=_sessions_to_earnings(cal, today, earnings),
-        eur_rate=Decimal(1) if inst.currency == "EUR" else _rate_on(usd, today),
+        eur_rate=loaded.rates[inst.currency],
         mid=await ctx.market_info.mid(inst) if ctx.market_info else None,
     )
     controls = await ctx.center.controls()
@@ -315,11 +327,7 @@ async def end_of_day(ctx: TradingContext, market: Market) -> None:
     open_ = await ctx.executor.open_brackets()
     async with ctx.sessions() as s:
         instruments = await market_repo.instruments(s, {b.instrument_id for b in open_})
-        bars: dict[int, Bar] = {}
-        for inst_id in instruments:
-            found = [b for b in await market_repo.bars(s, inst_id, day) if b.date == day]
-            if found:
-                bars[inst_id] = found[0]
+        bars = await market_repo.bars_on(s, instruments, day)
     mine = [b for b in open_ if instruments[b.instrument_id].market == market]
     if ctx.sim is not None:
         for inst_id in {b.instrument_id for b in mine}:

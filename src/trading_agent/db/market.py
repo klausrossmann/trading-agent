@@ -134,6 +134,16 @@ async def active_instruments(
     return {r.id: to_instrument(r) for r in await session.scalars(stmt)}
 
 
+async def instrument_by_symbol(session: AsyncSession, yahoo_symbol: str) -> Instrument | None:
+    """The active instrument with this Yahoo symbol."""
+    row = await session.scalar(
+        select(InstrumentRow).where(
+            InstrumentRow.active, InstrumentRow.yahoo_symbol == yahoo_symbol
+        )
+    )
+    return None if row is None else to_instrument(row)
+
+
 async def set_conids(session: AsyncSession, conids: Mapping[int, int]) -> None:
     """instrument id -> IBKR contract id, resolved once (IMPLEMENTATION.md 10.1)."""
     for inst_id, conid in conids.items():
@@ -199,15 +209,23 @@ async def last_bar_dates(session: AsyncSession) -> dict[int, date]:
     return {i: d for i, d in await session.execute(stmt)}
 
 
+def _bar(r: BarDailyRow) -> Bar:
+    return Bar(date=r.date, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
+
+
 async def bars(session: AsyncSession, instrument_id: int, start: date | None = None) -> list[Bar]:
     stmt = select(BarDailyRow).where(BarDailyRow.instrument_id == instrument_id)
     if start is not None:
         stmt = stmt.where(BarDailyRow.date >= start)
-    rows = await session.scalars(stmt.order_by(BarDailyRow.date))
-    return [
-        Bar(date=r.date, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
-        for r in rows
-    ]
+    return [_bar(r) for r in await session.scalars(stmt.order_by(BarDailyRow.date))]
+
+
+async def bars_on(session: AsyncSession, ids: Iterable[int], day: date) -> dict[int, Bar]:
+    """Each instrument's bar of `day`, where stored."""
+    stmt = select(BarDailyRow).where(
+        BarDailyRow.instrument_id.in_(list(ids)), BarDailyRow.date == day
+    )
+    return {r.instrument_id: _bar(r) for r in await session.scalars(stmt)}
 
 
 async def all_bars(session: AsyncSession) -> dict[int, list[Bar]]:
@@ -215,17 +233,21 @@ async def all_bars(session: AsyncSession) -> dict[int, list[Bar]]:
     stmt = select(BarDailyRow).order_by(BarDailyRow.instrument_id, BarDailyRow.date)
     out: dict[int, list[Bar]] = {}
     for r in await session.scalars(stmt):
-        out.setdefault(r.instrument_id, []).append(
-            Bar(date=r.date, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
-        )
+        out.setdefault(r.instrument_id, []).append(_bar(r))
     return out
 
 
-async def earnings_dates(session: AsyncSession) -> dict[int, list[date]]:
+async def earnings_dates(
+    session: AsyncSession, ids: Iterable[int] | None = None
+) -> dict[int, list[date]]:
+    """Announcement dates per instrument (all instruments without `ids`), oldest first."""
+    stmt = select(EarningsEventRow.instrument_id, EarningsEventRow.date).order_by(
+        EarningsEventRow.date
+    )
+    if ids is not None:
+        stmt = stmt.where(EarningsEventRow.instrument_id.in_(list(ids)))
     out: dict[int, list[date]] = {}
-    for inst_id, day in await session.execute(
-        select(EarningsEventRow.instrument_id, EarningsEventRow.date)
-    ):
+    for inst_id, day in await session.execute(stmt):
         out.setdefault(inst_id, []).append(day)
     return out
 

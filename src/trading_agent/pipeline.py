@@ -1,7 +1,7 @@
 """Agent pipeline (IMPLEMENTATION.md 8): candidates -> modules -> proposer -> critic -> ranking.
 
-Stores one proposal per proposer decision. No orders: the agent_shadow book simulates the
-proposed trades until the risk engine and execution arrive (M8).
+Stores one proposal per proposer decision. No orders here: `trading.place` sends the stored
+proposals through the risk engine after the next open.
 """
 
 import uuid
@@ -31,7 +31,6 @@ from trading_agent.strategies import pullback
 
 log = structlog.get_logger(__name__)
 
-AGENT_BOOK = "agent_paper"  # what the agent holds; the proposer skips those symbols
 BUY_RATINGS = ("buy", "strong_buy")
 
 
@@ -44,22 +43,26 @@ class ProposalRun:
 
 
 async def holdings(ctx: jobs.AnalysisContext) -> list[Holding]:
+    """Open positions of the agent's book; the proposer skips those symbols."""
     async with ctx.sessions() as s:
-        rows = await trades_repo.book_trades(s, AGENT_BOOK)
-        instruments = await market_repo.active_instruments(s)
+        rows = [r for r in await trades_repo.book_trades(s, ctx.book) if r.exit_date is None]
+        instruments = await market_repo.instruments(s, {r.instrument_id for r in rows})
     return [
         Holding(symbol=i.yahoo_symbol, market=i.market, sector=i.sector)
         for r in rows
-        if r.exit_date is None and (i := instruments.get(r.instrument_id)) is not None
+        if (i := instruments.get(r.instrument_id)) is not None
     ]
 
 
 async def macro_context(ctx: jobs.AnalysisContext, market: Market, as_of: date) -> MacroSnapshot:
     benchmark = ctx.benchmarks.get(market)
     async with ctx.sessions() as s:
-        instruments = await market_repo.active_instruments(s)
-        bench_id = next((k for k, i in instruments.items() if i.yahoo_symbol == benchmark), None)
-        bars = await market_repo.bars(s, bench_id, as_of - timedelta(days=450)) if bench_id else []
+        bench = await market_repo.instrument_by_symbol(s, benchmark) if benchmark else None
+        bars = (
+            await market_repo.bars(s, bench.id, as_of - timedelta(days=450))
+            if bench is not None and bench.id is not None
+            else []
+        )
         series = {sid: await market_repo.macro_series(s, sid) for sid in FRED_SERIES.values()}
     close = bars_to_frame([b for b in bars if b.date <= as_of])["close"] if bars else None
     return macro_snapshot(benchmark, close, series, as_of)
@@ -121,7 +124,6 @@ def _ids(*outcomes: Outcome[Any]) -> dict[str, int]:
 
 def build_proposal(
     item: jobs.SymbolAnalysis,
-    instrument_id: int,
     inp: ProposerInput,
     proposed: Outcome[ProposerOutput],
     out: ProposerOutput,
@@ -131,7 +133,7 @@ def build_proposal(
         "id": uuid.uuid4(),
         "source": "agent",
         "as_of": inp.as_of,
-        "instrument_id": instrument_id,
+        "instrument_id": item.instrument_id,
         "yahoo_symbol": inp.symbol,
         "market": inp.market,
         "sector": inp.sector,
@@ -240,8 +242,6 @@ async def propose(
     today = today or datetime.now(UTC).date()
     scan = await jobs.analyse(ctx, symbols, market, today=today)
     held = await holdings(ctx)
-    async with ctx.sessions() as s:
-        ids = {i.yahoo_symbol: k for k, i in (await market_repo.active_instruments(s)).items()}
     held_symbols = {h.symbol for h in held}
     items: list[Proposal] = []
     skipped: dict[str, str] = {}
@@ -265,7 +265,7 @@ async def propose(
         inp = proposer_input(item, tech, held, macros[key])
         as_of = inp.as_of
         proposed = await ctx.runner.run(
-            ctx.proposer, inp, instrument_id=ids[item.symbol], as_of=as_of
+            ctx.proposer, inp, instrument_id=item.instrument_id, as_of=as_of
         )
         cost += proposed.cost_usd
         out = proposed.output
@@ -277,7 +277,7 @@ async def propose(
             critique = await ctx.runner.run(
                 ctx.critic,
                 CriticInput(facts=inp, proposal=plan_view(inp, out)),
-                instrument_id=ids[item.symbol],
+                instrument_id=item.instrument_id,
                 as_of=as_of,
             )
             cost += critique.cost_usd
@@ -290,7 +290,7 @@ async def propose(
                     cost_usd=critique.cost_usd,
                     reason=critique.reason or "critic answer failed validation",
                 )
-        items.append(build_proposal(item, ids[item.symbol], inp, proposed, out, critique))
+        items.append(build_proposal(item, inp, proposed, out, critique))
 
     ranked, ranking = await rank(ctx, items, held)
     if ranking is not None:

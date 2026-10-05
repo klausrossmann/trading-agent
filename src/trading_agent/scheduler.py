@@ -23,6 +23,7 @@ from trading_agent.data.universe import Universe
 from trading_agent.db import audit
 from trading_agent.db import orders as orders_repo
 from trading_agent.db.session import create_engine, session_factory
+from trading_agent.domain.trading import book_for_mode
 from trading_agent.execution.orders import OrderBroker
 from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
@@ -226,9 +227,7 @@ async def trading_context(
     mode = settings.app_mode
     return trading.TradingContext(
         sessions=sessions,
-        executor=Executor(
-            sessions, order_broker, "agent_paper" if mode == "paper" else "agent_live"
-        ),
+        executor=Executor(sessions, order_broker, book_for_mode(mode)),
         center=center,
         risk=book.risk,
         fees=book.fees,

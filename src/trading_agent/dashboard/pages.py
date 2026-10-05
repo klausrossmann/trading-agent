@@ -34,12 +34,7 @@ def _trades() -> list[Trade]:
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _positions() -> pd.DataFrame:
-    async def q(s: AsyncSession) -> pd.DataFrame:
-        closes = await queries.open_trade_closes(s)
-        rate = await queries.usd_per_eur(s)
-        return frames.open_positions(await queries.trades(s), closes, rate)
-
-    return _load(q)
+    return frames.open_positions(_trades(), _load(queries.open_trade_closes), _usd_per_eur())
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)

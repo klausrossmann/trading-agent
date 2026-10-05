@@ -5,7 +5,6 @@ import pandas as pd
 import pytest
 
 from trading_agent.calc.trend import (
-    average_abs_move,
     post_earnings_moves,
     relative_strength,
     trend_state,
@@ -82,5 +81,3 @@ def test_post_earnings_reaction_windows() -> None:
         ("unknown", date(2026, 10, 1), round((103 / 101 - 1) * 100, 3)),
     ]
     assert moves[0].gap_pct == pytest.approx((101.5 / 101 - 1) * 100)
-    assert average_abs_move(moves) == pytest.approx(np.mean([abs(m.move_pct) for m in moves]))
-    assert average_abs_move([]) is None

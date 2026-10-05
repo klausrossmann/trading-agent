@@ -192,8 +192,8 @@ DATA_TYPES = {1: "real-time", 2: "frozen", 3: "delayed", 4: "delayed frozen"}
 
 async def _instrument(sessions: Sessions, symbol: str) -> tuple[int, Instrument] | None:
     async with sessions() as s:
-        found = await market_repo.active_instruments(s)
-    return next(((k, i) for k, i in found.items() if i.yahoo_symbol == symbol), None)
+        inst = await market_repo.instrument_by_symbol(s, symbol)
+    return (inst.id, inst) if inst is not None and inst.id is not None else None
 
 
 async def _quote_type(ib: IB, inst: Instrument) -> str:
@@ -257,19 +257,19 @@ async def check(
         missing = await sync_conids(link, sessions)
         out.append(f"Contracts without conid: {', '.join(missing) or 'none'}")
         quotes = ["Quotes via the API (5 s after subscribing):"]
+        known: list[tuple[str, Instrument]] = []
         for symbol in symbols:
             found = await _instrument(sessions, symbol)
             if found is None:
                 out.append(f"{symbol}: not in the universe")
                 continue
+            known.append((symbol, found[1]))
             out.append(await _compare_bars(link, sessions, *found))
             quotes.append("  " + await _quote_type(ib, found[1]))
         out += quotes
-        for symbol in symbols:
-            found = await _instrument(sessions, symbol)
-            if found is not None:
-                ticks = await link.market_info.increments(found[1])
-                out.append(f"Price increments {symbol}: {ticks or 'unknown'}")
+        for symbol, inst in known:
+            ticks = await link.market_info.increments(inst)
+            out.append(f"Price increments {symbol}: {ticks or 'unknown'}")
         if order_test and symbols:
             out += await _order_test(link, sessions, symbols[0])
     finally:

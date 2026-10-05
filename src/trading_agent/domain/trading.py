@@ -6,8 +6,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from trading_agent.domain.market import Market
+from trading_agent.domain.risk import Mode
 
 Book = Literal["baseline_sim", "agent_paper", "agent_shadow", "agent_live", "backtest"]
+
+
+def book_for_mode(mode: Mode) -> Book:
+    """The book that holds the agent's own orders."""
+    return "agent_paper" if mode == "paper" else "agent_live"
 
 
 class Trade(BaseModel):

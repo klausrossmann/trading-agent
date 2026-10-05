@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from trading_agent.domain.numbers import to_decimal
 from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, OrderKind, OrderSpec
 from trading_agent.execution import sim
 
@@ -33,10 +34,6 @@ class _Order:
             filled=self.filled,
             avg_fill_price=self.avg,
         )
-
-
-def _price(value: float) -> Decimal:
-    return Decimal(str(round(value, 4)))
 
 
 def _float(value: Decimal | None) -> float:
@@ -98,7 +95,7 @@ class SimBroker:
         return entry, kinds
 
     def _fill(self, o: _Order, qty: int, price: float, at: datetime) -> None:
-        p = _price(price)
+        p = to_decimal(price)
         o.avg = (
             p
             if o.avg is None

@@ -31,15 +31,16 @@ async def load_history(
 ) -> History | None:
     start = as_of - timedelta(days=HISTORY_DAYS)
     async with sessions() as s:
-        instruments = await repo.active_instruments(s)
-        inst = instruments.get(instrument_id)
+        inst = (await repo.instruments(s, [instrument_id])).get(instrument_id)
         if inst is None:
             return None
         bars = [b for b in await repo.bars(s, instrument_id, start) if b.date <= as_of]
         events = await repo.earnings_events(s, instrument_id)
-        bench_id = next((k for k, i in instruments.items() if i.yahoo_symbol == benchmark), None)
+        bench_inst = await repo.instrument_by_symbol(s, benchmark) if benchmark else None
         bench = (
-            [b for b in await repo.bars(s, bench_id, start) if b.date <= as_of] if bench_id else []
+            [b for b in await repo.bars(s, bench_inst.id, start) if b.date <= as_of]
+            if bench_inst is not None and bench_inst.id is not None
+            else []
         )
     if not bars:
         return None

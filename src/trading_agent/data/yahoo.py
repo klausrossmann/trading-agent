@@ -17,6 +17,7 @@ from trading_agent.domain.market import (
     Instrument,
     Market,
 )
+from trading_agent.domain.numbers import to_decimal
 
 SOURCE = "yahoo"
 
@@ -30,7 +31,7 @@ _HOURS: dict[Market, tuple[ZoneInfo, time, time]] = {
 def _dec(value: Any, places: int = 4) -> Decimal | None:
     if value is None or pd.isna(value) or math.isinf(float(value)):
         return None
-    return Decimal(str(round(float(value), places)))
+    return to_decimal(float(value), places)
 
 
 def bars_from_history(frame: pd.DataFrame) -> tuple[Bar, ...]:

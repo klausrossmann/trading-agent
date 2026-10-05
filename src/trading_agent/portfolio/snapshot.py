@@ -1,5 +1,6 @@
 """Market facts the risk engine needs for one instrument, from stored daily bars. Pure."""
 
+import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -8,6 +9,7 @@ import pandas as pd
 
 from trading_agent.calc.indicators import atr, bars_to_frame
 from trading_agent.domain.market import Bar, Increments, Instrument
+from trading_agent.domain.numbers import to_decimal
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import MarketSnapshot
 
@@ -89,8 +91,8 @@ def snapshot(
         session_open=session_open,
         session_close=session_close,
         mid=mid if mid is not None else bars[-1].close,
-        atr=Decimal(str(round(last_atr, 4))) if last_atr == last_atr else Decimal(0),
-        avg_daily_value=Decimal(str(round(float(value), 0))),
+        atr=to_decimal(last_atr) if math.isfinite(last_atr) else Decimal(0),
+        avg_daily_value=to_decimal(float(value), 0),
         sessions_to_earnings=sessions_to_earnings,
         eur_rate=eur_rate,
         correlations=correlations(bars, {k: v for k, v in held.items() if k != inst.id}),

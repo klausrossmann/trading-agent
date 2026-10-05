@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_agent.db.models import InstrumentRow, ProposalRow, UserLabelRow
+from trading_agent.domain.numbers import optional_decimal as _dec
 from trading_agent.domain.proposals import Label, Proposal
 
 _STORED = (
@@ -27,10 +28,6 @@ _STORED = (
     "analyses",
     "payload",
 )
-
-
-def _dec(value: float | None, places: int) -> Decimal | None:
-    return None if value is None else Decimal(str(round(value, places)))
 
 
 async def save_proposals(session: AsyncSession, proposals: Sequence[Proposal]) -> list[UUID]:
@@ -118,6 +115,10 @@ async def latest_for_symbol(session: AsyncSession, yahoo_symbol: str) -> Proposa
 async def get(session: AsyncSession, proposal_id: UUID) -> Proposal | None:
     found = await _select(session, ProposalRow.id == proposal_id)
     return found[0] if found else None
+
+
+async def by_ids(session: AsyncSession, ids: Sequence[UUID]) -> dict[UUID, Proposal]:
+    return {p.id: p for p in await _select(session, ProposalRow.id.in_(ids))}
 
 
 async def set_label(

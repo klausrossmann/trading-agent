@@ -31,15 +31,14 @@ async def _usd_per_eur(ctx: jobs.BookContext) -> Decimal:
 
 
 async def _benchmarks(ctx: jobs.BookContext, start: date) -> dict[str, float]:
+    """Each benchmark's return since `start`, in %."""
+    out: dict[str, float] = {}
     async with ctx.sessions() as s:
-        by_symbol = {
-            i.yahoo_symbol: k for k, i in (await market_repo.active_instruments(s)).items()
-        }
-        out: dict[str, float] = {}
         for symbol in ctx.benchmarks.values():
-            if symbol not in by_symbol:
+            inst = await market_repo.instrument_by_symbol(s, symbol)
+            if inst is None or inst.id is None:
                 continue
-            bars = await market_repo.bars(s, by_symbol[symbol], start)
+            bars = await market_repo.bars(s, inst.id, start)
             if len(bars) >= 2:
                 out[symbol] = float(bars[-1].close / bars[0].close - 1) * 100
     return out

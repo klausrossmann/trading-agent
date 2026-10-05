@@ -5,11 +5,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_agent.db.models import InstrumentRow, TradeRow
+from trading_agent.domain.numbers import optional_decimal as _dec
 from trading_agent.domain.trading import Book, Trade
-
-
-def _dec(value: float | None, places: int) -> Decimal | None:
-    return None if value is None else Decimal(str(round(value, places)))
 
 
 async def replace_book(session: AsyncSession, book: Book, trades: Sequence[Trade]) -> int:

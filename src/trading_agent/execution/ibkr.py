@@ -11,6 +11,7 @@ from ib_async import IB, Order, Trade
 
 from trading_agent.data.ibkr import contract_for
 from trading_agent.domain.broker import AccountSnapshot, BrokerPosition
+from trading_agent.domain.numbers import to_decimal
 from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, OrderSpec
 
 SUMMARY_TAGS = {
@@ -40,13 +41,9 @@ def _number(value: str) -> float | None:
         return None
 
 
-def _decimal(value: float) -> Decimal:
-    return Decimal(str(round(value, 4)))
-
-
 def _commission(value: float) -> Decimal | None:
     """None until IBKR sends the commission report (it reports a huge sentinel before)."""
-    return _decimal(value) if 0 < value < 1e9 else None
+    return to_decimal(value) if 0 < value < 1e9 else None
 
 
 def ib_order(spec: OrderSpec, order_id: int, parent_id: int, transmit: bool) -> Order:
@@ -78,7 +75,7 @@ def _view(trade: Trade) -> BrokerOrder:
         order_ref=trade.order.orderRef,
         status=STATUS.get(s.status, "pending"),
         filled=int(s.filled),
-        avg_fill_price=_decimal(s.avgFillPrice) if s.filled else None,
+        avg_fill_price=to_decimal(s.avgFillPrice) if s.filled else None,
         broker_order_id=trade.order.orderId or None,
         perm_id=trade.order.permId or None,
     )
@@ -165,7 +162,7 @@ class IbkrBroker:
                 order_ref=f.execution.orderRef,
                 ts=f.time,
                 quantity=int(f.execution.shares),
-                price=_decimal(f.execution.price),
+                price=to_decimal(f.execution.price),
                 commission=_commission(f.commissionReport.commission),
             )
             for f in await self.ib.reqExecutionsAsync()

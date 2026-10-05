@@ -15,6 +15,7 @@ import structlog
 from ib_async import IB, Contract, Stock
 
 from trading_agent.domain.market import Bar, BarSeries, Increments, Instrument
+from trading_agent.domain.numbers import to_decimal
 
 log = structlog.get_logger(__name__)
 
@@ -67,10 +68,6 @@ async def resolve_conids(ib: IB, instruments: Sequence[Instrument]) -> dict[str,
     return out
 
 
-def _dec(value: float) -> Decimal:
-    return Decimal(str(round(float(value), 4)))
-
-
 class IbkrPriceProvider:
     """Daily TRADES bars, regular trading hours, split-adjusted like the stored Yahoo bars."""
 
@@ -98,10 +95,10 @@ class IbkrPriceProvider:
         out = tuple(
             Bar(
                 date=b.date if isinstance(b.date, date) else b.date.date(),
-                open=_dec(b.open),
-                high=_dec(b.high),
-                low=_dec(b.low),
-                close=_dec(b.close),
+                open=to_decimal(b.open),
+                high=to_decimal(b.high),
+                low=to_decimal(b.low),
+                close=to_decimal(b.close),
                 volume=int(b.volume),
             )
             for b in bars
@@ -143,7 +140,7 @@ class MarketInfo:
         except (OSError, TimeoutError, ConnectionError, ValueError, IndexError) as exc:
             log.warning("ibkr.market_rule_failed", symbol=inst.yahoo_symbol, error=repr(exc))
             return None
-        out = tuple(sorted((_dec(p.lowEdge), Decimal(str(p.increment))) for p in table))
+        out = tuple(sorted((to_decimal(p.lowEdge), Decimal(str(p.increment))) for p in table))
         if not out:
             return None
         self._increments[inst.yahoo_symbol] = out
@@ -162,5 +159,5 @@ class MarketInfo:
             return None
         t = tickers[0]
         if _valid(t.bid) and _valid(t.ask) and t.ask >= t.bid:
-            return _dec((t.bid + t.ask) / 2)
-        return _dec(t.last) if _valid(t.last) else None
+            return to_decimal((t.bid + t.ask) / 2)
+        return to_decimal(t.last) if _valid(t.last) else None

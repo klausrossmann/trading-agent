@@ -2,7 +2,6 @@
 
 from collections.abc import Sequence
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,10 +13,7 @@ from trading_agent.domain.analysis import (
     StoredAnalysis,
     ValidationIssue,
 )
-
-
-def _usd(value: float) -> Decimal:
-    return Decimal(str(round(value, 6)))
+from trading_agent.domain.numbers import to_decimal
 
 
 class DbAnalysisStore:
@@ -51,7 +47,7 @@ class DbAnalysisStore:
                     output=analysis.output,
                     issues=[i.model_dump() for i in analysis.issues],
                     status=analysis.status,
-                    cost_usd=_usd(analysis.cost_usd),
+                    cost_usd=to_decimal(analysis.cost_usd, 6),
                 )
                 s.add(row)
                 await s.flush()
@@ -59,7 +55,7 @@ class DbAnalysisStore:
             s.add_all(
                 LlmCallRow(
                     **c.model_dump(exclude={"cost_usd"}),
-                    cost_usd=_usd(c.cost_usd),
+                    cost_usd=to_decimal(c.cost_usd, 6),
                     analysis_id=analysis_id,
                 )
                 for c in calls

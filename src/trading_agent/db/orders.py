@@ -191,23 +191,3 @@ async def add_fills(session: AsyncSession, fills: Sequence[BrokerFill]) -> int:
         return 0
     stmt = insert(FillRow).values(rows).on_conflict_do_nothing(index_elements=["exec_id"])
     return len((await session.execute(stmt.returning(FillRow.exec_id))).all())
-
-
-async def bracket_fills(session: AsyncSession, bracket_id: UUID) -> list[BrokerFill]:
-    stmt = (
-        select(FillRow)
-        .join(OrderRow, OrderRow.order_ref == FillRow.order_ref)
-        .where(OrderRow.bracket_id == bracket_id)
-        .order_by(FillRow.ts, FillRow.exec_id)
-    )
-    return [
-        BrokerFill(
-            exec_id=r.exec_id,
-            order_ref=r.order_ref,
-            ts=r.ts,
-            quantity=r.quantity,
-            price=r.price,
-            commission=r.commission,
-        )
-        for r in await session.scalars(stmt)
-    ]

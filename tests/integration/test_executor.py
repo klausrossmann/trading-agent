@@ -137,7 +137,7 @@ async def test_bracket_lifecycle_with_a_time_exit(sessions: Sessions) -> None:
     assert await ex.open_brackets() == []
     async with sessions() as s:
         events = (await s.scalars(select(AuditLog.event).order_by(AuditLog.id))).all()
-        fills = await repo.bracket_fills(s, bid)
+        fills = [f for b, _, f in await repo.book_fills(s, "agent_paper") if b == bid]
     assert events == [
         "bracket.approved",
         "bracket.submitted",

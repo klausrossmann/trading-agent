@@ -87,7 +87,3 @@ def post_earnings_moves(frame: pd.DataFrame, events: Sequence[EarningsEvent]) ->
             )
         )
     return moves
-
-
-def average_abs_move(moves: Sequence[EarningsMove]) -> float | None:
-    return float(np.mean([abs(m.move_pct) for m in moves])) if moves else None

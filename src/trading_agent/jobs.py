@@ -32,7 +32,7 @@ from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.market import Market
-from trading_agent.domain.trading import Book, Trade
+from trading_agent.domain.trading import Book, Trade, book_for_mode
 from trading_agent.llm.budget import BudgetMode, month_start
 from trading_agent.llm.fake import fake_model
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
@@ -131,8 +131,8 @@ async def _replay(
     today: date,
     external: Mapping[date, Sequence[backtest.Signal]] | None = None,
 ) -> list[backtest.BacktestResult]:
-    """Replay a forward book from `start`, one simulated account per paper budget sleeve
-    (US EUR 1,000, EU EUR 5,000), and replace its stored trades."""
+    """Replay a forward book from `start`, one simulated account per paper budget sleeve,
+    and replace its stored trades."""
     data = await backtest.load_market_data(ctx.sessions, ctx.benchmarks, ctx.cfg.pullback)
     results: list[backtest.BacktestResult] = []
     for markets, risk in ctx.risk.sleeves(list(ctx.risk.markets.paper), "paper"):
@@ -326,8 +326,9 @@ async def _last_bars_by_market(sessions: Sessions) -> dict[str, date | None]:
     out: dict[str, date | None] = {"US": None, "EU": None}
     for inst_id, d in last.items():
         inst = instruments.get(inst_id)
-        if inst is not None and (out[inst.market] is None or d > (out[inst.market] or d)):
-            out[inst.market] = d
+        if inst is not None:
+            current = out[inst.market]
+            out[inst.market] = d if current is None else max(current, d)
     return out
 
 
@@ -360,12 +361,9 @@ async def build_briefing(
         horizon = max(calendars.session_offset(c, today, 3) for c in ("XNYS", "XETR"))
         upcoming = await market_repo.upcoming_earnings(s, today, horizon)
         rows = await trades_repo.book_trades(s, "baseline_sim")
-        last_close: dict[int, float] = {}
-        for row in rows:
-            if row.exit_date is None and row.instrument_id not in last_close:
-                recent = await market_repo.bars(s, row.instrument_id, today - timedelta(days=14))
-                if recent:
-                    last_close[row.instrument_id] = float(recent[-1].close)
+        traded = await market_repo.instruments(s, {r.instrument_id for r in rows})
+        open_ids = {r.instrument_id for r in rows if r.exit_date is None}
+        last_close = {k: float(v) for k, v in (await market_repo.last_closes(s, open_ids)).items()}
 
     earnings_lines = [
         messages.EarningsLine(instruments[i].yahoo_symbol, d, timing)
@@ -378,23 +376,19 @@ async def build_briefing(
     if today >= start:
         book_lines = []
         for sleeve_markets, risk in book.risk.sleeves(list(book.risk.markets.paper), "paper"):
-            mine = [
-                r
-                for r in rows
-                if instruments.get(r.instrument_id)
-                and instruments[r.instrument_id].market in sleeve_markets
-            ]
+            mine = [r for r in rows if traded[r.instrument_id].market in sleeve_markets]
             closed = [r for r in mine if r.exit_date is not None]
             open_lines: list[messages.PositionLine] = []
             for r in mine:
                 close = last_close.get(r.instrument_id)
                 if r.exit_date is not None or close is None:
                     continue
+                inst = traded[r.instrument_id]
                 entry, stop = float(r.entry_price), float(r.stop)
-                rate = usd_per_eur if instruments[r.instrument_id].currency == "USD" else 1.0
+                rate = usd_per_eur if inst.currency == "USD" else 1.0
                 open_lines.append(
                     messages.PositionLine(
-                        symbol=instruments[r.instrument_id].yahoo_symbol,
+                        symbol=inst.yahoo_symbol,
                         entry_date=r.entry_date,
                         r_now=(close - entry) / (entry - stop) if entry > stop else 0.0,
                         pnl_eur=r.quantity * (close - entry) / (rate or 1.0) - float(r.fees_eur),
@@ -481,6 +475,7 @@ async def status_text(state: RuntimeState, sessions: Sessions, now: datetime | N
 @dataclass
 class AnalysisContext:
     sessions: Sessions
+    book: Book  # the agent's own book: its open positions are not proposed again
     models: ModelsConfig
     runner: LlmRunner
     technical: TechnicalModule
@@ -516,17 +511,14 @@ class AnalysisContext:
         risk = load_risk_config(cfg_dir)
         return cls(
             sessions=sessions,
+            book=book_for_mode(settings.app_mode),
             models=models,
             runner=runner,
             technical=TechnicalModule(
-                load_prompt(
-                    settings.prompts_dir, technical_module.NAME, technical_module.PROMPT_VERSION
-                )
+                load_prompt(prompts, technical_module.NAME, technical_module.PROMPT_VERSION)
             ),
             earnings=EarningsModule(
-                load_prompt(
-                    settings.prompts_dir, earnings_module.NAME, earnings_module.PROMPT_VERSION
-                )
+                load_prompt(prompts, earnings_module.NAME, earnings_module.PROMPT_VERSION)
             ),
             rules=PlanRules(
                 min_risk_reward=float(risk.per_trade.min_risk_reward),
@@ -550,6 +542,7 @@ class AnalysisContext:
 @dataclass(frozen=True)
 class SymbolAnalysis:
     symbol: str
+    instrument_id: int
     technical_input: TechnicalInput
     technical: Outcome[TechnicalAssessment]
     earnings_input: EarningsInput
@@ -613,10 +606,11 @@ async def analyse(
     missing: list[str] = []
     for symbol in symbols:
         inst_id = by_symbol.get(symbol)
-        inst = instruments.get(inst_id) if inst_id is not None else None
         history = (
-            await load_history(ctx.sessions, inst_id, today, ctx.benchmarks.get(inst.market))
-            if inst_id is not None and inst is not None
+            await load_history(
+                ctx.sessions, inst_id, today, ctx.benchmarks.get(instruments[inst_id].market)
+            )
+            if inst_id is not None
             else None
         )
         if history is None:
@@ -634,7 +628,7 @@ async def analyse(
         e_out = await ctx.runner.run(
             ctx.earnings, e_in, instrument_id=history.instrument_id, as_of=history.as_of
         )
-        items.append(SymbolAnalysis(symbol, t_in, t_out, e_in, e_out))
+        items.append(SymbolAnalysis(symbol, history.instrument_id, t_in, t_out, e_in, e_out))
     result = ScanResult(mode, items, missing)
     outcomes = [o for i in items for o in i.outcomes]
     log.info(

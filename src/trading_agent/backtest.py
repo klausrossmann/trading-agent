@@ -29,7 +29,8 @@ from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.sizing import position_size
 from trading_agent.data import calendars
 from trading_agent.db import market as repo
-from trading_agent.domain.market import Instrument, Market, Observation
+from trading_agent.domain.market import Instrument, Market
+from trading_agent.domain.numbers import to_decimal
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Controls, MarketSnapshot, PortfolioState
 from trading_agent.domain.trading import Book, Trade
@@ -82,6 +83,11 @@ class InstrumentData:
 
     def recent_returns(self, day: date) -> pd.Series:
         return self.returns.loc[: pd.Timestamp(day)].tail(CORRELATION_SESSIONS)
+
+    def close_on(self, day: date) -> float:
+        """The last close up to `day` (the instrument's market may be closed that day)."""
+        close = self.frame["close"]
+        return float(close.iloc[close.index.searchsorted(pd.Timestamp(day), side="right") - 1])
 
 
 @dataclass
@@ -158,10 +164,10 @@ def prepare(
     )
 
 
-def _series(observations: Sequence[Observation]) -> pd.Series:
+def _series(values: Mapping[date, float]) -> pd.Series:
     return pd.Series(
-        [float(o.value) for o in observations],
-        index=pd.DatetimeIndex([pd.Timestamp(o.date) for o in observations]),
+        list(values.values()),
+        index=pd.DatetimeIndex([pd.Timestamp(d) for d in values]),
         dtype=float,
     )
 
@@ -176,7 +182,15 @@ async def load_market_data(
         fx = await repo.fx_rates(s, "USD")
         vix = await repo.macro_series(s, VIX_SERIES) if p.regime_max_vix is not None else []
     frames = {k: bars_to_frame(v) for k, v in bars.items()}
-    return prepare(frames, instruments, earnings, _series(fx), benchmarks, p, _series(vix))
+    return prepare(
+        frames,
+        instruments,
+        earnings,
+        _series({o.date: float(o.value) for o in fx}),
+        benchmarks,
+        p,
+        _series({o.date: float(o.value) for o in vix}),
+    )
 
 
 @dataclass
@@ -206,6 +220,27 @@ class _Position:
     risk_eur: float
     strategy: str
     highest_close: float
+
+    def trade(self, book: Book) -> Trade:
+        """The position as a trade that is still open."""
+        inst = self.data.instrument
+        return Trade(
+            book=book,
+            strategy=self.strategy,
+            instrument_id=self.data.id,
+            yahoo_symbol=inst.yahoo_symbol,
+            market=inst.market,
+            sector=inst.sector,
+            signal_date=self.signal_date,
+            entry_date=self.entry_date,
+            entry_price=self.entry_price,
+            quantity=self.quantity,
+            stop=self.plan.stop,
+            target=self.plan.target,
+            risk_eur=self.risk_eur,
+            fees=self.fees,
+            fees_eur=self.fees_eur,
+        )
 
 
 @dataclass(frozen=True)
@@ -298,7 +333,7 @@ def run(
     def close_position(pos: _Position, day: date, row: int, fill: sim.Fill) -> None:
         inst = pos.data.instrument
         sell_fee = float(
-            order_fees(fees, inst.market, "sell", pos.quantity, Decimal(str(round(fill.price, 4))))
+            order_fees(fees, inst.market, "sell", pos.quantity, to_decimal(fill.price))
         )
         proceeds_eur = to_eur(pos.quantity * fill.price - sell_fee, inst, day)
         cal = calendars.CALENDAR_BY_MARKET[inst.market]
@@ -306,28 +341,17 @@ def run(
         unsettled.append((settles, proceeds_eur))
         pnl = proceeds_eur - pos.cost_eur
         trades.append(
-            Trade(
-                book=book,
-                strategy=pos.strategy,
-                instrument_id=pos.data.id,
-                yahoo_symbol=inst.yahoo_symbol,
-                market=inst.market,
-                sector=inst.sector,
-                signal_date=pos.signal_date,
-                entry_date=pos.entry_date,
-                entry_price=pos.entry_price,
-                quantity=pos.quantity,
-                stop=pos.plan.stop,
-                target=pos.plan.target,
-                risk_eur=pos.risk_eur,
-                fees=pos.fees + sell_fee,
-                fees_eur=pos.fees_eur + to_eur(sell_fee, inst, day),
-                exit_date=day,
-                exit_price=fill.price,
-                exit_reason=fill.reason,
-                pnl_net_eur=pnl,
-                r_multiple=pnl / pos.risk_eur if pos.risk_eur > 0 else None,
-                holding_sessions=row - pos.entry_row,
+            pos.trade(book).model_copy(
+                update={
+                    "fees": pos.fees + sell_fee,
+                    "fees_eur": pos.fees_eur + to_eur(sell_fee, inst, day),
+                    "exit_date": day,
+                    "exit_price": fill.price,
+                    "exit_reason": fill.reason,
+                    "pnl_net_eur": pnl,
+                    "r_multiple": pnl / pos.risk_eur if pos.risk_eur > 0 else None,
+                    "holding_sessions": row - pos.entry_row,
+                }
             )
         )
         open_.remove(pos)
@@ -365,9 +389,7 @@ def run(
                     pending.remove(order)
                 continue
             pending.remove(order)
-            buy_fee = float(
-                order_fees(fees, inst.market, "buy", order.quantity, Decimal(str(round(price, 4))))
-            )
+            buy_fee = float(order_fees(fees, inst.market, "buy", order.quantity, to_decimal(price)))
             cost_eur = to_eur(order.quantity * price + buy_fee, inst, day)
             cash -= cost_eur
             pos = _Position(
@@ -392,10 +414,9 @@ def run(
                 close_position(pos, day, row, stopped)
 
         # 3. Mark to market at the close
-        held = 0.0
-        for pos in open_:
-            closes = pos.data.frame["close"].loc[: pd.Timestamp(day)]
-            held += to_eur(pos.quantity * float(closes.iloc[-1]), pos.data.instrument, day)
+        held = sum(
+            to_eur(pos.quantity * pos.data.close_on(day), pos.data.instrument, day) for pos in open_
+        )
         equity[day] = eq = cash + sum(a for _, a in unsettled) + held
         invested[day] = held
 
@@ -456,6 +477,12 @@ def run(
             rs = float(x.ind["rs"].iloc[row])
             candidates.append((rs if math.isfinite(rs) else -math.inf, x, row, plan, pullback.NAME))
         candidates.sort(key=lambda c: c[0], reverse=True)
+        held_returns = (
+            {o.data.id: o.data.recent_returns(day) for o in pending}
+            | {pos.data.id: pos.data.recent_returns(day) for pos in open_}
+            if candidates
+            else {}
+        )
 
         placed = 0
         for _, x, row, plan, strategy in candidates:
@@ -471,11 +498,11 @@ def run(
                 continue
             rate = data.rate(inst.currency, day)
             available_eur = cash - sum(o.reserved_eur for o in pending)
-            entry, stop = Decimal(str(round(plan.entry, 4))), Decimal(str(round(plan.stop, 4)))
+            entry, stop = to_decimal(plan.entry), to_decimal(plan.stop)
             sizing = position_size(
                 entry=entry,
                 stop=stop,
-                settled_cash=Decimal(str(round(max(available_eur, 0) * rate, 2))),
+                settled_cash=to_decimal(max(available_eur, 0) * rate, 2),
                 eur_rate=Decimal(str(rate)),
                 limits=limits,
             )
@@ -483,7 +510,7 @@ def run(
                 rejections[f"sizing: {sizing.rejection}"] += 1
                 continue
             q = sizing.quantity
-            target = Decimal(str(round(plan.target, 4)))
+            target = to_decimal(plan.target)
             fee_cap = risk.per_trade.max_fee_to_risk_pct / 100 * sizing.risk
             if round_trip_fees(fees, inst.market, q, entry, target) > fee_cap:
                 rejections["fees above limit"] += 1
@@ -496,14 +523,14 @@ def run(
                 rejections["sector cap"] += 1
                 continue
             mine = x.recent_returns(day)
-            holdings = [(o.data, o.reserved_eur) for o in pending] + [
-                (pos.data, pos.cost_eur) for pos in open_
+            holdings = [(o.data.id, o.reserved_eur) for o in pending] + [
+                (pos.data.id, pos.cost_eur) for pos in open_
             ]
             # As in the risk engine: a holding without a correlation estimate counts as correlated.
             cluster = value_eur + sum(
                 value
                 for other, value in holdings
-                if (rho := correlation(mine, other.recent_returns(day))) is None
+                if (rho := correlation(mine, held_returns[other])) is None
                 or rho > engine.CLUSTER_RHO
             )
             if cluster > float(risk.portfolio.max_correlated_cluster_pct) / 100 * budget:
@@ -513,37 +540,11 @@ def run(
             pending.append(
                 _Pending(x, day, row, plan, q, (q * plan.entry + buy_fee) / rate, strategy)
             )
+            held_returns[x.id] = mine
             placed += 1
 
-    for pos in open_:
-        trades.append(
-            Trade(
-                book=book,
-                strategy=pos.strategy,
-                instrument_id=pos.data.id,
-                yahoo_symbol=pos.data.instrument.yahoo_symbol,
-                market=pos.data.instrument.market,
-                sector=pos.data.instrument.sector,
-                signal_date=pos.signal_date,
-                entry_date=pos.entry_date,
-                entry_price=pos.entry_price,
-                quantity=pos.quantity,
-                stop=pos.plan.stop,
-                target=pos.plan.target,
-                risk_eur=pos.risk_eur,
-                fees=pos.fees,
-                fees_eur=pos.fees_eur,
-            )
-        )
-
-    def series(values: dict[date, float]) -> pd.Series:
-        return pd.Series(
-            list(values.values()),
-            index=pd.DatetimeIndex([pd.Timestamp(d) for d in values]),
-            dtype=float,
-        )
-
-    return BacktestResult(trades, series(equity), series(invested), rejections, signals)
+    trades += [pos.trade(book) for pos in open_]
+    return BacktestResult(trades, _series(equity), _series(invested), rejections, signals)
 
 
 def simulate_trade(
@@ -576,7 +577,7 @@ def simulate_trade(
         pnl = r = None
         if fill is not None:
             sell_fee = float(
-                order_fees(fees, inst.market, "sell", quantity, Decimal(str(round(fill.price, 4))))
+                order_fees(fees, inst.market, "sell", quantity, to_decimal(fill.price))
             )
             x_rate = data.rate(inst.currency, day)
             pnl = (quantity * fill.price - sell_fee) / x_rate - cost_eur
@@ -620,9 +621,7 @@ def simulate_trade(
             price = sim.fill_entry(bar, plan.entry, slip)
             if price is None:
                 continue
-            fee = float(
-                order_fees(fees, inst.market, "buy", quantity, Decimal(str(round(price, 4))))
-            )
+            fee = float(order_fees(fees, inst.market, "buy", quantity, to_decimal(price)))
             entry = (row, day, price, fee)
             highest_close = bar.close
             stopped = sim.check_exit(bar, stop, None, slip)
@@ -674,9 +673,9 @@ def shadow_book(
             in_universe=bool(inst.indices),
             session_open=now - timedelta(hours=1),  # replay: the trading window is not checked
             session_close=now + timedelta(hours=1),
-            mid=Decimal(str(round(float(x.frame["close"].iloc[row]), 4))),
-            atr=Decimal(str(round(float(x.ind["atr"].iloc[row]), 4))),
-            avg_daily_value=Decimal(str(round(float(x.ind["avg_dollar_volume"].iloc[row]), 0))),
+            mid=to_decimal(float(x.frame["close"].iloc[row])),
+            atr=to_decimal(float(x.ind["atr"].iloc[row])),
+            avg_daily_value=to_decimal(float(x.ind["avg_dollar_volume"].iloc[row]), 0),
             sessions_to_earnings=len(calendars.sessions(cal, day, min(upcoming))) - 1
             if upcoming
             else None,
