@@ -41,7 +41,7 @@ secrets:
 # The IBKR paper password is typed, never generated or echoed (IMPLEMENTATION.md 15.5).
 tws-password:
 	@mkdir -p secrets && chmod 700 secrets
-	@printf 'IBKR paper password: ' && stty -echo && read pw && stty echo && echo && \
+	@printf 'IBKR paper password: ' && stty -echo && IFS= read -r pw && stty echo && echo && \
 	  printf '%s' "$$pw" > secrets/tws_password && chmod 644 secrets/tws_password && \
 	  echo "stored secrets/tws_password"
 
