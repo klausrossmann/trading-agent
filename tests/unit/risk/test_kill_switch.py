@@ -1,6 +1,6 @@
 """Kill-switch transitions (9.3): every path of the state diagram."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -84,3 +84,17 @@ def test_loss_limit_trips_pause_until_the_next_day_or_week(
 def test_drawdown_trip_halts() -> None:
     ks = k.apply_trip(paused(None), "halt", NOW, BERLIN)
     assert (ks.state, ks.reason) == ("halted", "drawdown limit")
+
+
+def test_close_trips_pause_through_the_next_session() -> None:
+    friday_close = datetime(2026, 10, 9, 20, 30, tzinfo=UTC)
+    monday = date(2026, 10, 12)
+    ks = k.apply_close_trip(ACTIVE, "pause_day", friday_close, monday, BERLIN)
+    assert (ks.state, ks.reason, ks.until) == (
+        "paused",
+        "daily loss limit",
+        datetime(2026, 10, 13, tzinfo=BERLIN),
+    )
+    # the weekly pause ends earlier (Monday 00:00), so it doesn't shorten the daily one
+    assert k.apply_close_trip(ks, "pause_week", friday_close, monday, BERLIN) == ks
+    assert k.apply_close_trip(ks, "halt", friday_close, monday, BERLIN).state == "halted"

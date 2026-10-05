@@ -6,8 +6,8 @@ Telegram commands, alerts, the CLI reset code, and the `Controls` the risk engin
 import hashlib
 import hmac
 import secrets
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, date, datetime, timedelta
 
 import structlog
 
@@ -87,6 +87,16 @@ class ControlCenter:
         return await self._announce(
             "risk", lambda ks, now: kill_switch.apply_trip(ks, trip, now, BERLIN)
         )
+
+    async def apply_close_trips(self, trips: Sequence[Trip], next_session: date) -> KillSwitch:
+        """Loss limits measured at a close, announced once; the longest pause wins."""
+
+        def step(ks: KillSwitch, now: datetime) -> KillSwitch:
+            for trip in trips:
+                ks = kill_switch.apply_close_trip(ks, trip, now, next_session, BERLIN)
+            return ks
+
+        return await self._announce("risk", step)
 
     async def controls(self) -> Controls:
         return Controls(

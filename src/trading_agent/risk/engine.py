@@ -177,21 +177,28 @@ def _portfolio(
     return _check("portfolio", failures)
 
 
-def _loss_limits(portfolio: PortfolioState, limits: RiskConfig) -> tuple[Check, Trip | None]:
+def _breaches(portfolio: PortfolioState, limits: RiskConfig) -> list[tuple[Trip, str]]:
+    """Every loss limit the portfolio breaches, mildest first."""
     budget = limits.capital.agent_budget_eur
     rules = limits.loss_limits
-    failures: list[str] = []
-    trip: Trip | None = None
+    out: list[tuple[Trip, str]] = []
     if portfolio.pnl_today_eur <= -rules.daily_loss_pct / 100 * budget:
-        failures.append(f"daily loss limit ({portfolio.pnl_today_eur:.2f} EUR)")
-        trip = "pause_day"
+        out.append(("pause_day", f"daily loss limit ({portfolio.pnl_today_eur:.2f} EUR)"))
     if portfolio.pnl_week_eur <= -rules.weekly_loss_pct / 100 * budget:
-        failures.append(f"weekly loss limit ({portfolio.pnl_week_eur:.2f} EUR)")
-        trip = "pause_week"
+        out.append(("pause_week", f"weekly loss limit ({portfolio.pnl_week_eur:.2f} EUR)"))
     if portfolio.drawdown_eur >= rules.max_drawdown_pct / 100 * budget:
-        failures.append(f"drawdown limit ({portfolio.drawdown_eur:.2f} EUR)")
-        trip = "halt"
-    return _check("loss_limits", failures), trip
+        out.append(("halt", f"drawdown limit ({portfolio.drawdown_eur:.2f} EUR)"))
+    return out
+
+
+def _loss_limits(portfolio: PortfolioState, limits: RiskConfig) -> tuple[Check, Trip | None]:
+    found = _breaches(portfolio, limits)
+    return _check("loss_limits", [m for _, m in found]), found[-1][0] if found else None
+
+
+def loss_trips(portfolio: PortfolioState, limits: RiskConfig) -> list[Trip]:
+    """The kill-switch changes for the loss limits breached at a close, mildest first."""
+    return [trip for trip, _ in _breaches(portfolio, limits)]
 
 
 def _rate_limits(proposal: Proposal, portfolio: PortfolioState, limits: RiskConfig) -> Check:

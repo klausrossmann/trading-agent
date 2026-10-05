@@ -455,7 +455,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 |---|---|
 | **Stops at the broker** | Every position has a stop and a target at the broker from the moment it's bought, so a crash, a power cut or a reboot never leaves a position unprotected (once orders go to IBKR). |
 | **Hard limits in code** | €15 risk per trade, €300 per position, 4 positions, €100 cash reserve, sector and correlation caps, 6 orders a day. AI output can't change them. |
-| **Loss limits** | Down 3 % today: no new entries until midnight. Down 6 % this week: none until Monday. Down 15 % from the peak: **halt** (see below). Checked whenever a new trade is about to be placed. |
+| **Loss limits** | Down 3 % on a day: no new entries the next trading day. Down 6 % this week: none until Monday. Down 15 % from the peak: **halt** (see below). Measured every evening after the close (the account value at the closing prices), with a Telegram message, and checked again before each new trade. |
 | **Kill switch** | Three states: **active** (normal), **paused** (no new entries; via `/pause` or a daily or weekly loss limit), **halted** (no new entries, all unfilled entries cancelled; via `/stop`, the drawdown limit or a reconciliation mismatch). |
 | **Reset needs two keys** | A halt only ends with a code printed on the host (`trading-agent reset`), sent from your phone with `/reset CODE` within 15 minutes. A reset needs both the host and your phone. |
 | **Reconciliation** | Compares the broker's positions with the agent's records after each US close and after every reconnect. Any difference halts the agent. |
@@ -592,7 +592,7 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 
 | Setting | Current | What it does |
 |---|---|---|
-| `loss_limits.daily_loss_pct` | 3 | Down €30 today: paused until midnight |
+| `loss_limits.daily_loss_pct` | 3 | Down €30 from one close to the next: paused through the next trading day |
 | `loss_limits.weekly_loss_pct` | 6 | Down €60 this week: paused until Monday |
 | `loss_limits.max_drawdown_pct` | 15 | Down €150 from the highest account value: halted until you reset. In paper, a halt in any sleeve halts everything. |
 

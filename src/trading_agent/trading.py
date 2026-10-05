@@ -387,7 +387,9 @@ async def _manage_positions(
 
 
 async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
-    """Round trips of the agent book from its brackets, and the sleeve's equity after `day`."""
+    """Round trips of the agent book from its brackets, the sleeve's equity after `day`, and
+    the loss limits measured at that close (a breach pauses the next session, as in the
+    backtest)."""
     loaded = await _load(ctx)
     async with ctx.sessions() as s:
         found = await proposals_repo.proposals(s)
@@ -404,7 +406,7 @@ async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
         signals,
         sessions_between,
     )
-    acct, _, _, key = await _sleeve_state(ctx, loaded, market, day)
+    acct, state, cfg, key = await _sleeve_state(ctx, loaded, market, day)
     async with ctx.sessions.begin() as s:
         await trades_repo.replace_book(s, ctx.book, rows)
         await book_repo.upsert_equity(
@@ -417,6 +419,17 @@ async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
             invested_eur=acct.invested_eur,
         )
     log.info("book.updated", book=ctx.book, sleeve=key, equity_eur=str(acct.equity_eur))
+    if trips := engine.loss_trips(state, cfg):
+        log.warning(
+            "loss_limits.breached",
+            sleeve=key,
+            trips=trips,
+            pnl_today_eur=str(state.pnl_today_eur),
+            pnl_week_eur=str(state.pnl_week_eur),
+            drawdown_eur=str(state.drawdown_eur),
+        )
+        cal = calendars.CALENDAR_BY_MARKET[market]
+        await ctx.center.apply_close_trips(trips, calendars.session_offset(cal, day, 1))
 
 
 async def cancel_entries(ctx: TradingContext, reason: str) -> int:

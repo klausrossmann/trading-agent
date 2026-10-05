@@ -21,7 +21,7 @@ from trading_agent.domain.risk import (
     RiskDecision,
 )
 from trading_agent.risk.config import RiskConfig, load_risk_config
-from trading_agent.risk.engine import CLUSTER_RHO, evaluate
+from trading_agent.risk.engine import CLUSTER_RHO, evaluate, loss_trips
 from trading_agent.settings import load_fees
 
 D = Decimal
@@ -302,6 +302,23 @@ def test_loss_limits_trip_the_kill_switch(portfolio: dict[str, Any], trip: str) 
 def test_trip_is_reported_even_outside_the_window() -> None:
     d = run(portfolio={"drawdown_eur": D(150)}, market={"session_open": None})
     assert d.trip == "halt"
+
+
+@pytest.mark.parametrize(
+    ("portfolio", "trips"),
+    [
+        ({"pnl_today_eur": D("-29.99"), "pnl_week_eur": D("-59.99")}, []),
+        ({"pnl_today_eur": D(-30)}, ["pause_day"]),
+        (
+            {"pnl_today_eur": D(-30), "pnl_week_eur": D(-60), "drawdown_eur": D(150)},
+            ["pause_day", "pause_week", "halt"],
+        ),
+    ],
+)
+def test_loss_trips_at_the_close_lists_every_breach(
+    portfolio: dict[str, Any], trips: list[str]
+) -> None:
+    assert loss_trips(PORTFOLIO.model_copy(update=portfolio), SLEEVES["US"]) == trips
 
 
 def test_duplicate_instrument_is_rejected() -> None:

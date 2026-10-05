@@ -31,7 +31,7 @@ from trading_agent.db import reports as reports_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.db.models import BracketRow
-from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
+from trading_agent.domain.market import BERLIN, Bar, BarSeries, Instrument, Observation
 from trading_agent.domain.news import NewsItem
 from trading_agent.domain.proposals import Proposal
 from trading_agent.execution.sim_broker import SimBroker
@@ -257,6 +257,24 @@ async def test_atr_trail_after_breakeven(sessions: Sessions) -> None:
     [b] = await ctx.executor.open_brackets()
     # +1R reached: breakeven 100.05, then 1 ATR (about 2.2) under the highest close 104
     assert D("101.7") < b.stop < D("102")
+
+
+async def test_a_loss_at_the_close_pauses_the_next_session(sessions: Sessions) -> None:
+    ctx, clock, inbox, ids = await _setup(sessions)
+    await trading.place(ctx, "US")
+    await _add_bar(sessions, ids["AAA"], _bar(TODAY, 100.5, 101, 99.5, 100))
+    clock.eod(TODAY)
+    await trading.end_of_day(ctx, "US")
+    assert (await ctx.center.kill_switch()).state == "active"
+    # a gap through the stop: 3 shares lose about 15 USD each, over 3 % of EUR 1,000
+    day2 = date(2026, 10, 8)
+    await _add_bar(sessions, ids["AAA"], _bar(day2, 85, 86, 84, 85))
+    clock.eod(day2)
+    await trading.end_of_day(ctx, "US")
+    ks = await ctx.center.kill_switch()
+    assert (ks.state, ks.reason) == ("paused", "daily loss limit")
+    assert ks.until == datetime.combine(date(2026, 10, 10), datetime.min.time(), BERLIN)
+    assert inbox.sent[-1].startswith("⏸ New entries")
 
 
 async def test_time_stop_exits_at_the_next_open(sessions: Sessions) -> None:

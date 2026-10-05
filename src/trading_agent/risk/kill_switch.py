@@ -4,7 +4,7 @@ Every function returns the state unchanged when the transition doesn't apply, so
 compare old and new to decide whether anything happened.
 """
 
-from datetime import datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 
 from trading_agent.domain.risk import KillSwitch, Trip
 
@@ -55,3 +55,13 @@ def apply_trip(ks: KillSwitch, trip: Trip, now: datetime, tz: tzinfo) -> KillSwi
     until = datetime.combine(local.date() + timedelta(days=days), time(0), tz)
     reason = "daily loss limit" if trip == "pause_day" else "weekly loss limit"
     return pause(ks, reason, now, until)
+
+
+def apply_close_trip(
+    ks: KillSwitch, trip: Trip, now: datetime, next_session: date, tz: tzinfo
+) -> KillSwitch:
+    """A loss limit measured at a close: the daily pause lasts through `next_session`."""
+    if trip != "pause_day":
+        return apply_trip(ks, trip, now, tz)
+    until = datetime.combine(next_session + timedelta(days=1), time(0), tz)
+    return pause(ks, "daily loss limit", now, until)
