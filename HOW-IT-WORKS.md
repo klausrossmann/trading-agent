@@ -156,7 +156,7 @@ All times are Berlin time on a normal trading day. The jobs follow the exchange 
 | 23:00 | Rule-based book replayed with today's prices | |
 | 23:05 | 🌙 **Evening digest**: today's proposals, placements and rejections, fills, labels to do, AI spend | |
 | 03:15 | Database backup (host cron job, once set up) | |
-| Saturday 10:00 | � **Weekly report**: results of all books, costs, calibration, go-live gate | |
+| Saturday 10:00 | 📈 **Weekly report**: results of all books, costs, calibration, go-live gate | |
 
 Why scan before the open and place 15 minutes after it? The scan uses the last complete daily bars, which exist once the previous session has closed. Placing after the open avoids the jumpy first minutes, and a placement that runs more than 2 minutes late is skipped rather than run at a random time.
 
@@ -504,7 +504,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 | ⌛ | An entry expired or was cancelled |
 | 🧐 | Position review: the AI thinks the reason for a trade is gone, with `/exit SYMBOL` |
 | 🌙 | Evening digest |
-| � | Weekly report with the go-live gate |
+| 📈 | Weekly report with the go-live gate |
 | 📊 | Answer to `/positions` |
 | ⏸ ⛔ ▶️ | Kill switch paused, halted, or entries allowed again (also after a loss limit) |
 | ⚠️ | Data problem, failed or missed job, reconciliation mismatch |
@@ -512,6 +512,8 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 | 🔐 | Live mode: confirm with `/confirm_live CODE` |
 
 ### 11.3 Dashboard
+
+What each page shows and where to find what: [RUNNING.md](RUNNING.md) sections 1 and 2.
 
 Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
 
@@ -527,7 +529,7 @@ Open it on your phone (or any device in your tailnet) through Tailscale. Pages: 
 
 ### 12.1 How to change a setting
 
-- **Files in `config/` and `prompts/`** are part of the code and built into the Docker image. A change is committed and pushed to GitHub, then on the Zenbook: `git pull && make build && make up` ([RUNNING.md](RUNNING.md) section 6). The agent reads them at start.
+- **Files in `config/` and `prompts/`** are part of the code and built into the Docker image. A change is committed and pushed to GitHub, then on the Zenbook: `git pull && make build && make up` ([RUNNING.md](RUNNING.md) section 7). The agent reads them at start.
 - **`.env`** lives only on the Zenbook. Edit it there, then `docker compose up -d` (a plain `restart` doesn't re-read `.env`).
 - Change things outside trading sessions, or `/pause` first.
 - **`config/risk.yaml` needs extra care**: every change gets its own commit with a reason, never mixed with other changes. Unknown or invalid keys stop the agent from starting, so a typo can't silently turn off a limit.

@@ -1,6 +1,6 @@
 # Trading Agent – Implementation Concept
 
-> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack). The stack runs on the Zenbook with the IBKR paper gateway connected (15.5 step 13, 2026-10-05); the remaining checks are listed in [RUNNING.md](RUNNING.md) section 4. Open questions answered in section 19.
+> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack). The stack runs on the Zenbook with the IBKR paper gateway connected (15.5 step 13, 2026-10-05); the remaining checks are listed in [RUNNING.md](RUNNING.md) section 6. Open questions answered in section 19.
 > Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes the built system in plain language, including every setting.
 > Disclaimer: technical concept, not financial or tax advice.
 
@@ -952,7 +952,7 @@ secrets:
 
 ### 15.4 Deploy and backup
 
-- `make deploy` on the development machine runs `ssh zenbook 'cd projects/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'` (`ZENBOOK_DIR` overrides the path). On the Zenbook itself: `git pull && make build && make migrate && make up` ([RUNNING.md](RUNNING.md) section 6).
+- `make deploy` on the development machine runs `ssh zenbook 'cd projects/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'` (`ZENBOOK_DIR` overrides the path). On the Zenbook itself: `git pull && make build && make migrate && make up` ([RUNNING.md](RUNNING.md) section 7).
 - Deploys run outside trading sessions, or the agent is paused first (`/pause`), because a restart triggers reconciliation.
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
   - `scripts/backup.sh` (`make backup`), run by the deploy user's crontab at 03:15 on the host (not in a container, so the files belong to that user). It dumps with the `postgres` role inside the `db` container, checks the dump with `pg_restore --list`, keeps 14 days in `backups/` (`chmod 700`, files `600`), and on Sundays writes `backups/offsite/trading-<stamp>.dump.age` for `BACKUP_AGE_RECIPIENT` (last 8 kept). Syncing that folder off the machine is up to you; the private key never lives on the host. `BACKUP_HEARTBEAT_URL` gets a ping after each good backup, so a missing backup raises an alert at the heartbeat service.
