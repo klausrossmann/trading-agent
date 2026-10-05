@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +27,14 @@ from trading_agent.db import market as market_repo
 from trading_agent.db import orders as orders_repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
-from trading_agent.domain.market import Bar, Increments, Instrument, Market, Observation
+from trading_agent.domain.market import (
+    BERLIN,
+    Bar,
+    Increments,
+    Instrument,
+    Market,
+    Observation,
+)
 from trading_agent.domain.orders import Bracket, BracketRequest
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
@@ -47,7 +53,6 @@ from trading_agent.strategies.pullback import PullbackParams
 log = structlog.get_logger(__name__)
 
 HISTORY_DAYS = 150  # calendar days of bars for ATR(14), 20-day value and 60-day correlations
-BERLIN = ZoneInfo("Europe/Berlin")
 
 
 @dataclass

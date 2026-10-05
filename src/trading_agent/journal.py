@@ -3,7 +3,6 @@
 from collections import Counter
 from datetime import date, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -14,6 +13,7 @@ from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.domain.market import BERLIN
 from trading_agent.domain.proposals import Label, Proposal
 from trading_agent.domain.trading import Book
 from trading_agent.notify import messages
@@ -21,7 +21,6 @@ from trading_agent.notify.telegram import Command, Interaction, Notifier, Reply
 
 log = structlog.get_logger(__name__)
 
-TZ = ZoneInfo("Europe/Berlin")
 LABELS: dict[str, Label] = {"a": "agree", "d": "disagree"}
 BOOKS: tuple[Book, ...] = ("agent_paper", "agent_shadow", "baseline_sim")
 
@@ -154,7 +153,7 @@ async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
                 open=sum(1 for r in rows if r.exit_date is None),
             )
         )
-    start = datetime.combine(today, datetime.min.time(), TZ)
+    start = datetime.combine(today, datetime.min.time(), BERLIN)
     symbols = {p.id: p.yahoo_symbol for p in items}
     return messages.Digest(
         day=today,
@@ -176,7 +175,7 @@ async def evening_digest(
     book: jobs.BookContext, notifier: Notifier, today: date | None = None
 ) -> str:
     """After the US close: replay agent_shadow, then send the day's digest."""
-    today = today or datetime.now(TZ).date()
+    today = today or datetime.now(BERLIN).date()
     await jobs.agent_book(book, today)
     text = messages.render_digest(await build_digest(book, today))
     await notifier.send(text)

@@ -3,8 +3,11 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict
+
+BERLIN = ZoneInfo("Europe/Berlin")  # the owner's time zone: order counts, digests, messages
 
 Market = Literal["US", "EU"]
 Currency = Literal["USD", "EUR"]

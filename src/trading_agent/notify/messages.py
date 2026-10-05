@@ -7,13 +7,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
+from trading_agent.domain.market import BERLIN
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import KillSwitch
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def money(eur: float, budget_eur: float) -> str:

@@ -307,7 +307,7 @@ async def backfill(
         await macro(ctx, now),
         await earnings(ctx, now, limit=ctx.cfg.earnings.history_limit),
     ]
-    for r in results[:3]:
+    for r in results[:3]:  # macro() and earnings() log their own results
         _log_result(r)
     return results
 

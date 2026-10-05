@@ -8,12 +8,12 @@ import hmac
 import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import structlog
 
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import controls as repo
+from trading_agent.domain.market import BERLIN
 from trading_agent.domain.risk import Controls, KillSwitch, Mode, Trip
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, LogNotifier, Notifier, Reply
@@ -21,7 +21,6 @@ from trading_agent.risk import kill_switch
 
 log = structlog.get_logger(__name__)
 
-TZ = ZoneInfo("Europe/Berlin")
 RESET_CODE_TTL = timedelta(minutes=15)
 STOP_BUTTON = "k:stop"
 CANCEL_BUTTON = "k:cancel"
@@ -86,7 +85,7 @@ class ControlCenter:
 
     async def apply_trip(self, trip: Trip) -> KillSwitch:
         return await self._announce(
-            "risk", lambda ks, now: kill_switch.apply_trip(ks, trip, now, TZ)
+            "risk", lambda ks, now: kill_switch.apply_trip(ks, trip, now, BERLIN)
         )
 
     async def controls(self) -> Controls:

@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -10,6 +11,7 @@ from trading_agent.domain.market import Market
 from trading_agent.settings import Settings
 
 if TYPE_CHECKING:
+    from trading_agent.data.ingest import Sessions
     from trading_agent.jobs import SymbolAnalysis
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -35,6 +37,20 @@ def _settings() -> Settings:
     return settings
 
 
+def _with_db[T](settings: Settings, job: Callable[["Sessions"], Awaitable[T]]) -> T:
+    """Runs `job` with a session factory on the configured database, then closes the pool."""
+    from trading_agent.db.session import create_engine, session_factory
+
+    async def _run() -> T:
+        engine = create_engine(settings.database_url)
+        try:
+            return await job(session_factory(engine))
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
 @app.command()
 def run() -> None:
     """Start the agent: scheduler and jobs, until SIGTERM/SIGINT."""
@@ -56,22 +72,17 @@ def backfill(market: Literal["US", "EU"] | None = MarketOption) -> None:
 
     from trading_agent import jobs
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
     from trading_agent.settings import load_data_config
 
     settings = _settings()
 
-    async def _run() -> list[jobs.IngestResult]:
-        engine = create_engine(settings.database_url)
-        try:
-            async with httpx.AsyncClient() as http:
-                cfg = load_data_config(settings.config_dir)
-                ctx = jobs.DataContext.build(settings, cfg, session_factory(engine), http)
-                return await jobs.backfill(ctx, load_universe(settings.config_dir), market)
-        finally:
-            await engine.dispose()
+    async def _run(sessions: "Sessions") -> list[jobs.IngestResult]:
+        async with httpx.AsyncClient() as http:
+            cfg = load_data_config(settings.config_dir)
+            ctx = jobs.DataContext.build(settings, cfg, sessions, http)
+            return await jobs.backfill(ctx, load_universe(settings.config_dir), market)
 
-    results = asyncio.run(_run())
+    results = _with_db(settings, _run)
     for r in results:
         typer.echo(
             f"{r.job:<12} inserted={r.inserted:<7} updated={r.updated:<5} removed={r.removed:<4} "
@@ -94,22 +105,14 @@ def quality(
     from datetime import UTC, datetime
 
     from trading_agent.data.ingest import run_quality
-    from trading_agent.db.session import create_engine, session_factory
     from trading_agent.settings import load_data_config
 
     settings = _settings()
     cfg = load_data_config(settings.config_dir).quality
 
-    async def _run() -> list[QualityIssue]:
-        engine = create_engine(settings.database_url)
-        try:
-            return await run_quality(
-                session_factory(engine), cfg, now=datetime.now(UTC), market=market
-            )
-        finally:
-            await engine.dispose()
-
-    issues = asyncio.run(_run())
+    issues: list[QualityIssue] = _with_db(
+        settings, lambda s: run_quality(s, cfg, now=datetime.now(UTC), market=market)
+    )
     by_symbol: dict[str, list[str]] = defaultdict(list)
     for i in issues:
         if i.blocking or show_all:
@@ -137,7 +140,6 @@ def backtest(
 
     from trading_agent import backtest as bt
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
     from trading_agent.evaluation import report
     from trading_agent.risk.config import load_risk_config
     from trading_agent.settings import load_fees
@@ -147,16 +149,9 @@ def backtest(
     cfg, risk = bt.load_backtest_config(cfg_dir), load_risk_config(cfg_dir)
     fees, universe = load_fees(cfg_dir), load_universe(cfg_dir)
 
-    async def _load() -> bt.MarketData:
-        engine = create_engine(settings.database_url)
-        try:
-            return await bt.load_market_data(
-                session_factory(engine), dict(universe.benchmarks), cfg.pullback
-            )
-        finally:
-            await engine.dispose()
-
-    data = asyncio.run(_load())
+    data = _with_db(
+        settings, lambda s: bt.load_market_data(s, dict(universe.benchmarks), cfg.pullback)
+    )
     if not data.instruments:
         raise typer.BadParameter("no bars stored; run `trading-agent backfill` first")
     end = max(max(x.rows) for x in data.instruments.values())
@@ -227,21 +222,14 @@ def analyse(
     """LLM technical and earnings analysis of today's top baseline setups (or given symbols)."""
     from trading_agent import jobs
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
 
     settings = _settings()
 
-    async def _run() -> jobs.ScanResult:
-        engine = create_engine(settings.database_url)
-        try:
-            ctx = jobs.AnalysisContext.build(
-                settings, session_factory(engine), load_universe(settings.config_dir)
-            )
-            return await jobs.analyse(ctx, symbols or None, market, top)
-        finally:
-            await engine.dispose()
+    async def _run(sessions: "Sessions") -> jobs.ScanResult:
+        ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
+        return await jobs.analyse(ctx, symbols or None, market, top)
 
-    result = asyncio.run(_run())
+    result = _with_db(settings, _run)
     for item in result.items:
         e = item.earnings.output
         earnings = (
@@ -276,21 +264,14 @@ def propose(
     """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
     from trading_agent import jobs, pipeline
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
 
     settings = _settings()
 
-    async def _run() -> pipeline.ProposalRun:
-        engine = create_engine(settings.database_url)
-        try:
-            ctx = jobs.AnalysisContext.build(
-                settings, session_factory(engine), load_universe(settings.config_dir)
-            )
-            return await pipeline.propose(ctx, market, symbols or None)
-        finally:
-            await engine.dispose()
+    async def _run(sessions: "Sessions") -> pipeline.ProposalRun:
+        ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
+        return await pipeline.propose(ctx, market, symbols or None)
 
-    result = asyncio.run(_run())
+    result = _with_db(settings, _run)
     typer.echo(pipeline.summary(result, market))
     for symbol, reason in result.skipped.items():
         typer.echo(f"  skipped {symbol}: {reason}")
@@ -305,20 +286,13 @@ def ibkr_check(
 ) -> None:
     """Check the IB Gateway: account, positions, contract ids, bars vs. Yahoo, quotes, ticks."""
     from trading_agent import broker
-    from trading_agent.db.session import create_engine, session_factory
 
     settings = _settings()
-
-    async def _run() -> list[str]:
-        engine = create_engine(settings.database_url)
-        try:
-            return await broker.check(
-                settings, session_factory(engine), symbols or ["AAPL", "SAP.DE"], order_test
-            )
-        finally:
-            await engine.dispose()
-
-    typer.echo("\n".join(asyncio.run(_run())))
+    lines = _with_db(
+        settings,
+        lambda s: broker.check(settings, s, symbols or ["AAPL", "SAP.DE"], order_test),
+    )
+    typer.echo("\n".join(lines))
 
 
 @app.command(name="weekly-report")
@@ -331,23 +305,18 @@ def weekly_report(
 
     from trading_agent import jobs, reports
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
     from trading_agent.notify.telegram import LogNotifier
 
     settings = _settings()
+    week_end = date.fromisoformat(day) if day else None
 
-    async def _run() -> str:
-        engine = create_engine(settings.database_url)
-        try:
-            ctx = jobs.BookContext.load(
-                settings.config_dir, session_factory(engine), load_universe(settings.config_dir)
-            )
-            week_end = date.fromisoformat(day) if day else None
-            return await reports.weekly_report(ctx, LogNotifier(), week_end)
-        finally:
-            await engine.dispose()
+    async def _run(sessions: "Sessions") -> str:
+        ctx = jobs.BookContext.load(
+            settings.config_dir, sessions, load_universe(settings.config_dir)
+        )
+        return await reports.weekly_report(ctx, LogNotifier(), week_end)
 
-    text = asyncio.run(_run())
+    text = _with_db(settings, _run)
     typer.echo(text)
     if output:
         output.write_text(text, encoding="utf-8")
@@ -360,16 +329,13 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
     from trading_agent import broker, jobs, scheduler, trading
     from trading_agent.controls import ControlCenter
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
     from trading_agent.notify.telegram import LogNotifier
 
     settings = _settings()
 
-    async def _run() -> trading.Placement:
-        engine = create_engine(settings.database_url)
+    async def _run(sessions: "Sessions") -> trading.Placement:
         link: broker.BrokerLink | None = None
         try:
-            sessions = session_factory(engine)
             book = jobs.BookContext.load(
                 settings.config_dir, sessions, load_universe(settings.config_dir)
             )
@@ -385,9 +351,8 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
         finally:
             if link is not None:
                 link.ib.disconnect()
-            await engine.dispose()
 
-    result = asyncio.run(_run())
+    result = _with_db(settings, _run)
     for p in result.placed:
         typer.echo(f"placed {p.symbol} {p.quantity} @ {p.entry:.2f} (stop {p.stop:.2f})")
     for symbol, reason in result.rejected:
@@ -399,31 +364,24 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
 @app.command(name="tax-report")
 def tax_report(
     year: int = typer.Argument(..., help="Calendar year, e.g. 2027."),
-    book: str = typer.Option("agent_live", help="agent_live (taxable) or agent_paper (dry run)."),
+    book: Literal["agent_live", "agent_paper"] = typer.Option(
+        "agent_live", help="agent_live (taxable) or agent_paper (dry run)."
+    ),
     output: Path | None = OutputOption,
 ) -> None:
     """Yearly tax helper: share sales in EUR at trade-day ECB rates (not tax advice)."""
     from trading_agent import jobs, reports
     from trading_agent.data.universe import load_universe
-    from trading_agent.db.session import create_engine, session_factory
 
-    if book not in ("agent_live", "agent_paper"):
-        raise typer.BadParameter("book must be agent_live or agent_paper")
     settings = _settings()
 
-    async def _run() -> str:
-        engine = create_engine(settings.database_url)
-        try:
-            ctx = jobs.BookContext.load(
-                settings.config_dir, session_factory(engine), load_universe(settings.config_dir)
-            )
-            return await reports.tax_report(
-                ctx, year, "agent_live" if book == "agent_live" else "agent_paper"
-            )
-        finally:
-            await engine.dispose()
+    async def _run(sessions: "Sessions") -> str:
+        ctx = jobs.BookContext.load(
+            settings.config_dir, sessions, load_universe(settings.config_dir)
+        )
+        return await reports.tax_report(ctx, year, book)
 
-    text = asyncio.run(_run())
+    text = _with_db(settings, _run)
     typer.echo(text)
     if output:
         output.write_text(text, encoding="utf-8")
@@ -433,20 +391,9 @@ def tax_report(
 def reset() -> None:
     """End a halt (kill switch): prints a code to confirm with /reset CODE in Telegram."""
     from trading_agent.controls import RESET_CODE_TTL, ControlCenter
-    from trading_agent.db.session import create_engine, session_factory
 
     settings = _settings()
-
-    async def _run() -> str | None:
-        engine = create_engine(settings.database_url)
-        try:
-            return await ControlCenter(
-                session_factory(engine), settings.app_mode
-            ).issue_reset_code()
-        finally:
-            await engine.dispose()
-
-    code = asyncio.run(_run())
+    code = _with_db(settings, lambda s: ControlCenter(s, settings.app_mode).issue_reset_code())
     if code is None:
         typer.echo("The agent is not halted; nothing to reset.")
         return
