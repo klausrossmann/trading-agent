@@ -66,6 +66,7 @@ All milestones up to M9 and the M10 preparation are built and tested on the Mac.
 ## Documentation
 
 - [HOW-IT-WORKS.md](HOW-IT-WORKS.md): **start here**. The system in plain language: workflow, buy and sell rules, agents, safety nets, every setting.
+- [RUNNING.md](RUNNING.md): where each part runs and how to reach it, and how to set up, run, update and troubleshoot the app on the Zenbook, step by step.
 - [MAS-DESIGN.md](MAS-DESIGN.md): the multi-agent system design: agent inventory, communication, shared memory, coordination, trust, evaluation, code map.
 - [CONCEPT.md](CONCEPT.md): why it's designed this way (broker choice, risk limits, costs, evaluation, roadmap, research).
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): how it's built (architecture, data model, risk engine, deployment, runbook, build plan).

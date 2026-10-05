@@ -1,6 +1,8 @@
 .PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up backup restore-check down logs deploy dev-up dev-backfill dev-logs dev-down
 
 ZENBOOK ?= zenbook
+# Checkout on the Zenbook, relative to trader's home
+ZENBOOK_DIR ?= projects/trading-agent
 TEST_DB := ta-test-db
 # Risk engine and execution need 100 % branch coverage (IMPLEMENTATION.md 16.2).
 RISK_COV := --cov=trading_agent.risk --cov=trading_agent.execution --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
@@ -74,7 +76,7 @@ logs:
 	docker compose logs -f agent
 
 deploy:
-	ssh $(ZENBOOK) 'cd ~/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'
+	ssh $(ZENBOOK) 'cd $(ZENBOOK_DIR) && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'
 
 # Local stack with the offline fake LLM and throwaway secrets (compose.dev.yaml).
 DEV := docker compose -f compose.yaml -f compose.dev.yaml

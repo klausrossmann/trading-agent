@@ -836,7 +836,7 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a normal desktop for browsing; the stack runs alongside under its own user.
 
 1. Ubuntu version (`lsb_release -d`): 24.04 or 26.04 LTS stays as it is. 22.04: upgrade in place once with `sudo do-release-upgrade` (back up personal files first); older releases one LTS step at a time. At least 15 GB free (`df -h /`).
-2. A separate user `trader` runs the stack and owns `~/trading-agent`, `.env` and `secrets/`. Only `trader` is in the `docker` group (that membership equals root rights); your own user browses as before and never gets the secrets.
+2. A separate user `trader` runs the stack and owns `~/projects/trading-agent`, `.env` and `secrets/`. Only `trader` is in the `docker` group (that membership equals root rights); your own user browses as before and never gets the secrets.
 3. Never sleep:
    - `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`
    - In `/etc/systemd/logind.conf`, set `HandleLidSwitch=ignore`, `HandleLidSwitchExternalPower=ignore` and `HandleLidSwitchDocked=ignore`, then reboot (restarting `systemd-logind` would end the desktop session). Screen blanking and locking stay on.
@@ -952,7 +952,7 @@ secrets:
 
 ### 15.4 Deploy and backup
 
-- `make deploy` on the Mac runs `ssh zenbook 'cd ~/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'`.
+- `make deploy` on the Mac runs `ssh zenbook 'cd projects/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'` (`ZENBOOK_DIR` overrides the path).
 - Deploys run outside trading sessions, or the agent is paused first (`/pause`), because a restart triggers reconciliation.
 - Backup: nightly `pg_dump -Fc`, keeping 14 days on disk. Once a week a copy is encrypted (`age`) and moved off the machine, for example to a cloud drive.
   - `scripts/backup.sh` (`make backup`), run by the deploy user's crontab at 03:15 on the host (not in a container, so the files belong to that user). It dumps with the `postgres` role inside the `db` container, checks the dump with `pg_restore --list`, keeps 14 days in `backups/` (`chmod 700`, files `600`), and on Sundays writes `backups/offsite/trading-<stamp>.dump.age` for `BACKUP_AGE_RECIPIENT` (last 8 kept). Syncing that folder off the machine is up to you; the private key never lives on the host. `BACKUP_HEARTBEAT_URL` gets a ping after each good backup, so a missing backup raises an alert at the heartbeat service.
@@ -961,12 +961,12 @@ secrets:
 
 ### 15.5 First start on the Zenbook (runbook, state after M7)
 
-Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋.
+Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋. [RUNNING.md](RUNNING.md) explains each step in plain language.
 
 > Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each; step 13 waits for the IBKR paper login.
 
 1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as `trader` (`sudo -iu trader`, or `ssh zenbook` from the Mac).
-2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/trading-agent && cd ~/trading-agent`.
+2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/projects/trading-agent && cd ~/projects/trading-agent`.
 3. **Secrets**: `make secrets` creates the database passwords in `secrets/` (`postgres_password`, `agent_db_password`, `dashboard_db_password`).
 4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
    - `FRED_API_KEY`: free, fred.stlouisfed.org → My Account → API Keys.
@@ -978,7 +978,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 7. **Start**: `make up`, then `make logs` until `agent.started` appears (Ctrl-C leaves the agent running).
 8. **Telegram owner**: send your bot any message, then `docker compose logs agent | grep telegram.ignored` shows your `chat_id`. Put it into `.env` as `TELEGRAM_OWNER_CHAT_ID` and run `docker compose up -d agent` (recreates the container; `restart` would not re-read `.env`). Check `/status`, `/briefing` and `/budget` in Telegram.
 9. **LLM scan** (M5): `docker compose run --rm agent trading-agent analyse --top 3` 📋. Prints the rating, plan and earnings stance per symbol and the cost of the scan.
-10. **Evals** (M5): `curl -LsSf https://astral.sh/uv/install.sh | sh`, open a new shell, then in `~/trading-agent`: `uv sync && uv run pytest -m llm tests/evals` 📋 (the summary at the end lists all 30 cases and the total cost). Uses `GEMINI_API_KEY` from `.env`; with the free tier it takes a few minutes because calls are paced.
+10. **Evals** (M5): `curl -LsSf https://astral.sh/uv/install.sh | sh`, open a new shell, then in `~/projects/trading-agent`: `uv sync && uv run pytest -m llm tests/evals` 📋 (the summary at the end lists all 30 cases and the total cost). Uses `GEMINI_API_KEY` from `.env`; with the free tier it takes a few minutes because calls are paced.
 11. **Dashboard** (M6): on a fresh install, steps 3, 5 and 7 already created the password, the read-only role and the `dashboard` container. Only if the database existed before this step (installed at M5 or earlier): `git pull && make secrets && make build && make dashboard-role && make up` (`dashboard-role` recreates `db` with the new secret and creates the role; pause the agent or run it outside sessions). Then:
     - On the Zenbook: `curl -s localhost:8501/_stcore/health` prints `ok`.
     - Publish it to the tailnet: `sudo tailscale serve --bg 8501`, then `tailscale serve status` 📋 shows the `https://…ts.net` URL. The setting survives reboots.
@@ -997,7 +997,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - On the Mac: `brew install age && mkdir -p ~/.config/age && age-keygen -o ~/.config/age/key.txt`. The printed public key (`age1...`) goes into the Zenbook's `.env` as `BACKUP_AGE_RECIPIENT`; keep the key file also in your password manager.
     - Optional: a second healthchecks.io check (daily, 2 h grace) as `BACKUP_HEARTBEAT_URL`.
     - On the Zenbook as `trader`: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
-    - `crontab -e`: `15 3 * * * cd ~/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
+    - `crontab -e`: `15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
     - Copy one `.age` file to the Mac and run `scripts/restore.sh check <file>` there against a local throwaway database once: that is the "restore on another machine" test of section 18.
 17. **IBKR orders and chaos tests** (M8 step 5, after step 13 works; outside US hours for the switch, the tests during a session):
     - Switch: `/positions` shows nothing open (otherwise wait until the simulated brackets are closed). In `.env`: `IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`. `docker compose up -d` (recreates gateway and agent). `/status` shows the gateway connected.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly database backup (IMPLEMENTATION.md 15.4). Run by cron as the deploy user, e.g.
-#   15 3 * * * cd ~/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1
+#   15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1
 # Keeps 14 days of dumps in backups/. On Sundays (or with OFFSITE=1) it also writes an
 # age-encrypted copy to backups/offsite/ for your sync tool, keeping the last 8.
 set -euo pipefail
