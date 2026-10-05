@@ -1,7 +1,7 @@
 # Trading Agent – Implementation Concept
 
-> Status: Draft v0.2 (2026-10-03). Open questions from v0.1 answered (section 19); milestone M0 started.
-> Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built.
+> Status: v0.3 (2026-10-05). M0–M9 and the M10 preparation are built and tested on the Mac; the Zenbook runbook (15.5) hasn't started. Open questions answered in section 19.
+> Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes the built system in plain language, including every setting.
 > Disclaimer: technical concept, not financial or tax advice.
 
 ---
@@ -269,7 +269,7 @@ Rules:
 - Bars are **split-adjusted but not dividend-adjusted**, i.e. actual traded prices, so levels and limit prices match the market. A bar is only stored once its session has closed.
 - **Restatements**: if the overlap shows past closes changed by more than 0.5 % (a split), the instrument's full history is re-fetched and replaced.
 - Earnings: future dates the source no longer reports (moved announcements) are deleted. Announcement times are classified as before open, during, after close, or unknown.
-- Data quality checks run after each end-of-day ingestion (`trading-agent quality` on demand): missing sessions against the exchange calendar, bars on non-session dates, invalid OHLC, close-to-close jumps > 40 % (unadjusted splits), zero volume, stale data. Issues from the last 20 sessions **block** the symbol from that day's scan; zero volume only blocks on the latest bar, because Yahoo's Xetra data has sporadic zero-volume days with valid prices. Issues are logged, and sent to Telegram from M4.
+- Data quality checks run after each end-of-day ingestion (`trading-agent quality` on demand): missing sessions against the exchange calendar, bars on non-session dates, invalid OHLC, close-to-close jumps > 40 % (unadjusted splits), zero volume, stale data. Issues from the last 20 sessions mark the symbol as **blocked**; zero volume only blocks on the latest bar, because Yahoo's Xetra data has sporadic zero-volume days with valid prices. Blocked symbols are logged, sent to Telegram once (from M4) and listed in `/status` and the briefing. Gap: the scan's candidate list (`jobs.candidates`) only drops symbols without a bar for the latest session; it doesn't read the blocked list yet.
 - Backtests on current index members have **survivorship bias**. That is acceptable for a sanity check of the baseline, but not as proof of an edge.
 - Instruments must allow at least 2 whole shares within the maximum position size, unless fractional orders via the API turn out to work (to verify in milestone M6).
 
@@ -465,6 +465,8 @@ sequenceDiagram
 | Portfolio manager | Surviving proposals, portfolio, regime | Ranked list plus a short rationale | `proposer` |
 
 The agents have **no tools** except read-only data lookups (`get_bars`, `get_levels`, `get_news`) defined in `agents/tools.py`. Every prompt, response, tool call and cost is written to `analyses`, `llm_calls` and `audit_log`.
+
+As built, the agents have no tools at all: the orchestrator injects every fact into the input. The multi-agent design (topology, message contracts, shared memory, coordination, containment, evaluation) is documented in [MAS-DESIGN.md](MAS-DESIGN.md).
 
 ### 8.1 Implementation (M7, 2026-10-04)
 
@@ -677,28 +679,33 @@ Prepared on the Mac for step 5 (M9 session): `data/ibkr.MarketInfo` reads each c
 
 ## 11. Scheduler
 
-Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for the US, `XETR` for Xetra), so holidays, half-days and the daylight-saving mismatch weeks are handled automatically. All times are Europe/Berlin.
+Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for the US, `XETR` for Xetra), so holidays, half-days and the daylight-saving mismatch weeks are handled automatically. All times are Europe/Berlin; the clock times in brackets are for a normal day (Xetra 09:00–17:30, NYSE 15:30–22:00). The source of truth is `config/schedule.yaml`.
 
 | Job | Trigger | LLM | Notes |
 |---|---|---|---|
 | `heartbeat` | every 5 min | no | Ping the heartbeat URL |
-| `ingest_macro`, `earnings_calendar` | 07:00 / 07:15 trading days | no | |
-| `ingest_news` | every 30 min, 07:00–22:30 | triage | Flash-Lite scoring (since M9: Finnhub, held US positions only) |
-| `scan_eu` (paper only) | XETR open − 45 min | yes | Uses the previous EOD bars; batch API where possible |
-| `briefing` | 08:30 | reports | Telegram: portfolio, events today, pending orders |
-| `place_eu` | XETR open + 15 min | no | Risk engine → execution (since M8 step 4) |
-| `ingest_eod_eu` | XETR close + 30 min | no | |
-| `scan_us` | XNYS open − 45 min | yes | |
-| `place_us` | XNYS open + 15 min | no | |
-| `monitor` | every 10 min in session | no | Broker sync and alerts (IBKR mode); stops and time stops run at EOD on daily bars (9.6); invalidation rules later |
-| `reevaluate_positions` | XNYS close − 60 min | yes | Only positions with news or events (since M9; advice only, `/exit` is yours) |
-| `ingest_eod_us` | XNYS close + 30 min | no | |
-| `eod` | after `ingest_eod_us` | no | Reconcile, update books and shadow trades, plan stop changes (since M8 step 4: `execution_eu`/`execution_us` at close + 35 min) |
-| `evening_digest` | after `eod` | reports | Telegram: fills, rejections, labels to do |
-| `weekly_report` | Saturday 10:00 | reports | KPIs vs baselines, costs |
-| `backup` | daily 03:00 | no | `pg_dump` |
+| `ingest_macro`, `ingest_earnings` | 07:00 / 07:15 weekdays | no | |
+| `ingest_news` | every 30 min, 07:00–22:30 weekdays | triage | Finnhub headlines for held US positions, Flash-Lite triage (M9) |
+| `scan_eu` | XETR open − 45 min (08:15) | yes | Agent pipeline on the previous EOD bars; 🧠 summary. Runs in live mode too, although live trades US only. |
+| `briefing` | 08:30 weekdays with a session | no | Data-only 📰 briefing |
+| `place_eu` | XETR open + 15 min (09:15), 2 min grace | no | Risk engine → brackets (M8 step 4) |
+| `monitor` | every 10 min, 09:00–22:50 weekdays | no | Broker sync and alerts; IBKR mode only |
+| `scan_us` | XNYS open − 45 min (14:45) | yes | |
+| `place_us` | XNYS open + 15 min (15:45), 2 min grace | no | |
+| `ingest_eod_eu` | XETR close + 30 min (18:00) | no | EU bars, ECB FX, quality check |
+| `execution_eu` | XETR close + 35 min (18:05) | no | Fills, breakeven, time stops, `agent_paper` EU sleeve (9.6) |
+| `reevaluate_positions` | XNYS close − 60 min (21:00) | yes | Positions with `high` news or a report within 3 sessions; advice only, `/exit` is yours (M9) |
+| `ingest_eod_us` | XNYS close + 30 min (22:30) | no | US bars, quality check |
+| `execution_us` | XNYS close + 35 min (22:35) | no | As `execution_eu`, for the US sleeve |
+| `reconcile` | XNYS close + 40 min (22:40) | no | Broker vs. book; only with `IB_ENABLED` |
+| `baseline_sim` | XNYS close + 60 min (23:00) | no | Replays the rule-based book |
+| `evening_digest` | XNYS close + 65 min (23:05) | no | Replays `agent_shadow`, then the 🌙 digest |
+| `weekly_report` | Saturday 10:00 | no | KPIs vs. baselines, costs, calibration, gate (M9) |
+| backup | 03:15, host crontab | no | `scripts/backup.sh` (15.4); not a scheduler job |
 
-Misfire policy: `coalesce=True` and a `misfire_grace_time` per job (for example 30 min for scans, 0 for order placement, so a late order placement is skipped).
+The `reports` model role is configured but unused: briefing, digest and weekly report are rendered by code.
+
+Misfire policy: `coalesce=True` and a `misfire_grace_time` per job (for example 30 min for scans, 2 min for order placement, so a late placement is skipped).
 
 ---
 
@@ -737,6 +744,8 @@ Available since M4: `/status` (mode, uptime, heartbeat, last bars, blocked symbo
 🟢 fill · 🔴 stop or exit · ⚠️ limit breach, reconciliation issue, data quality · 🔌 gateway disconnected for more than 10 minutes · 🔐 IBKR re-login with 2FA needed · 💸 LLM budget at 80 % · 📰 morning briefing · 🌙 evening digest.
 
 Since M4: ▶️/⏹ agent start and stop; ⚠️ ingestion failures and restated histories; ⚠️ data quality, once per newly blocked symbol; ⚠️ any scheduled job that raises or misses its run time; 📰 the data-only briefing at 08:30 on days when Xetra or NYSE trades (benchmarks and trend, EUR/USD, earnings in the next 3 sessions, the `baseline_sim` book per sleeve, baseline setups at the last close, data status).
+
+Since M7–M9: 🧠 scan results, 📤 placements and rejections, 🟢 bought, 🔴 sold (stop, target, time, manual), ⌛ entry expired or cancelled, ⏸/⛔/▶️ kill-switch changes, 🔌 gateway down for 10 min and back, 🔐 live confirmation needed, 📰 important news on a held position, 🧐 position review advises an exit, 🌙 evening digest, 📈 weekly report. Not built: a dedicated 🔐 alert when IBKR needs a 2FA re-login (a gateway that stays down shows up as 🔌), and a 💸 push at 80 % of the LLM budget (lean mode switches on silently; `/budget` shows the spend).
 
 ### 12.4 Privacy
 

@@ -3,6 +3,7 @@
 > Status: Draft v0.2 (2026-10-03). Refined with the answers in section 17 and online research (Appendix A).
 > Scope: Personal, self-hosted agentic AI that analyses markets, keeps an overview of the portfolio, proactively suggests swing trades and (within hard limits) executes them autonomously.
 > Disclaimer: This is a technical concept, not financial or tax advice.
+> **As built (2026-10-05):** this document is the design rationale. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes what the code actually does, in plain language. Where the two differ, HOW-IT-WORKS.md is right.
 
 ---
 
@@ -233,6 +234,8 @@ sequenceDiagram
 
 The risk engine adds the `quantity` field. The LLM never decides position size.
 
+**As built:** the analysis stage has two modules (technical, earnings); `patterns`, `news` and `macro` aren't part of the scan yet. Proposals carry level *names* that code resolves to prices. Open positions get a stop moved to breakeven at +1R and a time stop after 15 sessions, but no trailing stop. The daily re-evaluation runs only for positions with important news or a report ahead, and it advises you instead of exiting by itself ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) sections 5–7).
+
 ---
 
 ## 6. Risk engine and hard limits
@@ -297,6 +300,8 @@ execution:
 costs:
   llm_budget_eur_month: 15         # lean mode at 80 %, no LLM calls at 100 %
 ```
+
+The file in the repo adds `capital.paper_budget_eur` (EU €5,000 in paper) and `per_trade.stop_atr_min`/`stop_atr_max` (1–4 ATR). [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.3 explains every key and which ones are not enforced yet.
 
 ### 6.2 More safeguards
 - **Separate account or sub-account** that holds only the agent's budget. This is the hardest limit there is.
@@ -439,6 +444,8 @@ Times are CET/CEST. US markets open at 15:30.
 
 - Use an exchange calendar library (for example `exchange_calendars`) for holidays and half-days. The US and the EU switch daylight saving time on different dates, so the US open moves to 14:30 CET for one to three weeks in spring and autumn.
 - On the laptop, a job missed during sleep runs once after wake-up if it's still relevant (APScheduler `coalesce` and `misfire_grace_time`). Otherwise it's skipped and logged.
+
+**As built:** scans run 45 minutes before each open (EU 08:15, US 14:45 on a normal day), orders are placed 15 minutes after the open, and stops and time stops are handled after each close on daily bars. The weekly report runs on Saturday; the weekly macro report and the monthly review aren't built. The current timetable is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4.
 
 ---
 
