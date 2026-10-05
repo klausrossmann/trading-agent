@@ -299,6 +299,15 @@ async def last_macro_date(session: AsyncSession, series_id: str) -> date | None:
     )
 
 
+async def macro_series(session: AsyncSession, series_id: str) -> list[Observation]:
+    rows = await session.execute(
+        select(MacroSeriesRow.date, MacroSeriesRow.value)
+        .where(MacroSeriesRow.series_id == series_id)
+        .order_by(MacroSeriesRow.date)
+    )
+    return [Observation(date=d, value=v) for d, v in rows]
+
+
 async def upsert_macro(
     session: AsyncSession,
     series_id: str,

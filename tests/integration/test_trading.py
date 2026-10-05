@@ -124,7 +124,7 @@ def _proposal(inst_id: int, symbol: str, target: float, rank: int) -> Proposal:
 
 
 async def _setup(
-    sessions: Sessions, *, time_stop: int = 15
+    sessions: Sessions, *, time_stop: int = 15, trail_atr: float | None = None
 ) -> tuple[trading.TradingContext, Clock, Inbox, dict[str, int]]:
     async with sessions.begin() as s:
         await s.execute(text("TRUNCATE kill_switch, equity_daily, audit_log"))
@@ -158,7 +158,7 @@ async def _setup(
     sim = SimBroker(clock=clock)
     center = ControlCenter(sessions, "paper", notifier=inbox, clock=clock)
     rules = load_backtest_config(ROOT / "config").pullback.model_copy(
-        update={"time_stop_sessions": time_stop}
+        update={"time_stop_sessions": time_stop, "trail_atr": trail_atr}
     )
     ctx = trading.TradingContext(
         sessions=sessions,
@@ -242,6 +242,21 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
         assert [d for d, _ in await reports_repo.reports(s, "tax:agent_paper")] == [
             date(2026, 12, 31)
         ]
+
+
+async def test_atr_trail_after_breakeven(sessions: Sessions) -> None:
+    ctx, clock, _, ids = await _setup(sessions, trail_atr=1.0)
+    await trading.place(ctx, "US")
+    await _add_bar(sessions, ids["AAA"], _bar(TODAY, 100.5, 101, 99.5, 100))
+    clock.eod(TODAY)
+    await trading.end_of_day(ctx, "US")
+    day2 = date(2026, 10, 8)
+    await _add_bar(sessions, ids["AAA"], _bar(day2, 101, 105, 100.5, 104))
+    clock.eod(day2)
+    await trading.end_of_day(ctx, "US")
+    [b] = await ctx.executor.open_brackets()
+    # +1R reached: breakeven 100.05, then 1 ATR (about 2.2) under the highest close 104
+    assert D("101.7") < b.stop < D("102")
 
 
 async def test_time_stop_exits_at_the_next_open(sessions: Sessions) -> None:

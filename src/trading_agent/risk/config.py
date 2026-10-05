@@ -58,23 +58,10 @@ class Markets(_Strict):
     live: list[Market]
 
 
-class Options(_Strict):
-    enabled: bool
-    allowed_strategies: list[str]
-    forbid_naked_short: bool
-    max_premium_at_risk_pct: Decimal
-    dte_range: tuple[int, int]
-    min_open_interest: int
-    max_bid_ask_spread_pct: Decimal
-
-
 class Instruments(_Strict):
-    universe_us: list[str]
-    universe_eu: list[str]
-    etfs: Literal["ucits_only"]
     min_avg_daily_dollar_volume: Decimal = Field(ge=0)
     min_price: Decimal = Field(ge=0)
-    blacklist: list[str]
+    blacklist: list[str] = Field(default_factory=list[str])  # Yahoo symbols, never traded
 
 
 class Execution(_Strict):
@@ -85,20 +72,14 @@ class Execution(_Strict):
     no_new_entries_before_earnings_days: int = Field(ge=0)
 
 
-class Costs(_Strict):
-    llm_budget_eur_month: Decimal = Field(ge=0)
-
-
 class RiskConfig(_Strict):
     capital: Capital
     per_trade: PerTrade
     portfolio: Portfolio
     loss_limits: LossLimits
     markets: Markets
-    options: Options
     instruments: Instruments
     execution: Execution
-    costs: Costs
 
     def sizing_limits(self) -> SizingLimits:
         return SizingLimits(

@@ -49,13 +49,20 @@ def _returns(bars: Sequence[Bar]) -> pd.Series:
     return closes.pct_change().iloc[1:].tail(CORRELATION_SESSIONS)
 
 
+def correlation(a: pd.Series, b: pd.Series) -> float | None:
+    """rho of two return series on their common dates; None if too short or one is flat."""
+    joined = pd.concat([a, b], axis=1, join="inner").dropna()
+    if len(joined) >= MIN_OVERLAP and (joined.std() > 0).all():
+        return float(joined.iloc[:, 0].corr(joined.iloc[:, 1]))
+    return None
+
+
 def correlations(bars: Sequence[Bar], held: Mapping[int, Sequence[Bar]]) -> dict[int, float]:
     mine = _returns(bars)
     out: dict[int, float] = {}
     for inst_id, other in held.items():
-        joined = pd.concat([mine, _returns(other)], axis=1, join="inner").dropna()
-        if len(joined) >= MIN_OVERLAP and (joined.std() > 0).all():  # flat: no estimate
-            out[inst_id] = float(joined.iloc[:, 0].corr(joined.iloc[:, 1]))
+        if (rho := correlation(mine, _returns(other))) is not None:
+            out[inst_id] = rho
     return out
 
 

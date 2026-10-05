@@ -79,6 +79,8 @@ def _instrument(
         failures.append(f"{proposal.market} not allowed in {mode}")
     if not market.in_universe:
         failures.append("not in the universe")
+    if proposal.yahoo_symbol in limits.instruments.blacklist:
+        failures.append("blacklisted")
     if market.mid < limits.instruments.min_price:
         failures.append(f"price {market.mid} below {limits.instruments.min_price}")
     if market.avg_daily_value < limits.instruments.min_avg_daily_dollar_volume:

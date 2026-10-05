@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-Role = Literal["triage", "analysis", "proposer", "critic", "reports"]
+Role = Literal["triage", "analysis", "proposer", "critic"]
 AnalysisStatus = Literal["ok", "rejected"]
 
 

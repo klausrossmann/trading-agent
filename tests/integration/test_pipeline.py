@@ -25,6 +25,7 @@ from trading_agent.db import market as repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
+from trading_agent.llm.fake import fake_model
 from trading_agent.llm.runner import LlmRunner
 from trading_agent.settings import Settings
 
@@ -232,3 +233,19 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
 
     book = jobs.BookContext.load(ROOT / "config", sessions, universe)
     assert await jobs.agent_book(book, today=date(2026, 10, 6)) == []  # placed the next session
+
+
+async def test_offline_fake_model_and_macro_context(sessions: Sessions, settings: Settings) -> None:
+    ctx, _ = await _context(sessions, settings, Agents(block=set()))
+    ctx.runner = LlmRunner(
+        ctx.models, DbAnalysisStore(sessions), lambda _: fake_model(), dev_overrides=True
+    )
+    run = await pipeline.propose(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
+    assert run.skipped == {}
+    assert {p.status for p in run.proposals} == {"proposed"}
+    assert all(p.risk_reward is not None and p.risk_reward >= 2 for p in run.proposals)
+
+    macro = await pipeline.macro_context(ctx, "US", date(2026, 10, 5))
+    assert macro.benchmark == "SPY"
+    assert macro.benchmark_trend["daily"] == "up"
+    assert macro.vix is None  # no FRED data stored

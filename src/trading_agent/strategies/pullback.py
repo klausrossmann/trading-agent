@@ -11,7 +11,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from trading_agent.calc.indicators import atr, ema, rsi, sma
 from trading_agent.calc.levels import swing_points
@@ -41,6 +41,13 @@ class PullbackParams(BaseModel):
     breakeven_r: float = 1.0
     time_stop_sessions: int = 15
     rs_window: int = 63
+    # Optional, off (None) in v1. After breakeven the stop trails this many ATR under the
+    # highest close since the entry.
+    trail_atr: float | None = Field(default=None, gt=0)
+    # Market regime gate: no new entries while the market's benchmark closes below its SMA of
+    # this length, or while VIX (FRED VIXCLS) closes above `regime_max_vix`.
+    regime_sma: int | None = Field(default=None, ge=2)
+    regime_max_vix: float | None = Field(default=None, gt=0)
 
 
 @dataclass(frozen=True)

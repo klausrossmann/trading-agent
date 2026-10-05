@@ -219,6 +219,15 @@ def test_live_mode_allows_us_only() -> None:
     assert outcome(d, "instrument") == ("fail", "EU not allowed in live")
 
 
+def test_blacklisted_symbol_is_rejected() -> None:
+    us = SLEEVES["US"]
+    banned = us.model_copy(
+        update={"instruments": us.instruments.model_copy(update={"blacklist": ["AAPL"]})}
+    )
+    d = evaluate(PROPOSAL, LEVELS, PORTFOLIO, MARKET, PAPER, banned, FEES, NOW)
+    assert outcome(d, "instrument") == ("fail", "blacklisted")
+
+
 def test_dependent_checks_are_skipped() -> None:
     d = run(proposal={"target_ref": None})
     assert [c.outcome for c in d.checks] == [

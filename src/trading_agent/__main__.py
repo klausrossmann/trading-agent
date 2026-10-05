@@ -189,8 +189,9 @@ def backtest(
                     "flatters the result.",
                     "Daily bars: if stop and target are both inside a bar the stop counts; on "
                     "the entry bar only the stop is checked.",
-                    "Not modelled yet: correlation clusters and loss limits (risk engine, M8), "
-                    "FX conversion costs, dividends.",
+                    "Risk engine rules applied: sizing, positions, sector and correlation "
+                    "cluster caps, fee-to-risk, orders per day, settled cash, loss limits "
+                    "(measured at each close). Not modelled: FX conversion costs, dividends.",
                     "Prices from Yahoo Finance; third-party fees are estimates (config/fees.yaml).",
                 ],
             )

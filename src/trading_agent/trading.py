@@ -17,6 +17,7 @@ import structlog
 
 from trading_agent.backtest import SETTLEMENT_SESSIONS
 from trading_agent.calc.fees import FeeSchedule, order_fees
+from trading_agent.calc.indicators import atr, bars_to_frame
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars
 from trading_agent.data.ibkr import MarketInfo
@@ -336,7 +337,8 @@ def _sim_bar(bar: Bar) -> sim.Bar:
 async def _manage_positions(
     ctx: TradingContext, market: Market, day: date, bars: dict[int, Bar]
 ) -> None:
-    """Breakeven at +1R and the time stop, on the day's bar as in the backtest."""
+    """Breakeven at +1R, the optional ATR trail and the time stop, on the day's bar as in the
+    backtest."""
     cal = calendars.CALENDAR_BY_MARKET[market]
     loaded = await _load(ctx)
     fills = {f.bracket_id: f.day for f in loaded.fills if f.kind == "entry"}
@@ -354,6 +356,17 @@ async def _manage_positions(
             continue
         trigger = float(b.entry_price) + ctx.rules.breakeven_r * float(b.entry - b.initial_stop)
         moved = sim.trailed_stop(_sim_bar(bar), float(b.stop), float(b.entry_price), trigger)
+        if ctx.rules.trail_atr is not None and moved >= float(b.entry_price):
+            async with ctx.sessions() as s:
+                since = entered - timedelta(days=HISTORY_DAYS)
+                history = [
+                    x for x in await market_repo.bars(s, b.instrument_id, since) if x.date <= day
+                ]
+            highest = max(float(x.close) for x in history if x.date >= entered)
+            last_atr = float(atr(bars_to_frame(history)).iloc[-1])
+            moved = sim.chandelier_stop(
+                moved, float(b.entry_price), highest, last_atr, ctx.rules.trail_atr
+            )
         new_stop = to_tick(Decimal(str(moved)), True, await ctx.ticks(inst))
         if new_stop > b.stop:
             await ctx.executor.move_stop(b.id, new_stop)

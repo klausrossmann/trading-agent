@@ -7,7 +7,7 @@ proposed trades until the risk engine and execution arrive (M8).
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -16,6 +16,8 @@ from trading_agent import jobs
 from trading_agent.agents.critic import CriticInput, CriticVerdict, PlanView
 from trading_agent.agents.portfolio import Candidate, PortfolioInput, Ranking
 from trading_agent.agents.proposer import Holding, ProposerInput, ProposerOutput
+from trading_agent.calc.indicators import bars_to_frame
+from trading_agent.calc.macro import FRED_SERIES, MacroSnapshot, macro_snapshot
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
@@ -52,8 +54,22 @@ async def holdings(ctx: jobs.AnalysisContext) -> list[Holding]:
     ]
 
 
+async def macro_context(ctx: jobs.AnalysisContext, market: Market, as_of: date) -> MacroSnapshot:
+    benchmark = ctx.benchmarks.get(market)
+    async with ctx.sessions() as s:
+        instruments = await market_repo.active_instruments(s)
+        bench_id = next((k for k, i in instruments.items() if i.yahoo_symbol == benchmark), None)
+        bars = await market_repo.bars(s, bench_id, as_of - timedelta(days=450)) if bench_id else []
+        series = {sid: await market_repo.macro_series(s, sid) for sid in FRED_SERIES.values()}
+    close = bars_to_frame([b for b in bars if b.date <= as_of])["close"] if bars else None
+    return macro_snapshot(benchmark, close, series, as_of)
+
+
 def proposer_input(
-    item: jobs.SymbolAnalysis, tech: TechnicalAssessment, held: list[Holding]
+    item: jobs.SymbolAnalysis,
+    tech: TechnicalAssessment,
+    held: list[Holding],
+    macro: MacroSnapshot | None = None,
 ) -> ProposerInput:
     t, e = item.technical_input, item.earnings_input
     unknown = list(t.unknown)
@@ -77,6 +93,7 @@ def proposer_input(
         next_earnings_date=e.next_report.date if e.next_report else None,
         holdings=held,
         unknown=sorted(unknown),
+        macro=macro,
     )
 
 
@@ -228,6 +245,7 @@ async def propose(
     held_symbols = {h.symbol for h in held}
     items: list[Proposal] = []
     skipped: dict[str, str] = {}
+    macros: dict[tuple[Market, date], MacroSnapshot] = {}
     cost = scan.cost_usd
     for item in scan.items:
         tech = item.technical.output
@@ -240,7 +258,11 @@ async def propose(
         if tech.rating not in BUY_RATINGS:
             skipped[item.symbol] = f"technical rating {tech.rating}"
             continue
-        inp = proposer_input(item, tech, held)
+        t_in = item.technical_input
+        key = (t_in.market, t_in.as_of)
+        if key not in macros:
+            macros[key] = await macro_context(ctx, *key)
+        inp = proposer_input(item, tech, held, macros[key])
         as_of = inp.as_of
         proposed = await ctx.runner.run(
             ctx.proposer, inp, instrument_id=ids[item.symbol], as_of=as_of

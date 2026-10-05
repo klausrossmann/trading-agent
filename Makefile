@@ -1,4 +1,4 @@
-.PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up backup restore-check down logs deploy
+.PHONY: sync lint fmt test test-db secrets tws-password dashboard-role build migrate up backup restore-check down logs deploy dev-up dev-backfill dev-logs dev-down
 
 ZENBOOK ?= zenbook
 TEST_DB := ta-test-db
@@ -75,3 +75,29 @@ logs:
 
 deploy:
 	ssh $(ZENBOOK) 'cd ~/trading-agent && git pull --ff-only && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'
+
+# Local stack with the offline fake LLM and throwaway secrets (compose.dev.yaml).
+DEV := docker compose -f compose.yaml -f compose.dev.yaml
+
+dev-up:
+	@mkdir -p .dev/secrets && chmod 700 .dev/secrets
+	@for s in postgres_password agent_db_password dashboard_db_password tws_password vnc_password; do \
+	  [ -f .dev/secrets/$$s ] || openssl rand -hex 24 > .dev/secrets/$$s; chmod 644 .dev/secrets/$$s; \
+	done
+	$(DEV) build
+	$(DEV) up -d --wait db
+	$(DEV) run --rm agent alembic upgrade head
+	$(DEV) up -d agent dashboard
+	@echo "dashboard http://127.0.0.1:$${DEV_DASHBOARD_PORT:-8502}, db 127.0.0.1:$${DEV_DB_PORT:-55433} (password in .dev/secrets/agent_db_password)"
+
+# Yahoo, ECB and earnings history into the dev database (no FRED key: macro is skipped).
+dev-backfill:
+	$(DEV) run --rm agent trading-agent backfill
+
+dev-logs:
+	$(DEV) logs -f agent
+
+# Removes the dev containers, their volume and the throwaway secrets.
+dev-down:
+	$(DEV) down -v
+	rm -rf .dev

@@ -9,7 +9,7 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 from trading_agent import jobs
-from trading_agent.data import ingest
+from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
@@ -21,6 +21,7 @@ from trading_agent.settings import Settings
 
 pytestmark = pytest.mark.db
 
+D = Decimal
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 10, 6, 6, 30, tzinfo=UTC)
 
@@ -134,3 +135,38 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     text = await jobs.budget_text(ctx)
     assert text.startswith("💸 LLM budget")
     assert "google:gemini-3.8-flash: " in text
+
+
+async def test_candidates_skip_blocked_and_blacklisted(
+    sessions: Sessions, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    universe = Universe(
+        generated=date(2026, 10, 6),
+        benchmarks={"US": "SPY"},
+        instruments=[_inst("SPY", "etf", ()), _inst("AAA"), _inst("BBB"), _inst("CCC")],
+    )
+    await ingest.sync_universe(sessions, universe)
+    days = calendars.sessions("XNYS", date(2026, 1, 2), date(2026, 10, 5))
+
+    def series(symbol: str, last_close: float = 100) -> BarSeries:
+        bars = [
+            Bar(date=d, open=D(100), high=D(101), low=D(99), close=D(100), volume=1_000_000)
+            for d in days
+        ]
+        bars[-1] = bars[-1].model_copy(update={"close": D(last_close), "high": D(last_close)})
+        return BarSeries(yahoo_symbol=symbol, source="test", fetched_at=NOW, bars=tuple(bars))
+
+    async with sessions.begin() as s:
+        ids = {i.yahoo_symbol: k for k, i in (await repo.active_instruments(s)).items()}
+        for symbol in ("SPY", "AAA", "CCC"):
+            await repo.upsert_bars(s, ids[symbol], series(symbol))
+        await repo.upsert_bars(s, ids["BBB"], series("BBB", last_close=150))  # 50 % jump
+
+    cfg = settings.model_copy(
+        update={"config_dir": ROOT / "config", "prompts_dir": ROOT / "prompts"}
+    )
+    ctx = jobs.AnalysisContext.build(cfg, sessions, universe)
+    ctx.blacklist = frozenset({"CCC"})
+    setups = [("CCC", 3.0), ("BBB", 2.0), ("AAA", 1.0)]
+    monkeypatch.setattr(jobs.backtest, "latest_setups", lambda data, p: setups)
+    assert await jobs.candidates(ctx, "US", 5, now=NOW) == ["AAA"]

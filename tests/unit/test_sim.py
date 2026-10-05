@@ -1,6 +1,14 @@
 import pytest
 
-from trading_agent.execution.sim import Bar, Fill, check_exit, fill_entry, time_exit, trailed_stop
+from trading_agent.execution.sim import (
+    Bar,
+    Fill,
+    chandelier_stop,
+    check_exit,
+    fill_entry,
+    time_exit,
+    trailed_stop,
+)
 
 SLIP = 0.05
 
@@ -46,3 +54,10 @@ def test_breakeven_stop_only_tightens() -> None:
     assert trailed_stop(Bar(100, 104, 99, 103), stop=95, entry=100, trigger=105) == 95
     assert trailed_stop(Bar(100, 105, 99, 103), stop=95, entry=100, trigger=105) == 100
     assert trailed_stop(Bar(100, 105, 99, 103), stop=101, entry=100, trigger=105) == 101
+
+
+def test_atr_trail_starts_at_breakeven_and_only_tightens() -> None:
+    assert chandelier_stop(95, entry=100, highest_close=110, atr=2, k=2) == 95  # before breakeven
+    assert chandelier_stop(100, entry=100, highest_close=110, atr=2, k=2) == 106
+    assert chandelier_stop(107, entry=100, highest_close=110, atr=2, k=2) == 107
+    assert chandelier_stop(100, entry=100, highest_close=110, atr=float("nan"), k=2) == 100

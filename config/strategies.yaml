@@ -17,6 +17,10 @@ pullback:                          # IMPLEMENTATION.md 6.2
   breakeven_r: 1.0
   time_stop_sessions: 15
   rs_window: 63                      # ranking: 3-month return relative to the benchmark
+  # Optional rules, off (null) in v1; compare with `trading-agent backtest` before switching on.
+  trail_atr: null                    # e.g. 2.0: after breakeven, stop = highest close - 2 ATR
+  regime_sma: null                   # e.g. 200: no new entries while the benchmark is below it
+  regime_max_vix: null               # e.g. 30: no new entries while VIX is above it (FRED key)
 
 slippage_pct: 0.05                   # per side (IMPLEMENTATION.md 10.5)
 

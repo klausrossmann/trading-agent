@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import structlog
+from pydantic_ai.models import Model
 
 from trading_agent import backtest
 from trading_agent.agents import critic, portfolio, proposer
@@ -33,6 +34,7 @@ from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.market import Market
 from trading_agent.domain.trading import Book, Trade
 from trading_agent.llm.budget import BudgetMode, month_start
+from trading_agent.llm.fake import fake_model
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import LlmRunner, Outcome
@@ -49,7 +51,7 @@ from trading_agent.modules.technical import (
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import LogNotifier, Notifier
 from trading_agent.risk.config import RiskConfig, load_risk_config
-from trading_agent.settings import DataConfig, Settings, load_fees
+from trading_agent.settings import DataConfig, QualityConfig, Settings, load_data_config, load_fees
 
 log = structlog.get_logger(__name__)
 
@@ -491,16 +493,23 @@ class AnalysisContext:
     critic: CriticAgent
     portfolio: PortfolioManagerAgent
     max_open_positions: int
+    quality: QualityConfig
+    blacklist: frozenset[str]
 
     @classmethod
     def build(cls, settings: Settings, sessions: Sessions, universe: Universe) -> "AnalysisContext":
         cfg_dir = settings.config_dir
         prompts = settings.prompts_dir
         models = load_models_config(cfg_dir)
+        factory: Callable[[str], Model] = (
+            (lambda _: fake_model())
+            if settings.llm_fake
+            else partial(build_model, gemini_api_key=settings.gemini_api_key)
+        )
         runner = LlmRunner(
             models,
             DbAnalysisStore(sessions),
-            partial(build_model, gemini_api_key=settings.gemini_api_key),
+            factory,
             dev_overrides=settings.llm_dev_overrides,
         )
         p = backtest.load_backtest_config(cfg_dir).pullback
@@ -533,6 +542,8 @@ class AnalysisContext:
                 load_prompt(prompts, portfolio.NAME, portfolio.PROMPT_VERSION)
             ),
             max_open_positions=risk.portfolio.max_open_positions,
+            quality=load_data_config(cfg_dir).quality,
+            blacklist=frozenset(risk.instruments.blacklist),
         )
 
 
@@ -560,12 +571,25 @@ class ScanResult:
         return sum(o.cost_usd for i in self.items for o in i.outcomes)
 
 
-async def candidates(ctx: AnalysisContext, market: Market | None, top: int) -> list[str]:
-    """Top baseline setups at the latest close, by relative strength."""
+async def candidates(
+    ctx: AnalysisContext, market: Market | None, top: int, now: datetime | None = None
+) -> list[str]:
+    """Top baseline setups at the latest close, by relative strength, without symbols that the
+    quality checks block or that risk.yaml blacklists."""
     data = await backtest.load_market_data(ctx.sessions, ctx.benchmarks, ctx.pullback)
     markets = {x.instrument.yahoo_symbol: x.instrument.market for x in data.instruments.values()}
-    setups = backtest.latest_setups(data, ctx.pullback)
-    return [s for s, _ in setups if market is None or markets[s] == market][:top]
+    issues = await ingest.run_quality(
+        ctx.sessions, ctx.quality, now=now or datetime.now(UTC), market=market
+    )
+    excluded = {i.yahoo_symbol for i in issues if i.blocking} | ctx.blacklist
+    setups = [
+        s
+        for s, _ in backtest.latest_setups(data, ctx.pullback)
+        if market is None or markets[s] == market
+    ]
+    if skipped := [s for s in setups if s in excluded]:
+        log.info("scan.excluded", market=market, symbols=skipped)
+    return [s for s in setups if s not in excluded][:top]
 
 
 async def analyse(

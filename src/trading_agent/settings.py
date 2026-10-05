@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     finnhub_api_key: SecretStr | None = None  # company news for position re-evaluation (M9)
     llm_dev_overrides: bool = False  # config/models.yaml dev_overrides (Phase 0-1)
+    llm_fake: bool = False  # offline stand-in for every model (llm/fake.py, compose.dev.yaml)
 
     db_host: str = "db"
     db_port: int = 5432

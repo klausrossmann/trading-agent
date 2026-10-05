@@ -170,7 +170,7 @@ After each close, the system downloads that day's prices for every stock in the 
 
 ### Step 2: Check the data
 
-Quality checks look for missing days, impossible prices (for example a low above the high), jumps over 40 % (often an unrecorded split), zero volume and stale data. A stock with a problem in the last 20 sessions is marked **blocked**, and you get a ⚠️ once per newly blocked stock. The screen skips stocks without a bar for the latest session. Other blocked stocks are currently only reported, not removed from the scan (see section 13).
+Quality checks look for missing days, impossible prices (for example a low above the high), jumps over 40 % (often an unrecorded split), zero volume and stale data. A stock with a problem in the last 20 sessions is marked **blocked**, and you get a ⚠️ once per newly blocked stock. The screen skips blocked stocks, stocks without a bar for the latest session and stocks on the blacklist in `risk.yaml`.
 
 ### Step 3: Screen for candidates (code, no AI)
 
@@ -185,6 +185,8 @@ The "pullback in an uptrend" rule checks every stock on the latest daily bar. Al
 | Close 0–3 % above the 20-day EMA or the 50-day SMA | The dip has reached a level where buyers often step in |
 | RSI between 40 and 55 | Cooled off, but not collapsing |
 | No earnings report in the next 3 sessions | No overnight jump risk right after buying |
+
+An optional **market filter** (off by default, see 12.5) skips the whole market while its index ETF trades below its 200-day average or the VIX is above a limit.
 
 The stocks that pass are ranked by **relative strength** (the strongest over 3 months first). The **top 10 per market** go to the AI (5 in lean mode, see 12.4). Of those, stocks the agent already holds get no proposal.
 
@@ -201,7 +203,7 @@ Only `buy` and `strong_buy` ratings continue.
 
 ### Step 5: Propose (the proposer)
 
-The proposer sees both analyses, the level menu, the rules and what the agent already holds. It answers either **`no_trade`** with a reason, or **`propose`** with:
+The proposer sees both analyses, the level menu, the rules, what the agent already holds and a **market snapshot**: the index ETF's trend, its distance to the 200-day average and its 20-day return, the VIX now and 20 days ago, US credit spreads and interest rates (the FRED values need `FRED_API_KEY`; missing ones are empty). In a weak or nervous market it is told to demand a better setup and lower its confidence. It answers either **`no_trade`** with a reason, or **`propose`** with:
 
 - entry, stop and target, again chosen by name from the menu
 - a **thesis**: why it should work, in 2–4 sentences
@@ -236,7 +238,7 @@ The proposals are stored and summed up in Telegram (🧠). This is the end of th
 |---|---|---|
 | 1 | Proposal | Its status is `proposed` (not blocked, not a pass) |
 | 2 | Global | The kill switch is active (not paused or halted); in live mode the live interlock is satisfied; the market is open, outside its first 15 and last 10 minutes |
-| 3 | Instrument | The market is allowed in this mode (live: US only); the stock is in the universe; price ≥ 5; average traded value ≥ 20 million; no earnings in the next 3 sessions |
+| 3 | Instrument | The market is allowed in this mode (live: US only); the stock is in the universe and not on the blacklist; price ≥ 5; average traded value ≥ 20 million; no earnings in the next 3 sessions |
 | 4 | Levels | Stop < entry < target; R:R ≥ 2; stop 1–4 ATR below the entry; entry at most 1 % above the current price; the current price above the stop |
 | 5 | Sizing | At least one share fits within all limits, and the position is worth at least €200 |
 | 6 | Fees | Estimated buy and sell fees are at most 10 % of the money at risk |
@@ -324,6 +326,7 @@ If several proposals pass, they are placed in the portfolio manager's order unti
 | **Target reached** | The target order at the broker sells when the price reaches it (at least 2R) | 🔴 target |
 | **Stop hit** | The stop order at the broker sells when the price falls to it. If the stock opens below the stop after bad news, it sells at that worse price. | 🔴 stop |
 | **Breakeven stop** | Once the daily high reaches entry + 1R, the stop is moved up to the entry price that evening. From then on the trade can't turn into a real loss (except for fees or a gap down). Stops only ever move up. | 🔴 stop |
+| **Trailing stop** (optional, off) | With `trail_atr` set (12.5): after breakeven, every evening the stop moves up to the highest close since the entry minus that many ATRs. The target stays. | 🔴 stop |
 | **Time stop** | After 15 sessions without hitting the stop or the target, it sells with a market order at the next open. Capital isn't tied up in a trade that isn't working. | 🔴 time |
 | **You say so** | `/exit SYMBOL` in Telegram sells the whole position with a market order at the next open | 🔴 |
 
@@ -359,7 +362,7 @@ The project is also a showcase for a **multi-agent system (MAS)**: several indep
 | Screen | Code | Daily bars of the whole universe | Which stocks are worth a look | none |
 | Technical analyst | LLM | Computed indicators and the level menu | Rating, setup quality, a draft plan | `analysis`: Gemini 3.8 Flash |
 | Earnings analyst | LLM | Next report, last 8 reports and price reactions | Earnings stance | `analysis`: Gemini 3.8 Flash |
-| Proposer | LLM | Both analyses, the menu, rules, holdings | Propose or pass; plan, thesis, confidence | `proposer`: Gemini 3.8 Flash |
+| Proposer | LLM | Both analyses, the menu, rules, holdings, market snapshot | Propose or pass; plan, thesis, confidence | `proposer`: Gemini 3.8 Flash |
 | Critic | LLM, other vendor | The same facts plus the plan in prices | Objections, severity, confidence change | `critic`: Claude Sonnet 5.5 (Gemini until an Anthropic key exists) |
 | Portfolio manager | LLM | Surviving proposals, holdings, free slots | Order of the proposals | `proposer`: Gemini 3.8 Flash |
 | Risk engine | Code | Proposal, account, market facts, limits | Approve or reject; number of shares | none |
@@ -416,7 +419,7 @@ Why it is built this way:
 | The critic fails | The proposal stays, marked "no critique" |
 | The portfolio manager fails | Code ranks by confidence × R:R |
 | The AI budget is used up (100 %) | No more AI calls this month, so no new agent trades. The rule-based book keeps running. |
-| Prices for a stock look wrong | ⚠️ alert and the stock is listed as blocked; a stock without today's bar is skipped |
+| Prices for a stock look wrong | ⚠️ alert; the stock is blocked and left out of the scan until the problem is 20 sessions old |
 | The agent or the computer is down | Stops and targets are already at the broker (once on IBKR). Missed jobs run once when it's back, if they're still useful; a late order placement is skipped. |
 
 ---
@@ -427,7 +430,7 @@ Nobody knows yet whether the AI adds value. Public studies of AI trading agents 
 
 | Book | What it is | Purpose |
 |---|---|---|
-| `baseline_sim` | The rule-based screen trading on its own: no AI, same limits and fees, simulated | The bar the AI must beat |
+| `baseline_sim` | The rule-based screen trading on its own: no AI, same limits and fees (including the correlation cap and the loss limits; a drawdown halt stops it for good), simulated | The bar the AI must beat |
 | `agent_paper` | The full pipeline with the risk engine; simulator now, IBKR paper account later | The real thing |
 | `agent_shadow` | Every proposal the risk engine would approve if the account were empty, each simulated on its own | More trades for statistics. With only 4 slots, the real book alone would take far too long. |
 | Benchmarks | Buy and hold SPY (US) and the DAX ETF (Germany) | Context: was it worth the effort at all? |
@@ -540,6 +543,7 @@ Open it on your phone or Mac through Tailscale. Pages: **Overview** (positions, 
 | `COMPOSE_PROFILES` | empty | `ibkr`: also start the IB Gateway container |
 | `TWS_USERID`, `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID` | | IBKR login name and connection. Port 4004 is paper, 4003 live. |
 | `LLM_DEV_OVERRIDES` | `true` | `true`: the critic runs on Gemini (`dev_overrides` in `models.yaml`). `false` once an Anthropic key exists. |
+| `LLM_FAKE` | `false` | `true` only in the local test stack (`make dev-up`): every AI role gets canned, rule-following answers and no API is called. Never on the Zenbook. |
 | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | | AI provider keys. Without a key, that provider's roles can't run. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID` | | Your bot and your chat. Without the chat id, every message is ignored. |
 | `FRED_API_KEY` | | US macro data; skipped without it |
@@ -597,11 +601,12 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 | `markets.paper` / `markets.live` | [US, EU] / [US] | Markets that may be traded in each mode |
 | `instruments.min_price` | 5 | Lowest share price |
 | `instruments.min_avg_daily_dollar_volume` | 20,000,000 | Lowest 20-day average traded value, in the stock's currency |
+| `instruments.blacklist` | [] | Yahoo symbols that are never scanned or traded, e.g. `[TSLA, SAP.DE]` |
 | `execution.max_orders_per_day` | 6 | New brackets per day, across the whole book |
 | `execution.no_trading_first_minutes` / `last_minutes` | 15 / 10 | No new entries this close to the open or close |
 | `execution.no_new_entries_before_earnings_days` | 3 | No new entry if a report is this many sessions away or fewer |
 
-**Kept for later; changing them has no effect yet**: `options.*` (options aren't built), `instruments.universe_us`, `universe_eu`, `etfs` and `blacklist` (the universe comes from `universe.yaml`), and `costs.llm_budget_eur_month` (the active AI budget is in `models.yaml`).
+The universe itself comes from `universe.yaml` (12.7), the AI budget from `models.yaml` (12.4).
 
 ### 12.4 `config/models.yaml`: AI models and budget
 
@@ -611,7 +616,6 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 | `roles.analysis` | Gemini 3.8 Flash | Technical and earnings analysts, position review |
 | `roles.proposer` | Gemini 3.8 Flash | Proposer and portfolio manager |
 | `roles.critic` | Claude Sonnet 5.5 | Critic; needs `ANTHROPIC_API_KEY` and a price below |
-| `roles.reports` | Gemini 3.8 Flash | Reserved for AI-written reports (the current reports use no AI) |
 | `dev_overrides.critic` | Gemini 3.8 Flash | Used instead while `LLM_DEV_OVERRIDES=true` |
 | `prices` | per model | Price per million tokens, used to estimate costs. **A model without a price is never called.** |
 | `budget.monthly_usd` | 16 | The monthly AI budget (about €15) |
@@ -622,7 +626,7 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 
 ### 12.5 `config/strategies.yaml`: the screen and trade management
 
-These rules pick the candidates for the AI **and** run the rule-based book. The last four also manage every `agent_paper` position.
+These rules pick the candidates for the AI **and** run the rule-based book. The trade-management settings (`entry_valid_sessions`, `breakeven_r`, `time_stop_sessions`, `trail_atr`) also manage every `agent_paper` position.
 
 | Setting | Current | What it does |
 |---|---|---|
@@ -636,10 +640,13 @@ These rules pick the candidates for the AI **and** run the rule-based book. The 
 | `entry_valid_sessions` | 2 | How long a buy limit stays open (also for the agent) |
 | `breakeven_r` | 1.0 | Move the stop to the entry price at +1R (also for the agent) |
 | `time_stop_sessions` | 15 | Sell after this many sessions (also for the agent) |
+| `trail_atr` | off (`null`) | E.g. 2.0: after breakeven, trail the stop 2 ATR under the highest close since the entry (also for the agent) |
+| `regime_sma` | off (`null`) | E.g. 200: no new entries in a market while its index ETF closes below this moving average (screen, rule-based book and therefore the AI's candidates) |
+| `regime_max_vix` | off (`null`) | E.g. 30: no new entries while the VIX closes above this (needs `FRED_API_KEY`; applies to both markets) |
 | `slippage_pct` | 0.05 | Simulated price disadvantage per buy and per sell |
 | `baseline_book.start` | 2026-10-05 | First day of the rule-based book |
 
-The baseline is deliberately **not tuned** on past data; it's the fixed bar the AI has to beat. Changing it changes the comparison, so do it rarely and note why.
+The baseline is deliberately **not tuned** on past data; it's the fixed bar the AI has to beat. Changing it changes the comparison, so do it rarely and note why. The three optional rules are off for that reason; compare them first with `trading-agent backtest` (a copy of `config/` with the change, `CONFIG_DIR=...`). On 5 years of data none of them made the baseline profitable ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.4).
 
 ### 12.6 `config/schedule.yaml`: when jobs run
 
@@ -655,7 +662,7 @@ Each job runs either at a clock time (`cron`, Berlin time) or relative to an exc
 
 ### 12.8 `prompts/`
 
-The instructions for each AI role, one file per version (`prompts/proposer/v1.md`). A change becomes a new version, so the weekly report can compare results before and after. Every stored AI answer records the prompt version and model it used.
+The instructions for each AI role, one file per version (`prompts/proposer/v2.md`). A change becomes a new version, so the weekly report can compare results before and after. Every stored AI answer records the prompt version and model it used.
 
 ---
 
@@ -663,12 +670,10 @@ The instructions for each AI role, one file per version (`prompts/proposer/v1.md
 
 - **No short selling, no margin, no options.** Only buying shares with cash.
 - **No intraday trading.** Decisions use daily bars; stops and targets at the broker react during the day, but breakeven and time stops are set in the evening.
-- **No trailing stop** beyond the one move to breakeven.
+- **No trailing stop by default** beyond the one move to breakeven (`trail_atr` can switch one on).
 - **No automatic sale on bad news or before earnings.** The position review advises; you decide with `/exit`.
-- **Macro data is collected but not used** in decisions yet. Company fundamentals (revenue, valuation) aren't used either.
+- **Macro data only informs the proposer** (and the optional market filter). Company fundamentals (revenue, valuation) aren't used.
 - **News covers held US stocks only** (Finnhub's free tier).
 - **The 1 % entry check uses the last close** until the IBKR gateway delivers live quotes.
 - **Paper fills are simulated from daily bars** until the IBKR paper login is set up (runbook in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5).
-- **The rule-based book doesn't apply the correlation and loss limits** that the agent's risk engine applies.
-- **Blocked stocks still reach the scan.** The quality check reports them ("excluded from today's scan"), but the candidate list only drops stocks whose latest bar is missing. A stock with, say, a suspicious price jump can still be analysed and traded.
 - **No proven edge.** The whole point of the paper phase is to find out whether there is one.

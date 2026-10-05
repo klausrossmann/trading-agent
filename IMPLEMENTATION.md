@@ -1,6 +1,6 @@
 # Trading Agent – Implementation Concept
 
-> Status: v0.3 (2026-10-05). M0–M9 and the M10 preparation are built and tested on the Mac; the Zenbook runbook (15.5) hasn't started. Open questions answered in section 19.
+> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested on the Mac, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack); the Zenbook runbook (15.5) hasn't started. Open questions answered in section 19.
 > Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes the built system in plain language, including every setting.
 > Disclaimer: technical concept, not financial or tax advice.
 
@@ -99,7 +99,7 @@ trading-agent/
 ├── pyproject.toml / uv.lock
 ├── Dockerfile
 ├── compose.yaml                 # production-like stack (Zenbook, mini PC)
-├── compose.dev.yaml             # Mac: db + agent with fake broker and test models
+├── compose.dev.yaml             # Mac: local stack with the offline fake LLM (16.2)
 ├── .env.example                 # documented keys, no values
 ├── Makefile                     # lint, test, deploy, backup, migrate
 ├── config/
@@ -310,7 +310,9 @@ This is both the **candidate generator** for the LLM pipeline and the **rule-bas
 
 The baseline book is simulated every day (`baseline_sim`) with the same fee model and risk engine, so the comparison is fair.
 
-Implementation: rules in `strategies/pullback.py` (parameters in `config/strategies.yaml`), fill model in `execution/sim.py` (section 10.5), portfolio loop in `backtest.py`. Until the risk engine exists (M8), the loop applies sizing, max positions, sector cap, fee-to-risk, orders per day, settled cash (T+1 US, T+2 Xetra) and the cash reserve; correlation clusters and loss limits follow in M8. The forward `baseline_sim` book replays from `baseline_book.start` every evening (job `baseline_sim`, XNYS close + 60 min) and replaces its rows in `trades`. `trading-agent backtest` prints the report.
+Implementation: rules in `strategies/pullback.py` (parameters in `config/strategies.yaml`), fill model in `execution/sim.py` (section 10.5), portfolio loop in `backtest.py`. The loop applies the risk engine's rules: sizing, max positions, sector cap, correlation cluster (ρ > 0.7 over 60 sessions, no estimate counts as correlated), fee-to-risk, orders per day, settled cash (T+1 US, T+2 Xetra), the cash reserve, the blacklist and, since 2026-10-05, the loss limits. Loss limits are measured at each close: the day's loss blocks that close's signals (placed the next session), the week's loss blocks placements until Monday, and the drawdown limit cancels pending entries and stops new ones for the rest of the run, as a halt does until a manual reset. The forward `baseline_sim` book replays from `baseline_book.start` every evening (job `baseline_sim`, XNYS close + 60 min) and replaces its rows in `trades`. `trading-agent backtest` prints the report.
+
+Optional rules, all off (`null`) in v1 and shared by the backtest, `baseline_sim`, the scan's candidates and (`trail_atr`) the agent's positions: `trail_atr` (after breakeven, the stop trails k × ATR14 under the highest close since the entry; `sim.chandelier_stop`), `regime_sma` (no new entries while the market's benchmark closes below its SMA of that length) and `regime_max_vix` (no new entries while FRED `VIXCLS` closes above the limit; unknown data never blocks).
 
 ### 6.3 Backtest result and decision (M3, 2026-10-03)
 
@@ -333,6 +335,31 @@ Findings:
 - **Sample size:** about 53 trades per year at EUR 1,000. The go-live gate (50 closed trades in 3 months) depends on the shadow book.
 
 **Decision: keep the baseline unchanged (v1) as the comparison bar, not as a strategy to trade on its own.** No parameters are tuned on this data. The LLM pipeline has to produce the edge; the baseline sets the floor it must clear after costs. Open points are in section 19.
+
+### 6.4 Backtest with the full risk rules, trailing stop and regime filter (2026-10-05)
+
+Same period, fresh backfill, one account per paper sleeve (US EUR 1,000, EU EUR 5,000), now with the correlation cluster and the loss limits ([reports/backtest-baseline-2026-10-05.md](reports/backtest-baseline-2026-10-05.md)):
+
+| Sleeve | Trades | Return | Max drawdown | Halted |
+|---|---|---|---|---|
+| US, EUR 1,000 | 48 | −10.6 % | −16.2 % | 2022; 4,682 later setups not taken |
+| EU, EUR 5,000 | 116 | −6.6 % | −14.7 % | 2023; 1,319 later setups not taken |
+
+The 15 % drawdown limit halts both sleeves within the 5 years; without a manual reset the book never trades again. The correlation cluster never bound (positions are capped at EUR 300 and sizing or cash binds first); the daily loss limit blocked 3 US and 1 EU signals; the weekly one never bound.
+
+The optional rules, with the drawdown halt switched off so that the comparison isn't dominated by when each run halts (return / max drawdown):
+
+| Variant | US, EUR 1,000 | EU, EUR 5,000 |
+|---|---|---|
+| v1 (all off) | −7.7 % / −23.8 % | −17.3 % / −26.2 % |
+| `trail_atr` 1.5 | −18.4 % / −25.1 % | −16.6 % / −21.0 % |
+| `trail_atr` 2.0 | −2.9 % / −25.0 % | −18.0 % / −23.4 % |
+| `trail_atr` 3.0 | −11.4 % / −28.5 % | −14.5 % / −22.2 % |
+| `regime_sma` 200 | −6.0 % / −25.7 % | −12.8 % / −19.2 % |
+| `regime_sma` 200 + `trail_atr` 2.0 | −2.5 % / −19.6 % | −14.8 % / −26.2 % |
+| Buy and hold SPY / EXS1.DE | +86.1 % / −23.0 % | +63.3 % / −26.7 % |
+
+Findings: the trailing stop is not robust (k = 2.0 helps the US sleeve, 1.5 and 3.0 hurt it, and it hurts or barely changes the EU sleeve); it mostly turns time-stop exits into earlier stop exits while the 2R target caps the upside. The regime filter improves both sleeves by a few points and lowers the EU drawdown, but no variant is profitable and all trail buy and hold by far. `regime_max_vix` wasn't tested (no FRED key in the backfill). **Decision pending (yours): keep all three off**, so v1 stays the comparison bar; the regime filter is the only candidate worth a forward test.
 
 ---
 
@@ -404,7 +431,6 @@ roles:
   analysis:  google:gemini-3.8-flash
   proposer:  google:gemini-3.8-flash
   critic:    anthropic:claude-sonnet-5-5
-  reports:   google:gemini-3.8-flash
 dev_overrides:                                     # Phase 0–1 (LLM_DEV_OVERRIDES=true)
   critic:    google:gemini-3.8-flash
 budget:
@@ -473,10 +499,10 @@ As built, the agents have no tools at all: the orchestrator injects every fact i
 | Part | Where | Notes |
 |---|---|---|
 | Agents | `agents/proposer.py`, `critic.py`, `portfolio.py`, `prompts/{proposer,critic,portfolio_manager}/v1.md` | They run through the same `LlmRunner` as the modules (cache, budget, pacing, validators, one corrective retry), stored in `analyses` under their own module name. No tools yet: every fact comes from the module outputs. |
-| Proposer | | In: the technical input (level menu, ATR, rules), the technical and earnings assessments, held symbols. Out: `propose` with entry/stop/target refs (only menu names validate), or `no_trade` with a reason. Errors: level order, R:R, stop distance, missing refs or reason, `propose` despite `wait_until_after`. Ungrounded numbers cap the confidence at 0.5. |
+| Proposer | | In: the technical input (level menu, ATR, rules), the technical and earnings assessments, held symbols and, since prompt v2 (2026-10-05), a macro snapshot (`calc/macro.py`, `pipeline.macro_context`): the market benchmark's trend, distance to SMA200 and 20-session return, VIX now and 20 observations ago, the US 10-year yield, the 10y−2y spread and the high-yield spread now and 20 ago, all cut at `as_of`; FRED values older than 10 days or missing are null and don't count as data gaps. Out: `propose` with entry/stop/target refs (only menu names validate), or `no_trade` with a reason. Errors: level order, R:R, stop distance, missing refs or reason, `propose` despite `wait_until_after`. Ungrounded numbers cap the confidence at 0.5. |
 | Critic | | In: the same facts plus the plan with prices resolved by code (R:R, stop in ATR). Out: objections (`minor`/`major`/`blocking`), the overall severity (must equal the highest objection), `confidence_delta` (−0.5 to +0.1). Runs on Gemini through `dev_overrides` until an Anthropic key and price are added; if it fails, the proposal stays `proposed` and is marked "no critique". |
 | Portfolio manager | | Ranks the survivors (every candidate exactly once) with a note each; only called when there are at least two. If it fails, the ranking is confidence × R:R. |
-| Pipeline | `pipeline.py`, CLI `trading-agent propose [SYMBOLS] [--market]` | Baseline candidates → technical + earnings → proposer only for `buy`/`strong_buy` ratings of symbols not already held → critic for `propose` → ranking → `proposals`. Scheduled as `scan_eu` (Xetra open − 45 min) and `scan_us` (NYSE open − 45 min), each followed by a Telegram summary. |
+| Pipeline | `pipeline.py`, CLI `trading-agent propose [SYMBOLS] [--market]` | Baseline candidates (without symbols the quality checks block, freshly computed from the stored bars, or that `instruments.blacklist` lists) → technical + earnings → proposer only for `buy`/`strong_buy` ratings of symbols not already held → critic for `propose` → ranking → `proposals`. Scheduled as `scan_eu` (Xetra open − 45 min) and `scan_us` (NYSE open − 45 min), each followed by a Telegram summary. |
 | Proposals | migration `0005`, `db/proposals.py` | One row per instrument and scan day (`status`: `proposed`, `blocked`, `no_trade`), with resolved prices, final confidence, rank, critique, the ids of all analyses involved and the full agent outputs. A re-run of the same day updates the row in place, so labels stay attached. |
 | Shadow book | `jobs.agent_book`, `backtest.run(external=...)` | `agent_shadow` replays every `proposed` trade from the first proposal through the simulator with the baseline book's rules (sizing, fee-to-risk, max positions, sector cap, earnings buffer, settled cash; rank decides when slots are short). Interim until the risk engine (M8). |
 | Labels and digest | `journal.py` | `/proposals`, `/why SYMBOL`, `/review` (Agree/Disagree/Skip buttons, then an optional free-text reason) write `user_labels`. `evening_digest` (NYSE close + 65 min) replays `agent_shadow` and sends the day's proposals, labels to do, entries and exits of both books and the day's LLM spend. |
@@ -559,7 +585,7 @@ The halt doesn't cancel orders yet, because none exist until step 3; that hook c
 | Placement | `trading.place`, jobs `place_eu`/`place_us` (open + 15 min, 2 min grace: a late run is skipped) | Only today's scan for that market (`as_of` = previous session), in rank order. Per proposal: refresh the book, levels onto the tick grid (entry down, stop and target up, so never more risk than approved; 0.01 until the IBKR market rules arrive in step 5), market facts, `evaluate`, store the decision, apply its `trip`, submit if approved. Entry valid until the close of the next session. 📤 summary in Telegram. |
 | Market facts | `portfolio/snapshot.py` | Mid = last close (no live quote yet), ATR(14), 20-session average close × volume, sessions to the next report, today's ECB rate, ρ of 60 daily returns against each holding (no estimate below 20 common sessions or for a flat series). |
 | Accounting | `portfolio/book.py` | Per sleeve from brackets and fills: cash (sales settle T+1 US, T+2 Xetra), unsettled proceeds, cash reserved for pending entries, positions at the last close, equity. Fees: the broker's commission, else the `fees.yaml` estimate. Day and week P&L against the last equity snapshot before today / before Monday, drawdown against the highest snapshot (the budget at the start). Orders per day count the whole book. |
-| End of day | `trading.end_of_day`, jobs `execution_eu`/`execution_us` (close + 35 min, after the bars) | Simulator fills from the day's bar, broker sync (🟢 bought, 🔴 sold, ⌛ entry ended), then on that bar as in the backtest: breakeven at +1R (not on the entry day), time stop after 15 sessions (market exit at the next open). Then the `agent_paper` trades are rebuilt from the brackets and the sleeve's equity is stored in `equity_daily`. |
+| End of day | `trading.end_of_day`, jobs `execution_eu`/`execution_us` (close + 35 min, after the bars) | Simulator fills from the day's bar, broker sync (🟢 bought, 🔴 sold, ⌛ entry ended), then on that bar as in the backtest: breakeven at +1R (not on the entry day), the optional `trail_atr` trail (ATR14 and the highest close since the entry from the stored bars), time stop after 15 sessions (market exit at the next open). Then the `agent_paper` trades are rebuilt from the brackets and the sleeve's equity is stored in `equity_daily`. |
 | Monitor | `trading.monitor`, job `monitor` (every 10 min, 09–22 h, weekdays) | Broker sync and alerts; does nothing while the simulator is in use. |
 | Kill switch | `ControlCenter.on_halt` | A halt cancels every unfilled entry (stops stay). The engine's trips pause or halt via `apply_trip`. |
 | Storage | migration `0008` | `risk_decisions` (the latest decision per proposal with every check) and `equity_daily` (per book and sleeve). |
@@ -1000,7 +1026,8 @@ After a later `git pull`: `make build && make migrate && make up` (or `make depl
 
 ### 16.2 Tooling and checks
 
-- **On the Mac**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). Later `compose.dev.yaml` adds the simulator broker and PydanticAI's `TestModel`. No keys and no broker access are needed.
+- **On the Mac**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). No keys and no broker access are needed.
+- **Local stack** (`compose.dev.yaml`, project `ta-dev`): `make dev-up` creates throwaway secrets in `.dev/`, builds, migrates and starts db, agent and dashboard (http://127.0.0.1:8502, Postgres on 127.0.0.1:55433); `make dev-backfill` loads Yahoo/ECB/earnings history; `make dev-down` removes containers, volume and secrets. The agent runs with `LLM_FAKE=true` (`llm/fake.py`: deterministic, rule-following answers for every output schema, no API calls), no Telegram (messages go to the log) and the simulator broker. Useful for the scheduler, dashboard and backtests on real data; the fake proposals mean nothing.
 - **On the Zenbook**: integration tests against the IBKR paper gateway (`pytest -m ibkr`), and evals against the real models (`uv run pytest -m llm tests/evals`, reads `GEMINI_API_KEY` from `.env`; section 15.5).
 - **CI (GitHub Actions)**: `ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest -m "not ibkr and not llm"` (DB tests run against a Postgres service container) and a `docker build`. No secrets in CI. DB tests only run when `DB_NAME` ends in `_test`, because they drop tables.
 - **pre-commit**: ruff, end-of-file fixers, and a secret scanner (for example `gitleaks`).
@@ -1096,3 +1123,14 @@ flowchart LR
 | 12 | Backup offsite copy | age-encrypted weekly copy in `backups/offsite/`; syncing is yours | 15.4 |
 | 13 | News source for position re-evaluation | Finnhub company news | 14.1 |
 | 14 | Re-evaluation says the thesis is invalidated | Alert with the reasoning; you decide (no automatic exit yet) | 14.1 |
+
+### 19.3 Decisions of 2026-10-05
+
+| # | Question | Decision | Consequence |
+|---|---|---|---|
+| 1 | Unused settings | Remove `options.*`, `instruments.universe_us/eu`, `etfs`, `costs.*` and the `reports` model role; `instruments.blacklist` becomes a list of Yahoo symbols | Enforced by the scan, the simulated books and the risk engine's instrument check |
+| 2 | Loss limits in the simulated books | Daily and weekly pause as live; the drawdown limit stops new entries for the rest of the run | 6.2, 6.4 |
+| 3 | Scope | Backtest CLI and `baseline_sim` share the loop | New report 2026-10-05 |
+| 4 | Macro data | Optional deterministic regime gate (off) plus a macro snapshot for the proposer (prompt v2) | 6.2, 8.1 |
+| 5 | Trailing stop | ATR chandelier after breakeven, target kept, off by default | 6.2, 6.4 |
+| 6 | Local stack | `compose.dev.yaml` with the offline fake model | 16.2 |

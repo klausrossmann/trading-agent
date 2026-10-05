@@ -31,22 +31,10 @@ markets:
   paper: [US, EU]
   live: [US]                       # add EU at >= EUR 5,000 (CONCEPT.md 6.3)
 
-options:
-  enabled: false                   # paper-only track (CONCEPT.md 7.2)
-  allowed_strategies: [debit_spread]
-  forbid_naked_short: true
-  max_premium_at_risk_pct: 1.5
-  dte_range: [21, 75]
-  min_open_interest: 500
-  max_bid_ask_spread_pct: 10
-
-instruments:
-  universe_us: [SP100]             # start small (IMPLEMENTATION.md 19); later SP500, NASDAQ100
-  universe_eu: [DAX]               # later MDAX, STOXX600
-  etfs: ucits_only
+instruments:                       # the universe itself is config/universe.yaml (S&P 100, DAX 40)
   min_avg_daily_dollar_volume: 20000000
   min_price: 5
-  blacklist: [penny_stocks, leveraged_etps, otc]
+  blacklist: []                    # Yahoo symbols, e.g. [TSLA, SAP.DE]: never scanned or traded
 
 execution:
   routing: smart                   # IBKR Tiered pricing is not available for directed API orders
@@ -54,6 +42,3 @@ execution:
   no_trading_first_minutes: 15
   no_trading_last_minutes: 10
   no_new_entries_before_earnings_days: 3   # unless strategy == earnings
-
-costs:
-  llm_budget_eur_month: 15         # lean mode at 80 %, no LLM calls at 100 %

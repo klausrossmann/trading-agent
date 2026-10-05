@@ -3,8 +3,10 @@
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -18,8 +20,17 @@ ROOT = Path(__file__).resolve().parents[2]
 CFG = bt.BacktestConfig(baseline_book=bt.BaselineBook(start=date(2026, 1, 1)))
 RISK = load_risk_config(ROOT / "config")
 FEES = load_fees(ROOT / "config")
-DAYS = pd.bdate_range("2026-02-02", periods=45)
+DAYS = pd.bdate_range("2026-02-02", periods=45)  # row % 5 is the weekday, 0 = Monday
 SIGNAL = 19  # setup on bar 19 -> limit 50.10, stop 48.10 (2 x ATR 1), target 54.10
+
+
+def risk_with(section: str, **values: object) -> RiskConfig:
+    part = getattr(RISK, section)
+    return RISK.model_copy(update={section: part.model_copy(update=values)})
+
+
+# Flat test prices have no correlation estimate, so every holding would count as correlated.
+NO_CLUSTER = risk_with("portfolio", max_correlated_cluster_pct=Decimal(100))
 
 
 def instrument(n: int, sector: str = "Tech") -> bt.InstrumentData:
@@ -54,11 +65,24 @@ def instrument(n: int, sector: str = "Tech") -> bt.InstrumentData:
 
 def set_bar(x: bt.InstrumentData, row: int, o: float, h: float, lo: float, c: float) -> None:
     x.frame.iloc[row, :4] = [o, h, lo, c]
+    x.returns = x.frame["close"].pct_change().iloc[1:]
 
 
-def run(*xs: bt.InstrumentData, risk: RiskConfig = RISK) -> bt.BacktestResult:
-    data = bt.MarketData({x.id: x for x in xs}, pd.Series([1.0], index=DAYS[:1]), benchmarks={})
-    return bt.run(data, CFG, risk, FEES, start=DAYS[0].date(), end=DAYS[-1].date(), markets=["US"])
+def signal_on(x: bt.InstrumentData, row: int) -> bt.InstrumentData:
+    x.setup[:] = False
+    x.setup.iloc[row] = True
+    return x
+
+
+def run(
+    *xs: bt.InstrumentData, risk: RiskConfig = RISK, cfg: bt.BacktestConfig = CFG, **data: Any
+) -> bt.BacktestResult:
+    market = bt.MarketData(
+        {x.id: x for x in xs}, pd.Series([1.0], index=DAYS[:1]), benchmarks={}, **data
+    )
+    return bt.run(
+        market, cfg, risk, FEES, start=DAYS[0].date(), end=DAYS[-1].date(), markets=["US"]
+    )
 
 
 def only_trade(result: bt.BacktestResult) -> bt.Trade:
@@ -153,7 +177,7 @@ def test_external_signals_replace_the_baseline_setups() -> None:
 
 
 def test_max_open_positions_and_ranking() -> None:
-    small = RISK.model_copy(
+    small = NO_CLUSTER.model_copy(
         update={"per_trade": RISK.per_trade.model_copy(update={"max_position_pct": Decimal(25)})}
     )
     xs = [instrument(n, sector=f"S{n}") for n in range(1, 7)]
@@ -166,7 +190,7 @@ def test_max_open_positions_and_ranking() -> None:
 def test_cash_reserve_limits_positions() -> None:
     # 3 x ~EUR 251 reserved leaves (1000 - 753 - 100 reserve) / 50.10 = 2 shares < EUR 200
     xs = [instrument(n, sector=f"S{n}") for n in range(1, 7)]
-    result = run(*xs)
+    result = run(*xs, risk=NO_CLUSTER)
     assert {t.instrument_id for t in result.trades} == {4, 5, 6}
     assert result.rejections["sizing: below_minimum"] == 3
 
@@ -193,6 +217,98 @@ def test_earnings_buffer() -> None:
     result = run(x)
     assert result.trades == []
     assert result.rejections["earnings within buffer"] == 1
+
+
+def test_blacklist() -> None:
+    result = run(instrument(1), instrument(2, "B"), risk=risk_with("instruments", blacklist=["S2"]))
+    assert {t.instrument_id for t in result.trades} == {1}
+    assert result.rejections["blacklisted"] == 1
+
+
+def noisy(n: int, seed: int) -> bt.InstrumentData:
+    """Small random closes before a setup on bar 30, so returns have a correlation estimate."""
+    x = signal_on(instrument(n, sector=f"S{n}"), 30)
+    noise = np.random.default_rng(seed).normal(0, 0.002, 30)
+    x.frame.iloc[:30, 3] = 50 * (1 + noise)
+    x.returns = x.frame["close"].pct_change().iloc[1:]
+    return x
+
+
+def test_correlated_cluster() -> None:
+    # S3 and S1 move together (rho 1), S2 on its own; cap 40 % of EUR 1,000 = 400 < 2 x ~250
+    risk = risk_with("portfolio", max_correlated_cluster_pct=Decimal(40))
+    result = run(noisy(1, seed=7), noisy(2, seed=8), noisy(3, seed=7), risk=risk)
+    assert {t.instrument_id for t in result.trades} == {2, 3}
+    assert result.rejections["correlated cluster"] == 1
+
+
+def gap_loss(row: int = 21) -> bt.InstrumentData:
+    """S1 enters on bar 20 and gaps through its stop on `row`: about -EUR 32 (5 x 6.05 + fees)."""
+    x = instrument(1, "A")
+    set_bar(x, row, 44, 44.5, 43.5, 44)
+    return x
+
+
+def test_daily_loss_blocks_that_close() -> None:
+    later = signal_on(instrument(3, "C"), 22)
+    result = run(gap_loss(), signal_on(instrument(2, "B"), 21), later)
+    assert {t.instrument_id for t in result.trades} == {1, 3}
+    assert result.rejections["loss limits: daily"] == 1
+
+
+def test_weekly_loss_pauses_until_monday() -> None:
+    risk = RISK.model_copy(
+        update={
+            "loss_limits": RISK.loss_limits.model_copy(
+                update={"daily_loss_pct": Decimal(50), "weekly_loss_pct": Decimal(3)}
+            )
+        }
+    )
+    # breach on Tuesday (bar 21): Thursday's signal is paused, Friday's is placed on Monday
+    thursday, friday = signal_on(instrument(2, "B"), 23), signal_on(instrument(3, "C"), 24)
+    result = run(gap_loss(), thursday, friday, risk=risk)
+    assert {t.instrument_id for t in result.trades} == {1, 3}
+    assert result.rejections["loss limits: weekly"] == 1
+
+
+def test_drawdown_halts_and_cancels_entries() -> None:
+    risk = risk_with("loss_limits", max_drawdown_pct=Decimal(2))
+    waiting = signal_on(instrument(4, "D"), 20)
+    set_bar(waiting, 21, 52, 53, 51, 52)  # its limit is still open at the halt
+    later = signal_on(instrument(2, "B"), 30)
+    result = run(gap_loss(), waiting, later, risk=risk)
+    assert {t.instrument_id for t in result.trades} == {1}
+    assert result.rejections["loss limits: drawdown (entry cancelled)"] == 1
+    assert result.rejections["loss limits: drawdown"] == 1
+
+
+def test_regime_gate() -> None:
+    gated = CFG.model_copy(update={"pullback": CFG.pullback.model_copy(update={"regime_sma": 200})})
+    weak = {"US": pd.Series(False, index=DAYS)}
+    result = run(instrument(1), cfg=gated, above_sma=weak)
+    assert result.trades == []
+    assert result.rejections["regime: benchmark below its SMA"] == 1
+    assert len(run(instrument(1), cfg=CFG, above_sma=weak).trades) == 1  # gate off
+
+
+def test_vix_gate() -> None:
+    gated = CFG.model_copy(
+        update={"pullback": CFG.pullback.model_copy(update={"regime_max_vix": 30.0})}
+    )
+    vix = pd.Series([35.0, 25.0], index=[DAYS[0], DAYS[SIGNAL]])
+    assert len(run(instrument(1), cfg=gated, vix=vix).trades) == 1  # 25 at the signal
+    result = run(instrument(1), cfg=gated, vix=vix.iloc[:1])
+    assert result.rejections["regime: VIX above the limit"] == 1
+
+
+def test_atr_trail_after_breakeven() -> None:
+    trail = CFG.model_copy(update={"pullback": CFG.pullback.model_copy(update={"trail_atr": 1.0})})
+    x = instrument(1)
+    set_bar(x, 21, 51, 52.1, 50.5, 52)  # +1R reached; highest close 52 - 1 ATR -> stop 51
+    set_bar(x, 22, 51.5, 51.6, 50.9, 51)
+    t = only_trade(run(x, cfg=trail))
+    assert (t.exit_reason, t.exit_date) == ("stop", DAYS[22].date())
+    assert t.exit_price == pytest.approx(51 * 0.9995)
 
 
 # --- agent_shadow: every proposal the risk engine would approve on an empty account ---

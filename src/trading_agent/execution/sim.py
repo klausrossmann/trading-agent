@@ -61,3 +61,11 @@ def open_exit(bar: Bar, slippage_pct: float) -> Fill:
 def trailed_stop(bar: Bar, stop: float, entry: float, trigger: float) -> float:
     """Move the stop to breakeven once the high reaches `trigger`. Stops never loosen."""
     return max(stop, entry) if bar.high >= trigger else stop
+
+
+def chandelier_stop(stop: float, entry: float, highest_close: float, atr: float, k: float) -> float:
+    """Once the stop is at breakeven, trail it `k` ATR under the highest close since the entry.
+    Stops never loosen."""
+    if stop < entry or not atr > 0:  # also rejects a NaN ATR
+        return stop
+    return max(stop, highest_close - k * atr)

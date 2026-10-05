@@ -3,14 +3,16 @@
 Used for the historical backtest (`trading-agent backtest`) and for the forward `baseline_sim`
 book, which replays from its start date every evening. Pure apart from `load_market_data`.
 
-Portfolio rules applied here are a subset of the risk engine (M8): sizing, max positions,
-sector cap, fee-to-risk, orders per day, settled cash. Not yet: correlation clusters and loss
-limits (reported as drawdown instead).
+Portfolio rules applied here mirror the risk engine (M8): sizing, max positions, sector cap,
+correlation cluster, fee-to-risk, orders per day, settled cash, blacklist and the loss limits.
+Loss limits are measured at each close: a daily or weekly breach blocks the signals that would
+be placed before the pause ends; the drawdown limit cancels pending entries and stops new
+ones for the rest of the run (a halt needs a manual reset).
 """
 
 import math
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -27,18 +29,19 @@ from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.sizing import position_size
 from trading_agent.data import calendars
 from trading_agent.db import market as repo
-from trading_agent.domain.market import Instrument, Market
+from trading_agent.domain.market import Instrument, Market, Observation
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Controls, MarketSnapshot, PortfolioState
 from trading_agent.domain.trading import Book, Trade
 from trading_agent.execution import sim
-from trading_agent.portfolio.snapshot import proposal_levels
+from trading_agent.portfolio.snapshot import CORRELATION_SESSIONS, correlation, proposal_levels
 from trading_agent.risk import engine
 from trading_agent.risk.config import RiskConfig
 from trading_agent.strategies import pullback
 from trading_agent.strategies.pullback import PullbackParams, TradePlan
 
 SETTLEMENT_SESSIONS: dict[Market, int] = {"US": 1, "EU": 2}  # T+1 US, T+2 Xetra
+VIX_SERIES = "VIXCLS"
 
 
 class BaselineBook(BaseModel):
@@ -68,10 +71,17 @@ class InstrumentData:
     setup: pd.Series
     earnings: list[date]
     rows: dict[date, int]
+    returns: pd.Series = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.returns = self.frame["close"].pct_change().iloc[1:]
 
     def bar(self, row: int) -> sim.Bar:
         r = self.frame.iloc[row]
         return sim.Bar(float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+
+    def recent_returns(self, day: date) -> pd.Series:
+        return self.returns.loc[: pd.Timestamp(day)].tail(CORRELATION_SESSIONS)
 
 
 @dataclass
@@ -79,6 +89,8 @@ class MarketData:
     instruments: dict[int, InstrumentData]
     usd_per_eur: pd.Series  # ECB reference rate, date index
     benchmarks: dict[Market, pd.DataFrame]
+    above_sma: dict[Market, pd.Series] = field(default_factory=dict[Market, pd.Series])
+    vix: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
     def rate(self, currency: str, day: date) -> float:
         """Units of `currency` per EUR on `day` (last known ECB rate)."""
@@ -86,6 +98,20 @@ class MarketData:
             return 1.0
         known = self.usd_per_eur.loc[: pd.Timestamp(day)]
         return float(known.iloc[-1]) if not known.empty else float(self.usd_per_eur.iloc[0])
+
+    def regime_block(self, market: Market, day: date, p: PullbackParams) -> str | None:
+        """Why the market regime blocks new entries at `day`'s close; unknown data never blocks."""
+        ts = pd.Timestamp(day)
+        trend = self.above_sma.get(market)
+        if p.regime_sma is not None and trend is not None:
+            known = trend.loc[:ts]
+            if not known.empty and not bool(known.iloc[-1]):
+                return "regime: benchmark below its SMA"
+        if p.regime_max_vix is not None:
+            vix = self.vix.loc[:ts]
+            if not vix.empty and float(vix.iloc[-1]) > p.regime_max_vix:
+                return "regime: VIX above the limit"
+        return None
 
 
 def prepare(
@@ -95,11 +121,17 @@ def prepare(
     usd_per_eur: pd.Series,
     benchmarks: dict[Market, str],
     p: PullbackParams,
+    vix: pd.Series | None = None,
 ) -> MarketData:
     by_symbol = {i.yahoo_symbol: k for k, i in instruments.items()}
     bench_frames: dict[Market, pd.DataFrame] = {
         m: frames[by_symbol[s]] for m, s in benchmarks.items() if s in by_symbol
     }
+    above_sma: dict[Market, pd.Series] = {}
+    if p.regime_sma is not None:
+        for m, f in bench_frames.items():
+            avg = f["close"].rolling(p.regime_sma).mean()
+            above_sma[m] = (f["close"] > avg) | avg.isna()
     data: dict[int, InstrumentData] = {}
     for inst_id, inst in instruments.items():
         frame = frames.get(inst_id)
@@ -117,7 +149,21 @@ def prepare(
             earnings=sorted(earnings.get(inst_id, [])),
             rows={pd.Timestamp(d).date(): i for i, d in enumerate(frame.index)},
         )
-    return MarketData(data, usd_per_eur.sort_index(), bench_frames)
+    return MarketData(
+        data,
+        usd_per_eur.sort_index(),
+        bench_frames,
+        above_sma,
+        vix.sort_index() if vix is not None else pd.Series(dtype=float),
+    )
+
+
+def _series(observations: Sequence[Observation]) -> pd.Series:
+    return pd.Series(
+        [float(o.value) for o in observations],
+        index=pd.DatetimeIndex([pd.Timestamp(o.date) for o in observations]),
+        dtype=float,
+    )
 
 
 async def load_market_data(
@@ -128,11 +174,9 @@ async def load_market_data(
         bars = await repo.all_bars(s)
         earnings = await repo.earnings_dates(s)
         fx = await repo.fx_rates(s, "USD")
+        vix = await repo.macro_series(s, VIX_SERIES) if p.regime_max_vix is not None else []
     frames = {k: bars_to_frame(v) for k, v in bars.items()}
-    usd = pd.Series(
-        [float(o.value) for o in fx], index=pd.DatetimeIndex([pd.Timestamp(o.date) for o in fx])
-    )
-    return prepare(frames, instruments, earnings, usd, benchmarks, p)
+    return prepare(frames, instruments, earnings, _series(fx), benchmarks, p, _series(vix))
 
 
 @dataclass
@@ -161,6 +205,7 @@ class _Position:
     cost_eur: float
     risk_eur: float
     strategy: str
+    highest_close: float
 
 
 @dataclass(frozen=True)
@@ -182,7 +227,11 @@ class BacktestResult:
     signals: int = 0
 
 
-def _not_admitted(x: InstrumentData, day: date, busy: set[int], p: PullbackParams) -> str | None:
+def _not_admitted(
+    x: InstrumentData, day: date, busy: set[int], p: PullbackParams, blacklist: Collection[str]
+) -> str | None:
+    if x.instrument.yahoo_symbol in blacklist:
+        return "blacklisted"
     if x.id in busy:
         return "already held or pending"
     cal = calendars.CALENDAR_BY_MARKET[x.instrument.market]
@@ -190,6 +239,23 @@ def _not_admitted(x: InstrumentData, day: date, busy: set[int], p: PullbackParam
     if not pullback.earnings_clear(day, buffer_end, x.earnings):
         return "earnings within buffer"
     return None
+
+
+def _next_stop(
+    x: InstrumentData,
+    row: int,
+    stop: float,
+    entry: float,
+    plan: TradePlan,
+    highest_close: float,
+    p: PullbackParams,
+) -> float:
+    """Breakeven at +1R, then the optional ATR trail, on `row`'s bar."""
+    stop = sim.trailed_stop(x.bar(row), stop, entry, entry + p.breakeven_r * plan.risk_per_share)
+    if p.trail_atr is None:
+        return stop
+    atr = float(x.ind["atr"].iloc[row])
+    return sim.chandelier_stop(stop, entry, highest_close, atr, p.trail_atr)
 
 
 def run(
@@ -209,6 +275,8 @@ def run(
     slip = cfg.slippage_pct
     limits = risk.sizing_limits()
     budget = float(risk.capital.agent_budget_eur)
+    loss = risk.loss_limits
+    blacklist = set(risk.instruments.blacklist)
     days = sorted({d for x in data.instruments.values() for d in x.rows if start <= d <= end})
 
     cash = budget
@@ -220,6 +288,9 @@ def run(
     invested: dict[date, float] = {}
     rejections: Counter[str] = Counter()
     signals = 0
+    last_equity = week_base = peak = budget
+    pause: tuple[date, str] | None = None  # placements before this day are blocked
+    halted = False
 
     def to_eur(amount: float, inst: Instrument, day: date) -> float:
         return amount / data.rate(inst.currency, day)
@@ -261,7 +332,7 @@ def run(
         )
         open_.remove(pos)
 
-    for day in days:
+    for i, day in enumerate(days):
         cash += sum(a for d, a in unsettled if d <= day)
         unsettled = [(d, a) for d, a in unsettled if d > day]
 
@@ -277,8 +348,10 @@ def run(
             if fill is not None:
                 close_position(pos, day, row, fill)
             else:
-                trigger = pos.entry_price + p.breakeven_r * pos.plan.risk_per_share
-                pos.stop = sim.trailed_stop(bar, pos.stop, pos.entry_price, trigger)
+                pos.highest_close = max(pos.highest_close, bar.close)
+                pos.stop = _next_stop(
+                    pos.data, row, pos.stop, pos.entry_price, pos.plan, pos.highest_close, p
+                )
 
         # 2. Pending limit entries
         for order in list(pending):
@@ -311,13 +384,50 @@ def run(
                 cost_eur=cost_eur,
                 risk_eur=to_eur(order.quantity * order.plan.risk_per_share, inst, day),
                 strategy=order.strategy,
+                highest_close=order.data.bar(row).close,
             )
             open_.append(pos)
             stopped = sim.check_exit(order.data.bar(row), pos.stop, None, slip)
             if stopped is not None:
                 close_position(pos, day, row, stopped)
 
-        # 3. New signals at today's close, best first
+        # 3. Mark to market at the close
+        held = 0.0
+        for pos in open_:
+            closes = pos.data.frame["close"].loc[: pd.Timestamp(day)]
+            held += to_eur(pos.quantity * float(closes.iloc[-1]), pos.data.instrument, day)
+        equity[day] = eq = cash + sum(a for _, a in unsettled) + held
+        invested[day] = held
+
+        # 4. Loss limits at the close, against the previous close and the last close before
+        # the week; a breach pauses the placements of the next session (and the week).
+        placement = days[i + 1] if i + 1 < len(days) else day + timedelta(days=1)
+        if i > 0 and days[i - 1] < day - timedelta(days=day.weekday()):
+            week_base = last_equity
+        breaches: list[tuple[date, str]] = []
+        if eq - last_equity <= -float(loss.daily_loss_pct) / 100 * budget:
+            breaches.append((placement + timedelta(days=1), "loss limits: daily"))
+        monday = placement + timedelta(days=7 - placement.weekday())
+        # A placement in the next week measures that week, which has no P&L yet (as live).
+        same_week = day >= placement - timedelta(days=placement.weekday())
+        if same_week and eq - week_base <= -float(loss.weekly_loss_pct) / 100 * budget:
+            breaches.append((monday, "loss limits: weekly"))
+        for breach in breaches:
+            if pause is None or breach[0] > pause[0]:
+                pause = breach
+        peak = max(peak, eq)
+        if not halted and peak - eq >= float(loss.max_drawdown_pct) / 100 * budget:
+            halted = True
+            if pending:
+                rejections["loss limits: drawdown (entry cancelled)"] += len(pending)
+            pending.clear()
+        last_equity = eq
+        blocked = "loss limits: drawdown" if halted else None
+        if blocked is None and pause is not None and placement < pause[0]:
+            blocked = pause[1]
+        weak = {m: data.regime_block(m, day, p) for m in markets}
+
+        # 5. New signals at today's close, best first
         candidates: list[tuple[float, InstrumentData, int, TradePlan, str]] = []
         busy = {x.data.id for x in pending} | {x.data.id for x in open_}
         if external is not None:
@@ -327,7 +437,7 @@ def run(
                 if x is None or row is None or x.instrument.market not in markets:
                     continue
                 signals += 1
-                if why := _not_admitted(x, day, busy, p):
+                if why := weak[x.instrument.market] or _not_admitted(x, day, busy, p, blacklist):
                     rejections[why] += 1
                     continue
                 candidates.append((sig.score, x, row, sig.plan, sig.strategy))
@@ -336,7 +446,7 @@ def run(
             if row is None or not bool(x.setup.iloc[row]) or x.instrument.market not in markets:
                 continue
             signals += 1
-            if why := _not_admitted(x, day, busy, p):
+            if why := weak[x.instrument.market] or _not_admitted(x, day, busy, p, blacklist):
                 rejections[why] += 1
                 continue
             plan = pullback.plan_trade(x.frame.iloc[: row + 1], float(x.ind["atr"].iloc[row]), p)
@@ -350,6 +460,9 @@ def run(
         placed = 0
         for _, x, row, plan, strategy in candidates:
             inst = x.instrument
+            if blocked is not None:
+                rejections[blocked] += 1
+                continue
             if len(open_) + len(pending) >= risk.portfolio.max_open_positions:
                 rejections["max open positions"] += 1
                 continue
@@ -382,19 +495,25 @@ def run(
             if same_sector + value_eur > float(risk.portfolio.max_sector_pct) / 100 * budget:
                 rejections["sector cap"] += 1
                 continue
+            mine = x.recent_returns(day)
+            holdings = [(o.data, o.reserved_eur) for o in pending] + [
+                (pos.data, pos.cost_eur) for pos in open_
+            ]
+            # As in the risk engine: a holding without a correlation estimate counts as correlated.
+            cluster = value_eur + sum(
+                value
+                for other, value in holdings
+                if (rho := correlation(mine, other.recent_returns(day))) is None
+                or rho > engine.CLUSTER_RHO
+            )
+            if cluster > float(risk.portfolio.max_correlated_cluster_pct) / 100 * budget:
+                rejections["correlated cluster"] += 1
+                continue
             buy_fee = float(order_fees(fees, inst.market, "buy", q, entry))
             pending.append(
                 _Pending(x, day, row, plan, q, (q * plan.entry + buy_fee) / rate, strategy)
             )
             placed += 1
-
-        # 4. Mark to market
-        held = 0.0
-        for pos in open_:
-            closes = pos.data.frame["close"].loc[: pd.Timestamp(day)]
-            held += to_eur(pos.quantity * float(closes.iloc[-1]), pos.data.instrument, day)
-        equity[day] = cash + sum(a for _, a in unsettled) + held
-        invested[day] = held
 
     for pos in open_:
         trades.append(
@@ -445,6 +564,7 @@ def simulate_trade(
     p, slip, inst = cfg.pullback, cfg.slippage_pct, x.instrument
     entry: tuple[int, date, float, float] | None = None  # row, day, price, buy fee
     stop = plan.stop
+    highest_close = 0.0
 
     def done(
         entry: tuple[int, date, float, float], row: int, day: date, fill: sim.Fill | None
@@ -504,6 +624,7 @@ def simulate_trade(
                 order_fees(fees, inst.market, "buy", quantity, Decimal(str(round(price, 4))))
             )
             entry = (row, day, price, fee)
+            highest_close = bar.close
             stopped = sim.check_exit(bar, stop, None, slip)
             if stopped is not None:
                 return done(entry, row, day, stopped)
@@ -513,7 +634,8 @@ def simulate_trade(
             fill = sim.time_exit(bar, slip)
         if fill is not None:
             return done(entry, row, day, fill)
-        stop = sim.trailed_stop(bar, stop, entry[2], entry[2] + p.breakeven_r * plan.risk_per_share)
+        highest_close = max(highest_close, bar.close)
+        stop = _next_stop(x, row, stop, entry[2], plan, highest_close, p)
     return done(entry, last_row, last_day, None) if entry is not None else None
 
 
@@ -612,6 +734,8 @@ def latest_setups(data: MarketData, p: PullbackParams) -> list[tuple[str, float]
             continue
         day = pd.Timestamp(x.frame.index[-1]).date()
         if day != latest[x.instrument.market]:  # stale data
+            continue
+        if data.regime_block(x.instrument.market, day, p):
             continue
         cal = calendars.CALENDAR_BY_MARKET[x.instrument.market]
         if not pullback.earnings_clear(

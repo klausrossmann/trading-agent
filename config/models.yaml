@@ -5,7 +5,6 @@ roles:
   analysis: google:gemini-3.8-flash
   proposer: google:gemini-3.8-flash
   critic: anthropic:claude-sonnet-5-5         # M7; needs ANTHROPIC_API_KEY and a price below
-  reports: google:gemini-3.8-flash
 
 # Applied when LLM_DEV_OVERRIDES=true (Phase 0-1: Gemini free tier, no Anthropic key yet).
 dev_overrides:
@@ -21,7 +20,7 @@ prices:
     - {since: 2026-01-01, input: 0.25, output: 1.50}
 
 budget:
-  monthly_usd: 16                  # about EUR 15 (risk.yaml costs.llm_budget_eur_month)
+  monthly_usd: 16                  # about EUR 15 a month
   lean_mode_at: 0.8                # fewer candidates per scan
   hard_stop_at: 1.0                # no more LLM calls this month; the baseline keeps running
 

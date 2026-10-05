@@ -1,0 +1,35 @@
+# Local stack on the Mac (IMPLEMENTATION.md 16.2): `make dev-up`, `make dev-backfill`,
+# `make dev-down`. Offline fake LLM, no Telegram (log only), simulator broker, throwaway
+# secrets in .dev/, Postgres on the loopback for psql and `uv run trading-agent ...`.
+# Never on the Zenbook: the fake model's proposals mean nothing.
+name: ta-dev
+
+services:
+  db:
+    ports: ["127.0.0.1:${DEV_DB_PORT:-55433}:5432"]
+    networks: [backend, frontend]  # the internal backend network can't publish ports
+
+  agent:
+    env_file: !reset []
+    environment:
+      APP_MODE: paper
+      LLM_FAKE: "true"
+      LLM_DEV_OVERRIDES: "true"  # the critic's Anthropic model has no price, so it'd be skipped
+      IB_ENABLED: "false"
+      IB_ORDERS_ENABLED: "false"
+      TZ: Europe/Berlin
+
+  dashboard:
+    ports: !override ["127.0.0.1:${DEV_DASHBOARD_PORT:-8502}:8501"]
+
+secrets:
+  postgres_password:
+    file: ./.dev/secrets/postgres_password
+  agent_db_password:
+    file: ./.dev/secrets/agent_db_password
+  dashboard_db_password:
+    file: ./.dev/secrets/dashboard_db_password
+  tws_password:
+    file: ./.dev/secrets/tws_password
+  vnc_password:
+    file: ./.dev/secrets/vnc_password

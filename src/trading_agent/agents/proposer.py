@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from trading_agent.calc.macro import MacroSnapshot
 from trading_agent.domain.analysis import ValidationIssue
 from trading_agent.domain.market import Currency, Market
 from trading_agent.llm.prompts import Prompt
@@ -15,7 +16,7 @@ from trading_agent.modules.earnings import EarningsAssessment
 from trading_agent.modules.technical import Level, PlanRules, TechnicalAssessment
 
 NAME = "proposer"
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 FABRICATION_CAP = 0.5
 TEXT_FIELDS = ("thesis", "invalidation", "no_trade_reason")
 
@@ -48,6 +49,7 @@ class ProposerInput(BaseModel):
     next_earnings_date: date | None
     holdings: list[Holding]
     unknown: list[str]
+    macro: MacroSnapshot | None = None  # since prompt v2
 
 
 class ProposerOutput(BaseModel):

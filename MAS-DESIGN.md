@@ -7,19 +7,21 @@
 
 ## Contents
 
-1. [Overview](#1-overview)
-2. [Agent inventory](#2-agent-inventory)
-3. [Classification](#3-classification)
-4. [Anatomy of an LLM agent](#4-anatomy-of-an-llm-agent)
-5. [Communication](#5-communication)
-6. [Shared memory](#6-shared-memory)
-7. [Coordination and conflict resolution](#7-coordination-and-conflict-resolution)
-8. [Trust and containment](#8-trust-and-containment)
-9. [Fault tolerance](#9-fault-tolerance)
-10. [Observability and reproducibility](#10-observability-and-reproducibility)
-11. [Evaluation](#11-evaluation)
-12. [Design trade-offs and extensions](#12-design-trade-offs-and-extensions)
-13. [Code map](#13-code-map)
+- [Trading Agent – Multi-Agent System Design](#trading-agent--multi-agent-system-design)
+  - [Contents](#contents)
+  - [1. Overview](#1-overview)
+  - [2. Agent inventory](#2-agent-inventory)
+  - [3. Classification](#3-classification)
+  - [4. Anatomy of an LLM agent](#4-anatomy-of-an-llm-agent)
+  - [5. Communication](#5-communication)
+  - [6. Shared memory](#6-shared-memory)
+  - [7. Coordination and conflict resolution](#7-coordination-and-conflict-resolution)
+  - [8. Trust and containment](#8-trust-and-containment)
+  - [9. Fault tolerance](#9-fault-tolerance)
+  - [10. Observability and reproducibility](#10-observability-and-reproducibility)
+  - [11. Evaluation](#11-evaluation)
+  - [12. Design trade-offs and extensions](#12-design-trade-offs-and-extensions)
+  - [13. Code map](#13-code-map)
 
 ---
 
@@ -168,7 +170,7 @@ sequenceDiagram
     O->>E: EarningsInput (next report, last 8 reactions)
     E-->>O: EarningsAssessment (stance, event risk)
     Note over O: only buy / strong_buy continue
-    O->>P: ProposerInput (facts + both assessments + holdings)
+    O->>P: ProposerInput (facts + both assessments + holdings + macro snapshot)
     P-->>O: ProposerOutput (propose / no_trade, refs, thesis)
     Note over O: code resolves level names to prices (PlanView)
     O->>C: CriticInput (same facts + plan in prices)
@@ -183,7 +185,7 @@ sequenceDiagram
 |---|---|---|---|
 | `TechnicalInput` | code → technical analyst | Indicators, level menu, plan rules | Computed by calculators; the analyst never sees raw price history |
 | `EarningsInput` | code → earnings analyst | Next report, last 8 reports with surprise and price reaction | History is cut at the scan date, so no future data leaks in |
-| `ProposerInput` | technical + earnings → proposer | Both assessments, the menu, rules, holdings, unknown fields | Holdings come from the agent's own book |
+| `ProposerInput` | technical + earnings → proposer | Both assessments, the menu, rules, holdings, unknown fields, `MacroSnapshot` (since prompt v2) | Holdings come from the agent's own book; the macro snapshot (benchmark trend, VIX, rates, credit spreads) is computed by code from shared memory and cut at the scan date |
 | `CriticInput` | proposer → critic | The proposer's facts plus `PlanView` | **Translation**: level names become prices, R:R and stop-in-ATR are computed, so the critic judges numbers rather than names |
 | `PortfolioInput` | proposer + critic → portfolio manager | One `Candidate` per survivor: confidence, R:R, thesis, critic severity and summary; free slots; budget mode | **Filtering**: only the summary of the debate, not the full analyses |
 | `Proposal` | orchestrator → risk engine (via DB) | Refs, prices, confidence, rank, status | The risk engine ignores the text and checks numbers only |
@@ -208,7 +210,7 @@ The agents themselves are **stateless**: every run starts with an empty context 
 | Memory type | Tables | Holds | Written by | Read by |
 |---|---|---|---|---|
 | **Working memory** | none (the input object) | The facts for the current call; message history only for the one corrective retry | Orchestrator | The agent being called |
-| **World knowledge** (facts) | `instruments`, `bars_daily`, `earnings_events`, `fx_daily`, `macro_series`, `news` | Market data with source and timestamp | Ingestion jobs; triage adds a relevance label to `news` | Screen, calculators, risk engine, books, reviewer |
+| **World knowledge** (facts) | `instruments`, `bars_daily`, `earnings_events`, `fx_daily`, `macro_series`, `news` | Market data with source and timestamp | Ingestion jobs; triage adds a relevance label to `news` | Screen (also the quality checks and the optional regime gate), calculators, proposer (macro snapshot), risk engine, books, reviewer |
 | **Episodic memory** (what agents thought) | `analyses` | Every agent run: full input, output, validation issues, status, model, prompt version, cost | Runner (every LLM agent) | Runner (cache), dashboard, `/why`, eval export |
 | **Deliberation record** | `proposals` | One row per stock and scan day: final status, prices, confidence, rank, critique summary, all agent outputs, links to the analyses | Orchestrator | Risk engine, shadow book, `/proposals`, `/review`, triage and reviewer (thesis), weekly report (calibration) |
 | **Action memory** (what was done) | `risk_decisions`, `brackets`, `orders`, `fills`, `trades`, `equity_daily` | Every check result, order, fill, round trip and daily account value | Risk engine, executor, end-of-day job | Risk engine (loss limits, holdings), proposer and portfolio manager (holdings, free slots), reconciler, reports |
@@ -299,7 +301,8 @@ Each failure stays local and the system degrades in steps instead of stopping:
 | Is the agents' confidence meaningful? | **Calibration** in the weekly report: do 40 % proposals win about 40 % of the time? |
 | Does a human agree with the agents? | Your `/review` labels, compared with the outcomes |
 | Does each agent behave? | 30 **golden cases** from real days (`tests/evals`), run against the real models, check schema, validators and plausibility per agent |
-| Does the system work together? | Integration tests run the whole pipeline with fake models (PydanticAI `FunctionModel`) in CI, at no cost and with no API key |
+| Does the system work together? | Integration tests run the whole pipeline with fake models (PydanticAI `FunctionModel`) in CI, at no cost and with no API key. `llm/fake.py` is a rule-following fake for every agent; with `LLM_FAKE=true` the local stack (`compose.dev.yaml`) runs the full schedule offline |
+| Is the baseline a fair bar? | `baseline_sim` and the backtest apply the risk engine's rules, including the correlation cap and the loss limits ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.2) |
 | Can the safety layer be trusted? | The risk engine has 100 % branch coverage and property-based tests: no approved decision may ever break a limit |
 
 The stored data also allows per-agent questions that the weekly report doesn't compute yet. For example: how did the trades the critic blocked turn out? Did its confidence changes improve calibration? Does the portfolio manager's order beat ranking by confidence × R:R?
@@ -316,7 +319,7 @@ The stored data also allows per-agent questions that the weekly report doesn't c
 | One process, asyncio | Distributed agents, message broker | 8 GB laptop, one user, a few hundred calls a day |
 | Plain Python orchestration with PydanticAI | LangGraph, CrewAI, AutoGen | The graph is small and fixed; fewer dependencies, full control over validation |
 
-Natural next steps for the showcase: a macro-regime agent and a news agent inside the scan, a second critic round when the critic raises a `major` objection, read-only tools for the proposer, and per-agent attribution in the weekly report.
+Natural next steps for the showcase: a macro-regime agent (today the macro snapshot is code-computed context for the proposer, plus an optional rule-based regime gate in the screen) and a news agent inside the scan, a second critic round when the critic raises a `major` objection, read-only tools for the proposer, and per-agent attribution in the weekly report.
 
 ---
 
@@ -332,7 +335,8 @@ Natural next steps for the showcase: a macro-regime agent and a news agent insid
 | Role prompts | `prompts/<role>/v<N>.md` |
 | Model registry, budget | `config/models.yaml`, `src/trading_agent/llm/{models,budget}.py` |
 | Untrusted text | `src/trading_agent/llm/sanitize.py` |
-| Screen | `src/trading_agent/strategies/pullback.py`, `src/trading_agent/jobs.py` (`candidates`) |
+| Screen | `src/trading_agent/strategies/pullback.py`, `src/trading_agent/backtest.py` (`latest_setups`, regime gate), `src/trading_agent/jobs.py` (`candidates`: drops blocked and blacklisted symbols) |
+| Macro context | `src/trading_agent/calc/macro.py`, `src/trading_agent/pipeline.py` (`macro_context`) |
 | Risk engine | `src/trading_agent/risk/engine.py`, `config/risk.yaml` |
 | Executor | `src/trading_agent/executor.py`, `src/trading_agent/trading.py` |
 | Reconciler | `src/trading_agent/execution/reconcile.py`, `src/trading_agent/broker.py` |
@@ -341,3 +345,4 @@ Natural next steps for the showcase: a macro-regime agent and a news agent insid
 | Human channel | `src/trading_agent/notify/telegram.py`, `src/trading_agent/journal.py` |
 | Containment contracts | `[tool.importlinter]` in `pyproject.toml` |
 | Tests | `tests/integration/test_pipeline.py` (whole pipeline, fake models), `tests/evals/` (golden cases), `tests/unit/risk/` (risk engine) |
+| Offline fake agents | `src/trading_agent/llm/fake.py`, `compose.dev.yaml`, `make dev-up` |
