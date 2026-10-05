@@ -166,7 +166,7 @@ cp .env.example .env && chmod 600 .env
 nano .env
 ```
 
-`.env` holds the switches and API keys. `chmod 600` makes it readable only by `trader`. Fill in:
+`.env` holds the switches and API keys. `chmod 600` makes it readable only by `trader`. Write each value directly after the `=`, without quotes, and never put a comment on the same line: Docker Compose reads `KEY=   # text` as the value `# text`. Fill in:
 
 | Key | Where to get it | What it's for |
 |---|---|---|
