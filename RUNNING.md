@@ -13,7 +13,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 
 1. [Where to find what](#1-where-to-find-what)
 2. [The dashboard](#2-the-dashboard)
-3. [Telegram](#3-telegram)
+3. [Telegram and the heartbeat](#3-telegram-and-the-heartbeat)
 4. [Logs and audit trail](#4-logs-and-audit-trail)
 5. [Starting and stopping](#5-starting-and-stopping)
 6. [Testing that everything works](#6-testing-that-everything-works)
@@ -27,6 +27,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 
 | You want to know | Look here |
 |---|---|
+| The dashboard | `https://klaus-ux301laa.<your-tailnet>.ts.net`, with Tailscale on (finding the exact address: section 2) |
 | Is everything running? | Telegram `/status` |
 | What happens next, and when? | Telegram `/status` → Next jobs; the daily schedule in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4 |
 | What did the agent propose today? | Telegram 🧠 messages, `/proposals`; dashboard → **Proposals** |
@@ -39,7 +40,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 | Limits used, kill switch | Telegram `/status`; dashboard → **Risk** |
 | Are the prices up to date? | Telegram `/status` → Data; dashboard → **Overview** → Data |
 | Something went wrong | Telegram ⚠️ and 🔌 messages; the log (section 4) |
-| The machine itself is down | E-mail from healthchecks.io (no heartbeat for 20 minutes) |
+| The machine itself is down | E-mail from healthchecks.io; its website shows when the last heartbeat arrived (section 3.1) |
 | The IB Gateway's login screen | Remmina on the Zenbook desktop (8.3) |
 | Settings | `.env` (switches, keys) and `config/*.yaml` (rules, limits); every setting is explained in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 12 |
 | Backups | `backups/` on the Zenbook (section 9.4) |
@@ -48,7 +49,20 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 
 ## 2. The dashboard
 
-**Address:** the `https://….ts.net` address that `tailscale serve status` prints. Open it on the phone or any device in your tailnet, with Tailscale on. On the Zenbook itself: `http://localhost:8501`. There's no login; only devices in your tailnet can reach it. It only shows data and can't change anything.
+The dashboard is a website that runs on the Zenbook. It only shows data and can't change anything. There's no login: only devices in your Tailscale network (tailnet) can reach it.
+
+| From | Address |
+|---|---|
+| The Zenbook itself | `http://localhost:8501` |
+| Phone, tablet or another computer, with the Tailscale app on and logged in to the same account | `https://klaus-ux301laa.<your-tailnet>.ts.net` |
+
+`<your-tailnet>` is a name Tailscale gave your account, like `tail1a2b3c`. To get the exact address, use any of these:
+
+- On the Zenbook: `tailscale serve status`. The first line is the address.
+- In the Tailscale app on the phone: the device list → `klaus-ux301laa` → its name ending in `.ts.net`.
+- In the browser: login.tailscale.com → Machines → `klaus-ux301laa`.
+
+Bookmark it on the phone. If `tailscale serve status` prints nothing, the dashboard isn't published yet: `sudo tailscale serve --bg 8501` as your desktop user (once; it survives reboots).
 
 | Page | Shows | At the start (no trades yet) |
 |---|---|---|
@@ -68,7 +82,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 
 ---
 
-## 3. Telegram
+## 3. Telegram and the heartbeat
 
 The bot answers only your chat. It sends these messages by itself:
 
@@ -98,6 +112,15 @@ The bot answers only your chat. It sends these messages by itself:
 | `/help` | All commands |
 
 **Your daily part** (about an hour; details in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 11.4): morning, read 📰 and 🧠, `/pause` if something looks wrong; evening, read 🌙, `/review`, decide on 🧐; Saturday, read the report; about once a week, confirm the IBKR 2FA prompt on the phone.
+
+### 3.1 The heartbeat (healthchecks.io)
+
+Telegram can't tell you that the Zenbook is down, because the agent sends the messages. That's what the heartbeat is for: an outside service that expects a sign of life every 5 minutes.
+
+- **The ping URL** (`HEARTBEAT_URL` in `.env`, `https://hc-ping.com/<uuid>`) is only a receiver. The agent calls it every 5 minutes; that call is the sign of life. There's nothing to see there: opening it in a browser just prints `OK` and counts as a ping itself.
+- **Where you look:** healthchecks.io → log in → **Checks**. The `trading-agent` check shows green (up) or red (down), when the last ping arrived, and on its page a log of all pings.
+- **When it alerts:** if no ping arrives for 20 minutes (5 minutes period + 15 grace), healthchecks.io e-mails you, and again when pings resume. Causes: the Zenbook is off, asleep or offline, Docker or the agent stopped, or the internet is down.
+- **In Telegram:** `/status` → `Heartbeat: ok, 2 min ago` means the last ping got through.
 
 ---
 
@@ -270,7 +293,7 @@ git fetch origin && git reset --hard origin/main
 | Zenbook shell | Zenbook | Its desktop; SSH only from the tailnet (`trader@100.116.207.96`) |
 | IBKR paper account | IBKR's servers | Client Portal, IBKR app |
 | Code | GitHub (`klausrossmann/trading-agent`), copy on the Zenbook | `git pull` with a read-only deploy key |
-| Heartbeat | healthchecks.io | Its website and alert e-mails |
+| Heartbeat | healthchecks.io | Its website (Checks) and alert e-mails; the ping URL only receives pings (3.1) |
 
 Nothing on the Zenbook accepts connections from the internet or the home network (`ufw`); other devices come in only through Tailscale.
 
