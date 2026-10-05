@@ -341,13 +341,35 @@ Changes to `.env` need only `docker compose up -d` (no build). Changes in `confi
 
 ---
 
-## 5. Later steps
+## 5. Checklist: from setup to real money
 
-| Step | When | Where it's described |
-|---|---|---|
-| Orders to IBKR instead of the simulator (`IB_ORDERS_ENABLED=true`, `IB_READ_ONLY_API=no`), then the three chaos tests | When the gateway runs stably for some days and `/positions` shows nothing open | [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17 |
-| Anthropic key for the critic, then `LLM_DEV_OVERRIDES=false` | When you want the critic on another vendor | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.2 |
-| Go-live with real money | After the go-live gate is met (3 months, 50 trades, positive after costs, beats the baseline) | [IMPLEMENTATION.md](IMPLEMENTATION.md) section 18 |
+Section 2 gets the app running. These checks prove that it works, in this order. Tick them off as you go; the 📋 outputs in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 are what to send back.
+
+**Setup (section 2)**
+
+- [ ] Steps 1–9: Zenbook prepared, data loaded, app running, Telegram answers `/status`, dashboard opens on the phone
+- [x] Step 10: IBKR paper account connected; `ibkr-check` shows delayed quotes (2026-10-05)
+- [ ] Step 11: backups set up, `make restore-check` passed
+- [ ] Step 12: `ssh zenbook` works from the Mac
+
+**First days**
+
+- [ ] **Gateway survives the night**: the morning after step 10, `docker compose logs --since 12h ib-gateway | grep -v "Connection refused" | tail -50` shows the 23:45 restart and a new login without your help. Proves the gateway runs unattended.
+- [ ] **AI scan works**: `docker compose run --rm agent trading-agent analyse --top 3` prints a rating, a plan and the cost per stock. Proves the Gemini key, the budget guard and the analysts.
+- [ ] **Proposals**: `docker compose run --rm agent trading-agent propose --market US`, then `/proposals`, `/why SYMBOL`, `/review` in Telegram. From then on the scans run by themselves before each open.
+- [ ] **Kill switch**: `/pause test`, `/status`, `/resume`, then `/stop` and confirm; `docker compose run --rm agent trading-agent reset` prints a code; `/reset CODE`. `/status` shows `Kill switch: active`. Proves you can stop the agent and only you can restart it.
+- [ ] **Simulated orders**: on the next trading days, 📤 messages 15 minutes after each open, 🟢 🔴 ⌛ after each close, and the 🌙 digest. Send the first two days. Proves the whole chain from scan to order runs.
+- [ ] **One week of proposals, labelled by you** with `/review`. Gives the first evidence whether the AI's judgement matches yours.
+
+**Before real orders at IBKR**
+
+- [ ] **IBKR orders and the three chaos tests** (gateway restart with open orders, reboot during a session, replaying the same proposals): [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17. Prerequisites: the gateway ran a few days without problems and `/positions` shows nothing open. Proves that no order is lost, duplicated or left without a stop.
+- [ ] Optional: Anthropic key for the critic, then `LLM_DEV_OVERRIDES=false` ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.2).
+
+**Paper phase and go-live**
+
+- [ ] **3 months of paper trading** with the daily routine (section 3) until the weekly report shows the go-live gate met: 91 days, 50 closed trades, positive after all costs, better than the rule-based book.
+- [ ] **Go-live checklist**: mini PC, funded live account, interlock and kill switch tested live, restore tested on another machine ([IMPLEMENTATION.md](IMPLEMENTATION.md) section 18).
 
 ---
 
