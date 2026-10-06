@@ -168,9 +168,12 @@ class AnalysisRow(Base):
     issues: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     status: Mapped[str] = mapped_column(Text)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+    trace_id: Mapped[str | None] = mapped_column(Text)
 
 
 class LlmCallRow(Base):
+    """One agent run attempt with its messages (OBSERVABILITY.md 6)."""
+
     __tablename__ = "llm_calls"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -189,6 +192,13 @@ class LlmCallRow(Base):
     analysis_id: Mapped[int | None] = mapped_column(
         ForeignKey("analyses.id", ondelete="SET NULL"), index=True
     )
+    attempt: Mapped[int | None] = mapped_column(SmallInteger)
+    kind: Mapped[str | None] = mapped_column(Text)
+    trace_id: Mapped[str | None] = mapped_column(Text, index=True)
+    span_id: Mapped[str | None] = mapped_column(Text)
+    messages: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    finish_reason: Mapped[str | None] = mapped_column(Text)
+    provider_response_id: Mapped[str | None] = mapped_column(Text)
 
 
 class ProposalRow(Base):

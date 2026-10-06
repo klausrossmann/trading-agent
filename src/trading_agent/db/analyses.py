@@ -30,6 +30,7 @@ class DbAnalysisStore:
             output=row.output,
             issues=tuple(ValidationIssue.model_validate(i) for i in row.issues),
             status=row.status,  # pyright: ignore[reportArgumentType]  # written by save()
+            trace_id=row.trace_id,
         )
 
     async def save(self, analysis: AnalysisRecord | None, calls: Sequence[LlmCall]) -> int | None:
@@ -48,6 +49,7 @@ class DbAnalysisStore:
                     issues=[i.model_dump() for i in analysis.issues],
                     status=analysis.status,
                     cost_usd=to_decimal(analysis.cost_usd, 6),
+                    trace_id=analysis.trace_id,
                 )
                 s.add(row)
                 await s.flush()
@@ -61,6 +63,10 @@ class DbAnalysisStore:
                 for c in calls
             )
         return analysis_id
+
+    async def trace_id(self, analysis_id: int) -> str | None:
+        async with self._sessions() as s:
+            return await s.scalar(select(AnalysisRow.trace_id).where(AnalysisRow.id == analysis_id))
 
     async def spent_usd(self, since: datetime) -> float:
         async with self._sessions() as s:

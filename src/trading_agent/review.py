@@ -102,7 +102,9 @@ async def _triage(ctx: ReviewContext, h: Held, today: date) -> None:
         h.proposal.invalidation,
         pending,
     )
-    outcome = await ctx.runner.run(ctx.triage, inp, instrument_id=inst_id, as_of=today)
+    outcome = await ctx.runner.run(
+        ctx.triage, inp, instrument_id=inst_id, as_of=today, subject=h.instrument.yahoo_symbol
+    )
     if outcome.status != "ok" or outcome.output is None:
         log.warning("news.triage_failed", symbol=h.instrument.yahoo_symbol, status=outcome.status)
         return
@@ -179,7 +181,9 @@ async def reevaluate_positions(ctx: ReviewContext) -> list[str]:
             continue
         relevant = [n for n in news if n.relevance in ("low", "high")]
         inp = review_input(facts, h.proposal.thesis, h.proposal.invalidation, relevant)
-        outcome = await ctx.runner.run(ctx.review, inp, instrument_id=inst_id, as_of=facts.as_of)
+        outcome = await ctx.runner.run(
+            ctx.review, inp, instrument_id=inst_id, as_of=facts.as_of, subject=facts.symbol
+        )
         out = outcome.output
         if outcome.status != "ok" or out is None:
             log.warning("review.failed", symbol=facts.symbol, status=outcome.status)

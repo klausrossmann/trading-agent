@@ -18,9 +18,13 @@ services:
       IB_ENABLED: "false"
       IB_ORDERS_ENABLED: "false"
       TZ: Europe/Berlin
+      # Tracing only with Langfuse keys in .dev/secrets/trace_headers (empty by default)
+      TRACE_ENVIRONMENT: dev
 
   dashboard:
     ports: !override ["127.0.0.1:${DEV_DASHBOARD_PORT:-8502}:8501"]
+    environment:
+      TRACE_UI_URL: ${DEV_TRACE_UI_URL:-}
 
 secrets:
   postgres_password:
@@ -33,3 +37,5 @@ secrets:
     file: ./.dev/secrets/tws_password
   vnc_password:
     file: ./.dev/secrets/vnc_password
+  trace_headers:
+    file: ./.dev/secrets/trace_headers

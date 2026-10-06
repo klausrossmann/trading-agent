@@ -79,6 +79,7 @@ def test_status_text() -> None:
     assert "EU: EXS1.DE" in text
     assert "ingest_eod_eu:2026-10-05 Mon 05 Oct 18:00" in text  # Berlin time
     assert "Kill switch: unknown" in text
+    assert "LLM tracing: off" in text
     assert "Live interlock" not in text
 
 
@@ -106,10 +107,12 @@ def test_kill_switch_texts() -> None:
             next_jobs=[],
             kill_switch=m.kill_switch_line(paused),
             interlock="waiting for /confirm_live CODE",
+            tracing="on (cloud.langfuse.com, live)",
         )
     )
     assert "Kill switch: paused (daily loss limit)" in status
     assert "Live interlock: waiting for /confirm_live CODE" in status
+    assert "LLM tracing: on (cloud.langfuse.com, live)" in status
 
 
 def test_alerts() -> None:

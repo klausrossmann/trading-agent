@@ -9,21 +9,27 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal, Protocol
 
 import structlog
+from opentelemetry import trace
+from opentelemetry.trace import Span, TracerProvider
 from pydantic import BaseModel
-from pydantic_ai import Agent
+from pydantic_ai import Agent, capture_run_messages
+from pydantic_ai.capabilities import Instrumentation
 from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse
 from pydantic_ai.models import Model
+from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import RunUsage
 
 from trading_agent.domain.analysis import (
     AnalysisRecord,
     AnalysisStatus,
+    CallKind,
     LlmCall,
     Role,
     StoredAnalysis,
     ValidationIssue,
 )
+from trading_agent.llm import tracing
 from trading_agent.llm.budget import BudgetMode, budget_mode, month_start
 from trading_agent.llm.models import ModelsConfig, ModelUnavailableError
 from trading_agent.llm.prompts import Prompt
@@ -93,6 +99,31 @@ def _errors(issues: Sequence[ValidationIssue]) -> bool:
     return any(i.severity == "error" for i in issues)
 
 
+def _transcript(messages: list[ModelMessage]) -> dict[str, Any]:
+    last = next((m for m in reversed(messages) if isinstance(m, ModelResponse)), None)
+    return {
+        "messages": ModelMessagesTypeAdapter.dump_python(messages, mode="json"),
+        "finish_reason": last.finish_reason if last else None,
+        "provider_response_id": last.provider_response_id if last else None,
+    }
+
+
+def _level(outcome: Outcome[Any]) -> tracing.Level | None:
+    if outcome.status == "failed":
+        return "ERROR"
+    return "WARNING" if outcome.status in ("skipped", "rejected") else None
+
+
+@dataclass(frozen=True)
+class _CallContext:
+    model: str
+    module: str
+    role: Role
+    kind: CallKind
+    trace_id: str | None
+    span_id: str | None
+
+
 class LlmRunner:
     def __init__(
         self,
@@ -104,6 +135,8 @@ class LlmRunner:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         retry_delays_s: Sequence[float] = (20.0, 60.0),
+        tracer_provider: TracerProvider | None = None,
+        trace_content: bool = True,
     ) -> None:
         self.cfg = cfg
         self.store = store
@@ -113,21 +146,85 @@ class LlmRunner:
         self._sleep = sleep
         self._retry_delays = tuple(retry_delays_s)
         self._last_call: dict[str, float] = {}
+        self._tracer = trace.get_tracer(__name__, tracer_provider=tracer_provider)
+        self._content = trace_content
+        self._instrumentation = (
+            [
+                Instrumentation(
+                    settings=InstrumentationSettings(
+                        tracer_provider=tracer_provider,
+                        include_content=trace_content,
+                        include_binary_content=False,
+                    )
+                )
+            ]
+            if tracer_provider is not None
+            else []
+        )
 
     async def mode(self) -> BudgetMode:
         spent = await self.store.spent_usd(month_start(self._clock()))
         return budget_mode(spent, self.cfg.budget)
 
     async def run[I: BaseModel, O: BaseModel](
-        self, module: AnalysisModule[I, O], inp: I, *, instrument_id: int | None, as_of: date
+        self,
+        module: AnalysisModule[I, O],
+        inp: I,
+        *,
+        instrument_id: int | None,
+        as_of: date,
+        subject: str | None = None,
+    ) -> Outcome[O]:
+        """`subject` (e.g. the symbol) names the trace span next to the module."""
+        name = f"{module.name} {subject}" if subject else module.name
+        with self._tracer.start_as_current_span(name) as span:
+            outcome = await self._run(module, inp, instrument_id, as_of, span)
+            out = outcome.output
+            tracing.observe(
+                span,
+                output=out.model_dump_json() if out is not None and self._content else None,
+                metadata={
+                    "status": outcome.status,
+                    "cached": outcome.cached,
+                    "cost_usd": round(outcome.cost_usd, 6),
+                    "analysis_id": outcome.analysis_id,
+                    "issues": [i.code for i in outcome.issues] or None,
+                },
+                level=_level(outcome),
+                message=outcome.reason,
+            )
+            return outcome
+
+    async def _run[I: BaseModel, O: BaseModel](
+        self,
+        module: AnalysisModule[I, O],
+        inp: I,
+        instrument_id: int | None,
+        as_of: date,
+        span: Span,
     ) -> Outcome[O]:
         role = module.prompt.role
         model_name = self.cfg.model_for(role, dev=self._dev)
         out_type = module.output_type(inp)
         text = inp.model_dump_json()
         key = input_hash(module.name, module.prompt.version, model_name, as_of, text)
+        tracing.observe(
+            span,
+            kind="chain",
+            input=text if self._content else None,
+            metadata={
+                "module": module.name,
+                "prompt_version": module.prompt.version,
+                "model": model_name,
+                "role": role,
+                "instrument_id": instrument_id,
+                "as_of": as_of.isoformat(),
+                "input_hash": key,
+            },
+        )
 
         if (hit := await self.store.cached(key)) is not None:
+            tracing.observe(span, metadata={"cached_from_trace": hit.trace_id})
             return Outcome(
                 module.name,
                 hit.status,
@@ -144,25 +241,36 @@ class LlmRunner:
 
         if self.cfg.price(model_name, self._clock().date()) is None:
             return skipped(f"no price for {model_name} in config/models.yaml")
-        if await self.mode() == "stopped":
+        mode = await self.mode()
+        tracing.observe(span, metadata={"budget_mode": mode})
+        if mode == "stopped":
             return skipped("monthly LLM budget used up")
         try:
             model = self._model_factory(model_name)
         except ModelUnavailableError as exc:
             return skipped(str(exc))
 
-        agent = Agent(model, output_type=out_type, instructions=module.prompt.text, retries=2)
+        agent = Agent(
+            model,
+            output_type=out_type,
+            instructions=module.prompt.text,
+            name=module.name,
+            retries=2,
+            capabilities=self._instrumentation,
+        )
         calls: list[LlmCall] = []
+        trace_id, span_id = tracing.ids(span)
 
-        async def call(prompt: str, history: list[ModelMessage] | None) -> Any:
-            return await self._call(agent, prompt, history, calls, model_name, module.name, role)
+        async def call(prompt: str, history: list[ModelMessage] | None, kind: CallKind) -> Any:
+            call_ctx = _CallContext(model_name, module.name, role, kind, trace_id, span_id)
+            return await self._call(agent, prompt, history, calls, call_ctx)
 
         try:
-            result = await call(user_prompt(text), None)
+            result = await call(user_prompt(text), None, "initial")
             out: O = result.output
             issues = module.validate(inp, out)
             if _errors(issues):
-                result = await call(feedback(issues), result.all_messages())
+                result = await call(feedback(issues), result.all_messages(), "corrective")
                 out = result.output
                 issues = module.validate(inp, out)
         except AgentRunError as exc:
@@ -187,6 +295,7 @@ class LlmRunner:
             issues=tuple(issues),
             status=status,
             cost_usd=cost,
+            trace_id=trace_id,
         )
         analysis_id = await self.store.save(record, calls)
         log.info(
@@ -215,41 +324,53 @@ class LlmRunner:
         prompt: str,
         history: list[ModelMessage] | None,
         calls: list[LlmCall],
-        model_name: str,
-        module: str,
-        role: Role,
+        ctx: _CallContext,
     ) -> Any:
         day = self._clock().date()
-        attempt = 0
+        retry = 0
         while True:
-            await self._pace(model_name)
+            await self._pace(ctx.model)
             usage = RunUsage()
             started = time.monotonic()
             error: str | None = None
-            try:
-                return await agent.run(prompt, message_history=history, usage=usage)
-            except ModelHTTPError as exc:
-                error = f"HTTP {exc.status_code}"
-                if exc.status_code not in RETRYABLE_HTTP or attempt >= len(self._retry_delays):
-                    raise
-            except AgentRunError as exc:
-                error = type(exc).__name__
-                raise
-            finally:
-                calls.append(
-                    LlmCall(
-                        role=role,
-                        model=model_name,
-                        module=module,
-                        tokens_in=usage.input_tokens,
-                        tokens_out=usage.output_tokens,
-                        requests=usage.requests,
-                        cost_usd=self.cfg.cost_usd(
-                            model_name, day, usage.input_tokens, usage.output_tokens
-                        ),
-                        latency_ms=round((time.monotonic() - started) * 1000),
-                        error=error,
+            kind: CallKind = ctx.kind if retry == 0 else "http_retry"
+            attempt = len(calls) + 1
+            # Captures the messages even when the run raises.
+            with capture_run_messages() as messages:
+                try:
+                    return await agent.run(
+                        prompt,
+                        message_history=history,
+                        usage=usage,
+                        metadata={"attempt": attempt, "kind": kind},
                     )
-                )
-            await self._sleep(self._retry_delays[attempt])
-            attempt += 1
+                except ModelHTTPError as exc:
+                    error = f"HTTP {exc.status_code}"
+                    if exc.status_code not in RETRYABLE_HTTP or retry >= len(self._retry_delays):
+                        raise
+                except AgentRunError as exc:
+                    error = type(exc).__name__
+                    raise
+                finally:
+                    calls.append(
+                        LlmCall(
+                            role=ctx.role,
+                            model=ctx.model,
+                            module=ctx.module,
+                            tokens_in=usage.input_tokens,
+                            tokens_out=usage.output_tokens,
+                            requests=usage.requests,
+                            cost_usd=self.cfg.cost_usd(
+                                ctx.model, day, usage.input_tokens, usage.output_tokens
+                            ),
+                            latency_ms=round((time.monotonic() - started) * 1000),
+                            error=error,
+                            attempt=attempt,
+                            kind=kind,
+                            trace_id=ctx.trace_id,
+                            span_id=ctx.span_id,
+                            **_transcript(messages),
+                        )
+                    )
+            await self._sleep(self._retry_delays[retry])
+            retry += 1

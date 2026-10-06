@@ -12,6 +12,7 @@ import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_agent.dashboard import frames, queries
+from trading_agent.domain.analysis import trace_url
 from trading_agent.domain.trading import Trade
 from trading_agent.settings import Settings
 
@@ -45,6 +46,17 @@ def _data_status() -> pd.DataFrame:
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _analyses() -> pd.DataFrame:
     return _load(queries.analyses)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _llm_calls(analysis_id: int) -> list[dict[str, Any]]:
+    return _load(lambda s: queries.llm_calls(s, analysis_id))
+
+
+def _trace_link(trace_id: Any) -> None:
+    url = trace_url(_settings().trace_ui_url, trace_id if isinstance(trace_id, str) else None)
+    if url:
+        st.link_button("Open trace", url)
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
@@ -240,7 +252,7 @@ def analyses() -> None:
         frame = frame[frame["symbol"].fillna("").str.contains(symbol, regex=False)]
     shown = frame.assign(created_at=_local(frame["created_at"]))
     _table(
-        shown.drop(columns=["issues", "output"]),
+        shown.drop(columns=["issues", "output", "trace_id"]),
         column_config={"cost_usd": st.column_config.NumberColumn(format="$%.4f")},
     )
     if frame.empty:
@@ -249,10 +261,22 @@ def analyses() -> None:
     labels = [f"#{r['id']} {r['symbol'] or '-'} {r['module']} {r['as_of']}" for r in records]
     picked = st.selectbox("Details", range(len(records)), format_func=labels.__getitem__)
     row = records[picked or 0]
+    _trace_link(row["trace_id"])
     if row["issues"]:
         lines = [f"- {i['severity']} `{i['code']}`: {i['message']}" for i in row["issues"]]
         st.warning("\n".join(lines))
     st.json(row["output"])
+    calls = _llm_calls(int(row["id"]))
+    if calls:
+        st.subheader("LLM calls")
+        _table(
+            pd.DataFrame(calls).drop(columns=["messages"]),
+            column_config={"cost_usd": st.column_config.NumberColumn(format="$%.4f")},
+        )
+        for c in calls:
+            with st.expander(f"Attempt {c['attempt'] or '-'} ({c['kind'] or 'initial'})"):
+                # Prompts and answers as plain text, never rendered as Markdown.
+                st.text(frames.transcript(c["messages"]))
 
 
 def proposals() -> None:
@@ -272,7 +296,7 @@ def proposals() -> None:
     if symbol:
         frame = frame[frame["symbol"].str.contains(symbol, regex=False)]
     _table(
-        frame.drop(columns=["thesis", "invalidation", "critic_summary", "payload"]),
+        frame.drop(columns=["thesis", "invalidation", "critic_summary", "payload", "trace_id"]),
         column_config={
             "entry": PRICE,
             "stop": PRICE,
@@ -298,6 +322,7 @@ def proposals() -> None:
     if row["label"]:
         lines.append(f"Your label: {row['label']} {row['reason'] or ''}")
     st.text("\n".join(lines))
+    _trace_link(row["trace_id"])
     with st.expander("Agent outputs"):
         st.json(row["payload"])
 

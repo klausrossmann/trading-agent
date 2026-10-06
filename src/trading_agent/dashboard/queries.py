@@ -173,6 +173,7 @@ async def analyses(s: AsyncSession, limit: int = 500) -> pd.DataFrame:
             "cost_usd": float(a.cost_usd),
             "issues": a.issues,
             "output": a.output,
+            "trace_id": a.trace_id,
         }
         for a, symbol in await s.execute(stmt)
     ]
@@ -190,8 +191,30 @@ async def analyses(s: AsyncSession, limit: int = 500) -> pd.DataFrame:
         "cost_usd",
         "issues",
         "output",
+        "trace_id",
     ]
     return pd.DataFrame(rows, columns=columns)
+
+
+async def llm_calls(s: AsyncSession, analysis_id: int) -> list[dict[str, Any]]:
+    """The attempts behind one analysis, oldest first, with their messages."""
+    stmt = select(LlmCallRow).where(LlmCallRow.analysis_id == analysis_id).order_by(LlmCallRow.id)
+    return [
+        {
+            "attempt": c.attempt,
+            "kind": c.kind,
+            "model": c.model,
+            "tokens_in": c.tokens_in,
+            "tokens_out": c.tokens_out,
+            "requests": c.requests,
+            "latency_ms": c.latency_ms,
+            "cost_usd": float(c.cost_usd),
+            "error": c.error,
+            "finish_reason": c.finish_reason,
+            "messages": c.messages,
+        }
+        for c in await s.scalars(stmt)
+    ]
 
 
 async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
@@ -206,7 +229,13 @@ async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
         .limit(limit)
     )
     rows: list[dict[str, Any]] = []
-    for p, symbol, market, label in await s.execute(stmt):
+    found = (await s.execute(stmt)).all()
+    proposer_ids = {int(i) for p, *_ in found if (i := p.analyses.get("proposer")) is not None}
+    trace_rows = await s.execute(
+        select(AnalysisRow.id, AnalysisRow.trace_id).where(AnalysisRow.id.in_(proposer_ids))
+    )
+    traces: dict[int, str | None] = {i: t for i, t in trace_rows}
+    for p, symbol, market, label in found:
         entry, stop, target = _float(p.entry), _float(p.stop), _float(p.target)
         rows.append(
             {
@@ -229,6 +258,7 @@ async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
                 "invalidation": p.invalidation,
                 "critic_summary": p.critic_summary,
                 "payload": p.payload,
+                "trace_id": traces.get(p.analyses.get("proposer", -1)),
             }
         )
     columns = [
@@ -249,6 +279,7 @@ async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
         "invalidation",
         "critic_summary",
         "payload",
+        "trace_id",
     ]
     return pd.DataFrame(rows, columns=columns)
 

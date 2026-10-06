@@ -21,7 +21,7 @@
 | Database | PostgreSQL 17. TimescaleDB isn't needed: about 600 symbols × 10 years of daily bars is only a few million rows. |
 | Scheduling | APScheduler 3.x (`AsyncIOScheduler`); jobs are anchored to exchange sessions with `exchange_calendars` |
 | Dashboard | Streamlit, read-only database role, reachable only through Tailscale |
-| LLM tracing | Local only: `llm_calls`, `audit_log` and structured JSON logs. Hosted Pydantic Logfire is not used for now (section 19). |
+| LLM tracing | Every LLM call with its messages in `llm_calls` (Postgres). Traces go over OpenTelemetry to Langfuse Cloud (free Hobby plan, EU region, 30 days). Decided 2026-10-06; see [OBSERVABILITY.md](OBSERVABILITY.md) and section 19. |
 | Starting universe | S&P 100 + DAX 40 (about 140 symbols). S&P 500, Nasdaq-100 and MDAX are added once scans are stable and cheap. |
 | Architecture style | Modular monolith: a single async Python process with strict package boundaries |
 
@@ -234,13 +234,13 @@ The key idea: **the LLM chooses among named levels; code turns names into prices
 | `earnings_events` | Calendar and history | PK (`instrument_id`, `date`), `ts`, `timing` (`bmo`/`during`/`amc`/`unknown`), `eps_estimate`, `eps_actual` |
 | `news_items` | Raw news, triaged | `published_at`, `source`, `url`, `title`, `symbols[]`, `triage_score` |
 | `macro_series` | FRED/ECB series | `series_id`, `date`, `value` |
-| `analyses` | Module outputs | `module`, `prompt_version`, `model`, `instrument_id`, `as_of`, `input_hash`, `output jsonb`, `cost_usd` |
+| `analyses` | Module outputs | `module`, `prompt_version`, `model`, `instrument_id`, `as_of`, `input_hash`, `output jsonb`, `cost_usd`, `trace_id` |
 | `proposals` | All proposals | `payload jsonb`, `status`, `source` (`baseline` / `agent`) |
 | `risk_decisions` | Risk engine verdicts | `proposal_id`, `approved`, `checks jsonb`, `quantity`, `risk_eur` |
 | `orders` | Broker orders | `client_ref` (unique), `broker_order_id`, `parent_ref`, `kind` (`entry`/`stop`/`target`), `status`, `mode` (`paper`/`live`/`sim`) |
 | `fills` | Executions | `order_id`, `ts`, `qty`, `price`, `commission`, `currency`, `fx_rate_eur` |
 | `trades` | Round trips | `book` (`baseline_sim`, `agent_paper`, `agent_shadow`, `agent_live`), entry/exit, `pnl_net_eur`, `r_multiple`, `holding_days` |
-| `llm_calls` | Cost and audit | `role`, `model`, `tokens_in/out`, `cost_usd`, `latency_ms`, `analysis_id` |
+| `llm_calls` | Cost and audit, one row per agent run attempt | `role`, `model`, `tokens_in/out`, `cost_usd`, `latency_ms`, `analysis_id`, `attempt`, `kind`, `messages jsonb`, `trace_id`, `span_id` (0011) |
 | `user_labels` | Your agree/disagree labels | `proposal_id`, `label`, `reason` |
 | `agent_state` | Runtime state | key/value: `mode`, `kill_switch`, `paused`, `llm_budget_used` |
 | `audit_log` | Append-only | `ts`, `actor`, `event`, `payload jsonb` |
@@ -861,6 +861,7 @@ Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a no
 | `agent_db_password` | `db` init script, `agent` | M0 |
 | `dashboard_db_password` | `db` init script, `dashboard` | M6 (dashboard v1) |
 | `tws_password`, `vnc_password` | `ib-gateway` | M6: `make tws-password` (typed), `make secrets` (VNC) |
+| `trace_headers` | `agent` (OTLP auth for Langfuse) | 2026-10-06: `make secrets` (empty), `make trace-headers` (typed) |
 
 ```dotenv
 # .env.example (abridged; the full file is in the repo)
@@ -876,6 +877,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_OWNER_CHAT_ID=
 GEMINI_API_KEY=                     # Google AI Studio key; passed to PydanticAI explicitly
 LLM_DEV_OVERRIDES=true              # Phase 0–1
+TRACE_UI_URL=                       # Langfuse project URL for "Open trace" links (tracing: OBSERVABILITY.md)
 ANTHROPIC_API_KEY=
 FINNHUB_API_KEY=
 FRED_API_KEY=
@@ -1009,6 +1011,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - Also check once: an entry that expires (`GTD`) shows ⌛ the day after, and the GTD time IBKR shows is the next session's close.
 
 18. **News and position review** (M9, after `make migrate`): a free key at finnhub.io (Dashboard → API key) as `FINNHUB_API_KEY` in `.env`, then `docker compose up -d agent`. With an open US position, `docker compose logs agent | grep -E "news|review"` 📋 after a few hours shows fetches and triage; 📰 and 🧐 messages arrive only for important news or a report within 3 sessions. `/exit SYMBOL` is the only way the review leads to a sale.
+19. **LLM tracing** (2026-10-06): Langfuse Cloud account (EU) with project `trading-agent` and an API key pair; `git pull && make trace-headers`; `TRACE_UI_URL` in `.env`; `make build && make migrate && make up`. Tracing starts with the agent once the keys are stored. `/status` 📋 shows `LLM tracing: on (cloud.langfuse.com, paper)`. Then `docker compose run --rm agent trading-agent analyse --top 1` shows up as a `cli analyse` trace in Langfuse, and "Open trace" on the dashboard's Analyses page opens it ([OBSERVABILITY.md](OBSERVABILITY.md), Setup).
 
 After a later `git pull`: `make build && make migrate && make up`.
 
@@ -1095,7 +1098,7 @@ flowchart LR
 | 2 | Universe size | Start smaller | S&P 100 + DAX 40 (about 140 symbols); larger indices later (section 5) |
 | 3 | Telegram amounts | Both | `−€15.20 (−1.5 %)` format (12.4) |
 | 4 | IBKR account | Application started, not ready yet | M0–M5 don't need IBKR (`yfinance` + simulator). M6 starts once the paper login exists. |
-| 5 | LLM tracing (Logfire) | Undecided | **Recommendation adopted: local only.** Prompts contain positions and theses, and `llm_calls` + `audit_log` already cover cost and audit. Hosted Logfire can be reconsidered in M9 if debugging prompts gets hard. |
+| 5 | LLM tracing (Logfire) | Undecided | **Recommendation adopted: local only.** Prompts contain positions and theses, and `llm_calls` + `audit_log` already cover cost and audit. Hosted Logfire can be reconsidered in M9 if debugging prompts gets hard. **Revised 2026-10-06:** hosted is fine if it's free and keeps at least 28 days. So: OpenTelemetry to Langfuse Cloud (Hobby, EU, 30 days), plus every call's messages in `llm_calls` ([OBSERVABILITY.md](OBSERVABILITY.md)). |
 | 6 | Dashboard | Streamlit is fine | As planned (section 13) |
 
 ### 19.1 Decisions from the M3 backtest

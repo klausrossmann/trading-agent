@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, pipeline, reports, review, trading
+from trading_agent import broker, jobs, journal, pipeline, reports, review, telemetry, trading
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
@@ -154,8 +154,12 @@ def job_functions(
         "baseline_sim": partial(jobs.baseline_book, book),
         "evening_digest": partial(journal.evening_digest, book, notifier),
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
-        "scan_eu": partial(pipeline.scheduled_scan, analysis, notifier, "EU"),
-        "scan_us": partial(pipeline.scheduled_scan, analysis, notifier, "US"),
+        "scan_eu": telemetry.traced(
+            "scan_eu", partial(pipeline.scheduled_scan, analysis, notifier, "EU")
+        ),
+        "scan_us": telemetry.traced(
+            "scan_us", partial(pipeline.scheduled_scan, analysis, notifier, "US")
+        ),
         "reconcile": partial(broker.reconcile_positions, link, notifier, expected, halt),
         "weekly_report": partial(reports.weekly_report, book, notifier),
     }
@@ -308,7 +312,9 @@ async def serve(
             updated=sync.updated,
             deactivated=sync.removed,
         )
-        state = jobs.RuntimeState(mode=settings.app_mode, started_at=datetime.now(UTC))
+        state = jobs.RuntimeState(
+            mode=settings.app_mode, started_at=datetime.now(UTC), tracing=telemetry.state()
+        )
         book = jobs.BookContext.load(settings.config_dir, sessions, universe)
         analysis = jobs.AnalysisContext.build(settings, sessions, universe)
         review = journal.Review(sessions)
@@ -323,7 +329,7 @@ async def serve(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
             commands(state, sessions, book, analysis)
-            | journal.commands(sessions, review)
+            | journal.commands(sessions, review, settings.trace_ui_url)
             | center.commands()
             | trading.commands(trade),
             interaction(review, center),
@@ -377,7 +383,10 @@ async def serve(
             pending_alerts = alert_on_job_failures(scheduler, notifier)
             scheduler.start()
             log.info(
-                "agent.started", mode=settings.app_mode, jobs=[j.id for j in scheduler.get_jobs()]
+                "agent.started",
+                mode=settings.app_mode,
+                jobs=[j.id for j in scheduler.get_jobs()],
+                tracing=state.tracing,
             )
             if isinstance(notifier, TelegramBot):
                 await notifier.wait_ready(within_s=30)

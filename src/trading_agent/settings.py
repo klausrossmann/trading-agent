@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     llm_dev_overrides: bool = False  # config/models.yaml dev_overrides (Phase 0-1)
     llm_fake: bool = False  # offline stand-in for every model (llm/fake.py, compose.dev.yaml)
 
+    # LLM tracing over OTLP/HTTP (OBSERVABILITY.md): on once trace_headers holds the keys.
+    trace_endpoint: str = "https://cloud.langfuse.com/api/public/otel/v1/traces"  # "" = off
+    trace_headers: SecretStr | None = None  # "Authorization=Basic ...", a Docker secret
+    trace_content: bool = True  # prompts and answers in the spans
+    trace_environment: str | None = None  # default: APP_MODE
+    trace_ui_url: str = ""  # e.g. https://cloud.langfuse.com/project/<id>, for links
+
     db_host: str = "db"
     db_port: int = 5432
     db_name: str = "trading"

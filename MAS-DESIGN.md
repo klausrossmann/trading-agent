@@ -285,9 +285,10 @@ Each failure stays local and the system degrades in steps instead of stopping:
 
 ## 10. Observability and reproducibility
 
-- **Every agent run is a stored record**: input, output, issues, status, model, prompt version and cost (`analyses`), plus every API call with tokens, latency and errors (`llm_calls`).
-- **Every proposal links to the analyses behind it**, so a trade can be traced back to the exact prompts, inputs and answers. `/why SYMBOL` in Telegram shows the thesis, critique and plan; the dashboard's Proposals and Analyses pages show the full trace.
-- **Structured logs** summarise each stage (`scan.done`, `proposals.done`, `place.done`), including candidates, statuses, skip reasons and cost.
+- **Every agent run is a stored record**: input, output, issues, status, model, prompt version and cost (`analyses`). Every attempt is stored too, with its full messages (instructions, prompt, each model response including rejected ones, retry prompts), tokens, latency, errors and the trace ID (`llm_calls`).
+- **Every run is a trace** ([OBSERVABILITY.md](OBSERVABILITY.md)): a scan or CLI run is one OpenTelemetry trace (run → agent per symbol → attempt → model request), exported to Langfuse Cloud. Tracing never blocks a job, and the database keeps the record when the backend is down.
+- **Every proposal links to the analyses behind it**, so a trade can be traced back to the exact prompts, inputs and answers. `/why SYMBOL` in Telegram shows the thesis, critique, plan and a trace link. The dashboard's Proposals and Analyses pages show the attempts with their messages and open the trace.
+- **Structured logs** summarise each stage (`scan.done`, `proposals.done`, `place.done`), including candidates, statuses, skip reasons and cost. Lines written inside a trace carry its `trace_id`.
 - **Replays**: the same input gives the same stored answer, and changing a prompt version or a model gives a new key. Comparisons between versions are clean.
 
 ---
@@ -330,7 +331,8 @@ Natural next steps for the showcase: a macro-regime agent (today the macro snaps
 | Orchestrator (scan) | `src/trading_agent/pipeline.py` (`propose`, `rank`, `build_proposal`) |
 | Orchestrator (positions) | `src/trading_agent/review.py` (news triage, position review) |
 | Scheduler | `src/trading_agent/scheduler.py`, `config/schedule.yaml` |
-| Agent runtime | `src/trading_agent/llm/runner.py` (cache, budget, pacing, validation, retry, storage) |
+| Agent runtime | `src/trading_agent/llm/runner.py` (cache, budget, pacing, validation, retry, storage, analysis spans) |
+| Tracing | `src/trading_agent/telemetry.py` (OTel SDK, root spans), `src/trading_agent/llm/tracing.py` (attribute names), [OBSERVABILITY.md](OBSERVABILITY.md) |
 | LLM agents | `src/trading_agent/modules/{technical,earnings,news_triage,position_review}.py`, `src/trading_agent/agents/{proposer,critic,portfolio}.py` |
 | Role prompts | `prompts/<role>/v<N>.md` |
 | Model registry, budget | `config/models.yaml`, `src/trading_agent/llm/{models,budget}.py` |

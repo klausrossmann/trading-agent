@@ -2,6 +2,7 @@
 
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pandas as pd
@@ -74,9 +75,50 @@ def _data(empty: bool) -> dict[str, object]:
                     {"code": "risk_reward", "message": "R:R 1.5 < 2.0", "severity": "error"}
                 ],
                 "output": {"rating": "buy"},
+                "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
             }
         ]
     )
+    calls = [
+        {
+            "attempt": 1,
+            "kind": "initial",
+            "model": "google:gemini-3.8-flash",
+            "tokens_in": 900,
+            "tokens_out": 120,
+            "requests": 1,
+            "latency_ms": 1500,
+            "cost_usd": 0.0011,
+            "error": None,
+            "finish_reason": "stop",
+            "messages": [
+                {
+                    "kind": "request",
+                    "instructions": "Rate the setup.",
+                    "parts": [{"part_kind": "user-prompt", "content": 'Input (JSON):\n{"x":1}'}],
+                },
+                {
+                    "kind": "response",
+                    "parts": [
+                        {"part_kind": "tool-call", "tool_name": "final_result", "args": {"a": 1}}
+                    ],
+                },
+            ],
+        },
+        {
+            "attempt": None,
+            "kind": None,
+            "model": "google:gemini-3.8-flash",
+            "tokens_in": 900,
+            "tokens_out": 120,
+            "requests": 1,
+            "latency_ms": 1500,
+            "cost_usd": 0.0011,
+            "error": None,
+            "finish_reason": None,
+            "messages": None,
+        },
+    ]
     costs = pd.DataFrame(
         [
             {
@@ -118,6 +160,7 @@ def _data(empty: bool) -> dict[str, object]:
                     "critic": {"objections": [{"severity": "minor", "point": "Thin."}]},
                     "portfolio_manager": {"note": "Only one.", "rationale": "r"},
                 },
+                "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
             }
         ]
     )
@@ -177,6 +220,8 @@ def _data(empty: bool) -> dict[str, object]:
         "_closes": closes.iloc[0:0] if empty else closes,
         "_reports": [] if empty else [(date(2026, 10, 10), "# Weekly report")],
         "_config": config,
+        "_llm_calls": [] if empty else calls,
+        "_settings": SimpleNamespace(trace_ui_url="https://cloud.langfuse.com/project/p1"),
     }
 
 
@@ -186,8 +231,8 @@ def stubbed(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> 
         if name == "_config":
             config = cast(dict[str, Any], value)
             monkeypatch.setattr(pages, name, lambda n, config=config: config[n])
-        elif name == "_closes":
-            monkeypatch.setattr(pages, name, lambda ids, value=value: value)
+        elif name in ("_closes", "_llm_calls"):
+            monkeypatch.setattr(pages, name, lambda _, value=value: value)
         else:
             monkeypatch.setattr(pages, name, lambda value=value: value)
 
@@ -203,6 +248,26 @@ def _page_script(name: str) -> None:
 def test_page_renders(page: str) -> None:
     at = AppTest.from_function(_page_script, args=(page,)).run()
     assert not at.exception, at.exception
+
+
+def test_analysis_details_show_the_calls_and_the_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in _data(empty=False).items():
+        if name in ("_closes", "_llm_calls"):
+            monkeypatch.setattr(pages, name, lambda _, value=value: value)
+        elif name != "_config":
+            monkeypatch.setattr(pages, name, lambda value=value: value)
+    at = AppTest.from_function(_page_script, args=("analyses",)).run()
+    assert not at.exception, at.exception
+    (first, second) = at.expander
+    assert first.label == "Attempt 1 (initial)"
+    text = first.text[0].value
+    assert "[instructions]\nRate the setup." in text
+    assert "[model → final_result]" in text
+    assert "No messages stored" in second.text[0].value
+    (link,) = at.get("link_button")
+    assert link.proto.url == (
+        "https://cloud.langfuse.com/project/p1/traces/4bf92f3577b34da6a3ce929d0e0e4736"
+    )
 
 
 def _main_script() -> None:

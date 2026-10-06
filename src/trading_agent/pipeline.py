@@ -265,7 +265,7 @@ async def propose(
         inp = proposer_input(item, tech, held, macros[key])
         as_of = inp.as_of
         proposed = await ctx.runner.run(
-            ctx.proposer, inp, instrument_id=item.instrument_id, as_of=as_of
+            ctx.proposer, inp, instrument_id=item.instrument_id, as_of=as_of, subject=item.symbol
         )
         cost += proposed.cost_usd
         out = proposed.output
@@ -279,6 +279,7 @@ async def propose(
                 CriticInput(facts=inp, proposal=plan_view(inp, out)),
                 instrument_id=item.instrument_id,
                 as_of=as_of,
+                subject=item.symbol,
             )
             cost += critique.cost_usd
             if critique.status != "ok":

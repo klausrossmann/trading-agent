@@ -13,6 +13,7 @@ from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.domain.analysis import trace_url
 from trading_agent.domain.market import BERLIN
 from trading_agent.domain.proposals import Label, Proposal
 from trading_agent.domain.trading import Book
@@ -95,7 +96,7 @@ class Review:
         return Interaction(self.on_button, self.on_text)
 
 
-def commands(sessions: Sessions, review: Review) -> dict[str, Command]:
+def commands(sessions: Sessions, review: Review, trace_ui_url: str = "") -> dict[str, Command]:
     async def proposals(_: list[str]) -> str:
         day, items, labels = await latest(sessions)
         if day is None:
@@ -111,7 +112,12 @@ def commands(sessions: Sessions, review: Review) -> dict[str, Command]:
             label = (await repo.labels(s, [p.id])).get(p.id) if p else None
         if p is None:
             return f"No proposal for {args[0].upper()}."
-        return messages.render_why(p, label)
+        text = messages.render_why(p, label)
+        proposer_id = p.analyses.get("proposer")
+        if not trace_ui_url or proposer_id is None:
+            return text
+        url = trace_url(trace_ui_url, await DbAnalysisStore(sessions).trace_id(proposer_id))
+        return f"{text}\nTrace: {url}" if url else text
 
     return {
         "proposals": Command("the latest agent proposals", proposals),

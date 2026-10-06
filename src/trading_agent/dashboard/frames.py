@@ -1,5 +1,6 @@
 """Pure table transforms for the dashboard pages (no Streamlit, no DB)."""
 
+import json
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from typing import Any
@@ -256,3 +257,32 @@ def gate(trades: Sequence[Trade], llm_eur_total: float, start: date, today: date
 def calibration(items: Sequence[weekly.Outcome]) -> pd.DataFrame:
     rows = weekly.calibration(items)
     return pd.DataFrame(rows, columns=["confidence", "trades", "hit_rate_pct"])
+
+
+def _content(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, indent=1, ensure_ascii=False)
+
+
+def transcript(messages: Sequence[Mapping[str, Any]] | None) -> str:
+    """One LLM call's stored PydanticAI messages as plain text; instructions once."""
+    if not messages:
+        return "No messages stored (calls before migration 0011)."
+    lines: list[str] = []
+    shown_instructions: str | None = None
+    for m in messages:
+        if (instructions := m.get("instructions")) and instructions != shown_instructions:
+            lines.append(f"[instructions]\n{instructions}")
+            shown_instructions = instructions
+        for p in m.get("parts", []):
+            kind = p.get("part_kind")
+            if kind == "tool-call":
+                lines.append(f"[model → {p.get('tool_name')}]\n{_content(p.get('args'))}")
+            elif kind in ("tool-return", "retry-prompt"):
+                lines.append(f"[{kind}]\n{_content(p.get('content'))}")
+            elif kind == "text":
+                lines.append(f"[model]\n{p.get('content')}")
+            elif kind in ("user-prompt", "system-prompt"):
+                lines.append(f"[{kind.removesuffix('-prompt')}]\n{_content(p.get('content'))}")
+            elif kind is not None and kind != "thinking":
+                lines.append(f"[{kind}]")
+    return "\n\n".join(lines)

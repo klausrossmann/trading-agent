@@ -32,6 +32,7 @@ services:
     secrets:
       - source: agent_db_password
         target: db_password
+      - trace_headers  # Langfuse OTLP auth (`make trace-headers`); empty = no auth header
     depends_on:
       db:
         condition: service_healthy
@@ -51,6 +52,7 @@ services:
     environment:
       DB_HOST: db
       DB_USER: dashboard
+      TRACE_UI_URL: ${TRACE_UI_URL:-}  # "Open trace" links; no tracing keys here
     secrets:
       - source: dashboard_db_password
         target: db_password
@@ -105,3 +107,5 @@ secrets:
     file: ./secrets/tws_password
   vnc_password:
     file: ./secrets/vnc_password
+  trace_headers:
+    file: ./secrets/trace_headers

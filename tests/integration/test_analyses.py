@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from pydantic_ai.models.test import TestModel
+from sqlalchemy import select
 
 from trading_agent import jobs
 from trading_agent.data import calendars, ingest
@@ -14,6 +15,7 @@ from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
 from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.db.models import LlmCallRow
 from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
 from trading_agent.domain.market import Bar, BarSeries, Instrument
 from trading_agent.llm.runner import LlmRunner
@@ -85,9 +87,21 @@ async def test_store_round_trip(sessions: Sessions) -> None:
         issues=(ValidationIssue(code="ungrounded_number", message="m", severity="warning"),),
         status="ok",
         cost_usd=0.0012345,
+        trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
     )
     assert await store.cached("h1") is None
-    analysis_id = await store.save(record, [_call("google:m", 0.001), _call("google:m", 0.0002345)])
+    traced = _call("google:m", 0.001).model_copy(
+        update={
+            "attempt": 1,
+            "kind": "initial",
+            "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+            "span_id": "00f067aa0ba902b7",
+            "messages": [{"kind": "request", "parts": [{"part_kind": "user-prompt"}]}],
+            "finish_reason": "stop",
+            "provider_response_id": "resp-1",
+        }
+    )
+    analysis_id = await store.save(record, [traced, _call("google:m", 0.0002345)])
     assert analysis_id is not None
     assert await store.save(None, [_call("google:x", 0.5, "HTTP 429")]) is None
 
@@ -95,6 +109,23 @@ async def test_store_round_trip(sessions: Sessions) -> None:
     assert hit is not None
     assert (hit.id, hit.output, hit.status) == (analysis_id, {"rating": "buy"}, "ok")
     assert hit.issues == record.issues
+    assert hit.trace_id == record.trace_id
+    assert await store.trace_id(analysis_id) == record.trace_id
+    async with sessions() as s:
+        rows = (
+            await s.scalars(
+                select(LlmCallRow)
+                .where(LlmCallRow.analysis_id == analysis_id)
+                .order_by(LlmCallRow.id)
+            )
+        ).all()
+    assert [(r.attempt, r.kind, r.trace_id, r.span_id) for r in rows] == [
+        (1, "initial", "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"),
+        (1, "initial", None, None),
+    ]
+    assert rows[0].messages == traced.messages
+    assert (rows[0].finish_reason, rows[0].provider_response_id) == ("stop", "resp-1")
+    assert rows[1].messages is None
     since = datetime(2026, 1, 1, tzinfo=UTC)
     assert await store.spent_usd(since) == pytest.approx(0.5012345)
     assert await store.spent_usd(datetime(2999, 1, 1, tzinfo=UTC)) == 0

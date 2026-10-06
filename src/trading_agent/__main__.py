@@ -30,15 +30,23 @@ def main() -> None:
 
 
 def _settings() -> Settings:
+    from trading_agent import telemetry
     from trading_agent.log import configure_logging
 
     settings = Settings()  # pyright: ignore[reportCallIssue]  # required fields come from env/secrets
     configure_logging(settings.log_level)
+    telemetry.configure(
+        settings.trace_endpoint,
+        headers=settings.trace_headers,
+        environment=settings.trace_environment or settings.app_mode,
+    )
     return settings
 
 
 def _with_db[T](settings: Settings, job: Callable[["Sessions"], Awaitable[T]]) -> T:
-    """Runs `job` with a session factory on the configured database, then closes the pool."""
+    """Runs `job` with a session factory on the configured database, then closes the pool
+    and flushes the traces."""
+    from trading_agent import telemetry
     from trading_agent.db.session import create_engine, session_factory
 
     async def _run() -> T:
@@ -48,21 +56,30 @@ def _with_db[T](settings: Settings, job: Callable[["Sessions"], Awaitable[T]]) -
         finally:
             await engine.dispose()
 
-    return asyncio.run(_run())
+    try:
+        return asyncio.run(_run())
+    finally:
+        telemetry.shutdown()
 
 
 @app.command()
 def run() -> None:
     """Start the agent: scheduler and jobs, until SIGTERM/SIGINT."""
+    from trading_agent import telemetry
     from trading_agent.data.universe import load_universe
     from trading_agent.scheduler import serve
     from trading_agent.settings import load_data_config, load_schedule
 
     settings = _settings()
     cfg_dir = settings.config_dir
-    asyncio.run(
-        serve(settings, load_schedule(cfg_dir), load_data_config(cfg_dir), load_universe(cfg_dir))
-    )
+    try:
+        asyncio.run(
+            serve(
+                settings, load_schedule(cfg_dir), load_data_config(cfg_dir), load_universe(cfg_dir)
+            )
+        )
+    finally:
+        telemetry.shutdown()
 
 
 @app.command()
@@ -220,14 +237,15 @@ def analyse(
     top: int | None = TopOption,
 ) -> None:
     """LLM technical and earnings analysis of today's top baseline setups (or given symbols)."""
-    from trading_agent import jobs
+    from trading_agent import jobs, telemetry
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> jobs.ScanResult:
         ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
-        return await jobs.analyse(ctx, symbols or None, market, top)
+        with telemetry.root_span("cli analyse", tags=("cli",)):
+            return await jobs.analyse(ctx, symbols or None, market, top)
 
     result = _with_db(settings, _run)
     for item in result.items:
@@ -262,14 +280,15 @@ def propose(
     market: Literal["US", "EU"] | None = MarketOption,
 ) -> None:
     """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
-    from trading_agent import jobs, pipeline
+    from trading_agent import jobs, pipeline, telemetry
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> pipeline.ProposalRun:
         ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
-        return await pipeline.propose(ctx, market, symbols or None)
+        with telemetry.root_span(f"cli propose {market or 'all'}", tags=("cli",)):
+            return await pipeline.propose(ctx, market, symbols or None)
 
     result = _with_db(settings, _run)
     typer.echo(pipeline.summary(result, market))

@@ -15,7 +15,9 @@ class MemoryStore:
     async def cached(self, input_hash: str) -> StoredAnalysis | None:
         for i, a in self.analyses.items():
             if a.input_hash == input_hash:
-                return StoredAnalysis(id=i, output=a.output, issues=a.issues, status=a.status)
+                return StoredAnalysis(
+                    id=i, output=a.output, issues=a.issues, status=a.status, trace_id=a.trace_id
+                )
         return None
 
     async def save(self, analysis: AnalysisRecord | None, calls: Sequence[LlmCall]) -> int | None:

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +7,7 @@ import pytest
 from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from trading_agent import telemetry
 from trading_agent.llm.models import build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import AnalysisModule, LlmRunner
@@ -22,12 +24,18 @@ INPUTS: dict[str, type[TechnicalInput] | type[EarningsInput]] = {
 
 
 class EvalKeys(BaseSettings):
-    """Only the LLM settings, from the environment or ./.env (no database needed)."""
+    """Only the LLM and tracing settings, from the environment, ./.env or ./secrets."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        secrets_dir=ROOT / "secrets" if (ROOT / "secrets").is_dir() else None,
+    )
 
     gemini_api_key: SecretStr | None = None
     llm_dev_overrides: bool = False
+    trace_endpoint: str = "https://cloud.langfuse.com/api/public/otel/v1/traces"
+    trace_headers: SecretStr | None = None
 
 
 def _case(path: Path) -> dict[str, Any]:
@@ -64,17 +72,22 @@ def test_there_are_about_thirty_cases() -> None:
 
 
 @pytest.fixture(scope="module")
-def runner() -> LlmRunner:
+def runner() -> Iterator[LlmRunner]:
     keys = EvalKeys()
     if keys.gemini_api_key is None or not keys.gemini_api_key.get_secret_value():
         pytest.skip("GEMINI_API_KEY is not set")
+    provider = telemetry.configure(
+        keys.trace_endpoint, headers=keys.trace_headers, environment="evals"
+    )
     # A fresh in-memory store: evals always call the model, never the cache.
-    return LlmRunner(
+    yield LlmRunner(
         load_models_config(ROOT / "config"),
         MemoryStore(),
         lambda name: build_model(name, gemini_api_key=keys.gemini_api_key),
         dev_overrides=keys.llm_dev_overrides,
+        tracer_provider=provider,
     )
+    telemetry.shutdown()
 
 
 @pytest.mark.llm
@@ -84,10 +97,12 @@ async def test_golden_case(
 ) -> None:
     case = _case(path)
     inp = INPUTS[case["module"]].model_validate(case["input"])
-    out = await runner.run(_modules()[case["module"]], inp, instrument_id=None, as_of=inp.as_of)
+    name = f"{case['module']}/{path.stem}"
+    with telemetry.root_span(f"eval {name}", tags=("eval",)):
+        out = await runner.run(_modules()[case["module"]], inp, instrument_id=None, as_of=inp.as_of)
     eval_results.append(
         {
-            "case": f"{case['module']}/{path.stem}",
+            "case": name,
             "status": out.status,
             "summary": _summary(out.output),
             "issues": [i.code for i in out.issues],

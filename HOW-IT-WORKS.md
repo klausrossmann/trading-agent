@@ -515,7 +515,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 
 What each page shows and where to find what: [RUNNING.md](RUNNING.md) sections 1 and 2.
 
-Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
+Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full, every attempt with its prompts and answers, and a link to the run's trace in Langfuse), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
 
 ### 11.4 Daily routine (about 1 hour)
 
@@ -547,6 +547,10 @@ Open it on your phone (or any device in your tailnet) through Tailscale. Pages: 
 | `LLM_DEV_OVERRIDES` | `true` | `true`: the critic runs on Gemini (`dev_overrides` in `models.yaml`). `false` once an Anthropic key exists. |
 | `LLM_FAKE` | `false` | `true` only in the local test stack (`make dev-up`): every AI role gets canned, rule-following answers and no API is called. Never on the Zenbook. |
 | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | | AI provider keys. Without a key, that provider's roles can't run. |
+| `TRACE_ENDPOINT` | Langfuse EU | Where each run's trace goes ([OBSERVABILITY.md](OBSERVABILITY.md)). Tracing starts with the agent as soon as the Langfuse keys are in `secrets/trace_headers` (`make trace-headers`); `TRACE_ENDPOINT=` (empty) switches it off. Every AI call is stored in the database either way. |
+| `TRACE_CONTENT` | `true` | `false`: the traces keep timings and tokens but no prompts or answers |
+| `TRACE_ENVIRONMENT` | empty | Label in Langfuse; empty means `APP_MODE` (`paper`) |
+| `TRACE_UI_URL` | your project | Langfuse project address for the "Open trace" links (dashboard, `/why`) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID` | | Your bot and your chat. Without the chat id, every message is ignored. |
 | `FRED_API_KEY` | | US macro data; skipped without it |
 | `FINNHUB_API_KEY` | | News for held US positions; without it, no news triage and fewer position reviews |

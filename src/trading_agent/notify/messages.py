@@ -149,6 +149,7 @@ class StatusSnapshot:
     gateway: str = "disabled (IB_ENABLED=false)"
     kill_switch: str = "unknown"
     interlock: str | None = None  # live mode only
+    tracing: str = "off"
 
 
 def render_status(s: StatusSnapshot) -> str:
@@ -172,6 +173,7 @@ def render_status(s: StatusSnapshot) -> str:
         f"IB Gateway: {s.gateway}",
         f"Kill switch: {s.kill_switch}",
         *([f"Live interlock: {s.interlock}"] if s.interlock else []),
+        f"LLM tracing: {s.tracing}",
         "LLM spend: /budget",
     ]
     return "\n".join(lines)

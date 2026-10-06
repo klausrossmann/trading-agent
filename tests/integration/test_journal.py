@@ -12,6 +12,8 @@ from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
 from trading_agent.db import proposals as repo
 from trading_agent.db import trades as trades_repo
+from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.domain.analysis import AnalysisRecord
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Check, RiskDecision
@@ -110,6 +112,40 @@ async def test_review_steps_through_the_latest_proposals(sessions: Sessions) -> 
     why = str(await cmds["why"].run(["aaa"]))
     assert why.endswith("Your label: disagree (Too extended.)")
     assert await cmds["why"].run(["ZZZ"]) == "No proposal for ZZZ."
+
+
+async def test_why_links_the_trace_of_the_proposer(sessions: Sessions) -> None:
+    _, ids = await _seed(sessions)
+    trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    analysis_id = await DbAnalysisStore(sessions).save(
+        AnalysisRecord(
+            module="proposer",
+            prompt_version=2,
+            model="google:m",
+            instrument_id=ids["BBB"],
+            as_of=DAY,
+            input_hash="h-bbb",
+            input={},
+            output={},
+            issues=(),
+            status="ok",
+            cost_usd=0.001,
+            trace_id=trace_id,
+        ),
+        [],
+    )
+    assert analysis_id is not None
+    async with sessions.begin() as s:
+        p = _proposal(ids["BBB"], "BBB", "no_trade", None, DAY)
+        await repo.save_proposals(s, [p.model_copy(update={"analyses": {"proposer": analysis_id}})])
+    review = journal.Review(sessions)
+    url = "https://cloud.langfuse.com/project/p1"
+    why = str(await journal.commands(sessions, review, url)["why"].run(["BBB"]))
+    assert why.endswith(f"\nTrace: {url}/traces/{trace_id}")
+    plain = str(await journal.commands(sessions, review)["why"].run(["BBB"]))
+    assert "Trace:" not in plain
+    no_trace = str(await journal.commands(sessions, review, url)["why"].run(["AAA"]))
+    assert "Trace:" not in no_trace
 
 
 async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> None:

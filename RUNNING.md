@@ -32,6 +32,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 | What happens next, and when? | Telegram `/status` → Next jobs; the daily schedule in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4 |
 | What did the agent propose today? | Telegram 🧠 messages, `/proposals`; dashboard → **Proposals** |
 | Why did it propose (or skip) a stock? | Telegram `/why SYMBOL`; dashboard → **Proposals** (details) and **Analyses** (every AI answer in full) |
+| Exactly what the AI was asked and answered, step by step | Dashboard → **Analyses** → Details → LLM calls (kept for good); **Open trace** there, under Proposals or in `/why` shows the whole run in Langfuse (cloud.langfuse.com → project `trading-agent` → Tracing, last 30 days; [OBSERVABILITY.md](OBSERVABILITY.md)) |
 | What was ordered, and what was rejected? | Telegram 📤 messages; dashboard → **Risk** → Rejections |
 | What does it hold, and how is it doing? | Telegram `/positions`, `/pnl`; dashboard → **Positions**, **Overview** |
 | Closed trades | Dashboard → **Journal** |
@@ -70,7 +71,7 @@ Bookmark it on the phone. If `tailscale serve status` prints nothing, the dashbo
 | **Positions** | Open positions with entry, stop, target, last close, R now, P&L in EUR | "No open positions." |
 | **Journal** | Closed trades of all books, with filters for book, market and symbol | "No closed trades yet." |
 | **Proposals** | Every proposal: status (`proposed`, `blocked`, `no_trade`), rank, plan, confidence, your label. **Details**: thesis, invalidation, the critic's objections, the portfolio manager's note | Empty until the first scan (08:15) |
-| **Analyses** | Every AI answer: role, stock, status, model, cost; **Details**: the full answer and any check that failed | Empty until the first scan |
+| **Analyses** | Every AI answer: role, stock, status, model, cost; **Details**: the full answer, any check that failed, every attempt (LLM calls) with its prompts and answers, and **Open trace** | Empty until the first scan |
 | **Costs** | AI spend per month, role and model, and per day; broker fees per book | Empty until the first AI call |
 | **Risk** | Kill switch; per sleeve how much of each limit is used (drawdown, day and week loss, positions, sector); correlation of the holdings; the risk engine's rejections of the last 30 days by check | Kill switch `active`; limits after the first end of day; "None." under rejections |
 | **Evaluation** | The go-live gate (days, trades, result after costs, better than the rule-based book), calibration of the AI's confidence, how often your labels were right | Every criterion not met yet |
@@ -100,7 +101,7 @@ The bot answers only your chat. It sends these messages by itself:
 
 | Command | What it does |
 |---|---|
-| `/status` | Running? Heartbeat, data dates, blocked stocks, next jobs, IBKR, kill switch |
+| `/status` | Running? Heartbeat, data dates, blocked stocks, next jobs, IBKR, kill switch, AI tracing |
 | `/proposals`, `/why SYMBOL` | Latest proposals; thesis, critique and plan for one |
 | `/review` | Label the latest proposals Agree / Disagree, optionally with a reason. Only for evaluation. |
 | `/positions`, `/pnl` | Open positions and pending entries; results for day, week, month, since start |
@@ -153,6 +154,12 @@ docker compose logs agent --since 24h | grep -E '"event": "(agent.started|schedu
 
 ```sh
 docker compose logs agent --since 24h | grep -E '"level": "(warning|error)"|Traceback|raised an exception'
+```
+
+**Everything one scan logged:** every line written during an AI run carries its `trace_id` (the ID at the end of the Langfuse trace address):
+
+```sh
+docker compose logs agent --since 24h | grep 670185b724af04833af8100411b608eb
 ```
 
 **The gateway's log without the noise:**
@@ -208,6 +215,7 @@ Run these once, in this order, and again when you suspect a problem in that area
 | 12 | A trading day | Watch Telegram (section 3) for two trading days | 🧠 📰 📤 🌙 at their times; 🟢 🔴 ⌛ when something fills. "No trades" is a valid day. | The whole chain runs by itself | ☐ |
 | 13 | IBKR orders | After a few stable days, with `/positions` empty: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17 | Orders at IBKR; the three chaos tests pass | No order is lost, duplicated or left without a stop | ☐ |
 | 14 | Paper phase | 3 months of daily routine | The Saturday report shows the go-live gate met | Ready for the go-live checklist ([IMPLEMENTATION.md](IMPLEMENTATION.md) section 18) | ☐ |
+| 15 | AI tracing | After setup step "Tracing" (9.3): `/status`; `docker compose run --rm agent trading-agent analyse --top 1`, then Langfuse → Tracing → Traces; dashboard → Analyses → Details → Open trace | `LLM tracing: on (cloud.langfuse.com, paper)`; a `cli analyse` trace (environment `paper`) with one step per AI answer; the dashboard shows the LLM calls with their messages and the link opens the trace | Every AI call is recorded and can be followed step by step | ☐ |
 
 **Test 9, kill switch** (not at 09:15 or 15:45):
 
@@ -294,6 +302,7 @@ git fetch origin && git reset --hard origin/main
 | IBKR paper account | IBKR's servers | Client Portal, IBKR app |
 | Code | GitHub (`klausrossmann/trading-agent`), copy on the Zenbook | `git pull` with a read-only deploy key |
 | Heartbeat | healthchecks.io | Its website (Checks) and alert e-mails; the ping URL only receives pings (3.1) |
+| AI traces | Langfuse Cloud, EU region (free plan, 30 days) | cloud.langfuse.com, project `trading-agent`; "Open trace" links on the dashboard and in `/why` |
 
 Nothing on the Zenbook accepts connections from the internet or the home network (`ufw`); other devices come in only through Tailscale.
 
@@ -304,6 +313,8 @@ Nothing on the Zenbook accepts connections from the internet or the home network
 | IBKR username and password | `.env` (`TWS_USERID`), `secrets/tws_password` | The gateway's automatic login in paper mode |
 | Database and VNC passwords | `secrets/` | Each container reads only its own |
 | API keys (Gemini, FRED, Finnhub, Telegram, heartbeat) | `.env` | The agent's outgoing calls |
+| Langfuse login | Your password manager | Looking at traces in the browser |
+| Langfuse API keys | `secrets/trace_headers` (`make trace-headers`) | The agent sending traces |
 | Backup decryption key | Only your password manager | Restoring an encrypted backup |
 
 `.env` and `secrets/` never go to GitHub and are readable only by `trader`.
@@ -323,6 +334,7 @@ Done on this Zenbook, except backups (9.4). For a new machine (e.g. the mini PC)
 | Telegram | Message the bot, `docker compose logs agent \| grep telegram.ignored`, put the `chat_id` into `TELEGRAM_OWNER_CHAT_ID`, `make up` | The bot answers only that chat |
 | Dashboard | `sudo tailscale serve --bg 8501` (as your desktop user) | Publishes the dashboard to your tailnet |
 | IBKR | `make tws-password`, then `.env` as below, `make up` | The gateway logs in to the paper account |
+| Tracing | cloud.langfuse.com → sign up (EU), project `trading-agent`, Project settings → API keys → create; then `make trace-headers` (paste public key, then secret key), `TRACE_UI_URL` in `.env`, `make up` | Each scan's AI calls become a trace in Langfuse; starts with the agent from then on ([OBSERVABILITY.md](OBSERVABILITY.md), Setup) |
 
 `.env`: write each value directly after `=`, without quotes, and never put a comment on the same line (Docker Compose would read the comment as the value).
 
@@ -338,6 +350,7 @@ Done on this Zenbook, except backups (9.4). For a new machine (e.g. the mini PC)
 | `IB_ENABLED` | `true` |
 | `IB_ORDERS_ENABLED` | `false` (simulator) until test 13 |
 | `IB_READ_ONLY_API` | `yes` until test 13 |
+| `TRACE_UI_URL` | `https://cloud.langfuse.com/project/<id>`: open the project in Langfuse and copy the address up to the project id |
 
 ### 9.4 Backups
 

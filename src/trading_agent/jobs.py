@@ -12,7 +12,7 @@ import httpx
 import structlog
 from pydantic_ai.models import Model
 
-from trading_agent import backtest
+from trading_agent import backtest, telemetry
 from trading_agent.agents import critic, portfolio, proposer
 from trading_agent.agents.critic import CriticAgent
 from trading_agent.agents.portfolio import PortfolioManagerAgent
@@ -69,6 +69,7 @@ class RuntimeState:
     gateway: Callable[[], str] | None = None  # IB Gateway status, when enabled
     kill_switch: Callable[[], Awaitable[str]] | None = None
     interlock: Callable[[], str | None] | None = None
+    tracing: str = "off"
 
 
 @dataclass
@@ -465,6 +466,7 @@ async def status_text(state: RuntimeState, sessions: Sessions, now: datetime | N
             **({"gateway": state.gateway()} if state.gateway else {}),
             **({"kill_switch": await state.kill_switch()} if state.kill_switch else {}),
             interlock=state.interlock() if state.interlock else None,
+            tracing=state.tracing,
         )
     )
 
@@ -506,6 +508,8 @@ class AnalysisContext:
             DbAnalysisStore(sessions),
             factory,
             dev_overrides=settings.llm_dev_overrides,
+            tracer_provider=telemetry.provider(),
+            trace_content=settings.trace_content,
         )
         p = backtest.load_backtest_config(cfg_dir).pullback
         risk = load_risk_config(cfg_dir)
@@ -620,13 +624,21 @@ async def analyse(
             history.instrument, history.frame, history.benchmark_close, ctx.rules
         )
         t_out = await ctx.runner.run(
-            ctx.technical, t_in, instrument_id=history.instrument_id, as_of=history.as_of
+            ctx.technical,
+            t_in,
+            instrument_id=history.instrument_id,
+            as_of=history.as_of,
+            subject=symbol,
         )
         e_in = earnings_module.compute(
             history.instrument, history.frame, history.events, ctx.holding_sessions
         )
         e_out = await ctx.runner.run(
-            ctx.earnings, e_in, instrument_id=history.instrument_id, as_of=history.as_of
+            ctx.earnings,
+            e_in,
+            instrument_id=history.instrument_id,
+            as_of=history.as_of,
+            subject=symbol,
         )
         items.append(SymbolAnalysis(symbol, history.instrument_id, t_in, t_out, e_in, e_out))
     result = ScanResult(mode, items, missing)
