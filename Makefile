@@ -1,7 +1,7 @@
 .PHONY: sync lint fmt test test-db secrets tws-password trace-headers dashboard-role build migrate up backup restore-check down logs deploy dev-up dev-backfill dev-logs dev-down
 
 ZENBOOK ?= zenbook
-# Checkout on the Zenbook, relative to trader's home
+# Checkout on the Zenbook, relative to the SSH user's home
 ZENBOOK_DIR ?= projects/trading-agent
 TEST_DB := ta-test-db
 # Risk engine and execution need 100 % branch coverage (IMPLEMENTATION.md 16.2).

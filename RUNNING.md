@@ -2,10 +2,9 @@
 
 How to watch, start, test, update and fix the app on the Zenbook. Day to day you need sections 1–3; the rest is for when you start, update or troubleshoot. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains how the system decides.
 
-Every command runs on the Zenbook as `trader` in the app's folder:
+Every command runs on the Zenbook as your normal user (a member of the `docker` group) in the app's folder:
 
 ```sh
-sudo -iu trader                 # the only user that may run Docker and read the keys
 cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 ```
 
@@ -272,7 +271,7 @@ git fetch origin && git reset --hard origin/main
 | Waits for "second factor" | Confirm the 2FA prompt in the IBKR app |
 | "Existing session" | The same username is logged in elsewhere; log out there |
 
-**8.3 The gateway's screen.** On the Zenbook desktop, open **Remmina**, protocol VNC, server `localhost:5900`. The password is the first 8 characters of the VNC secret: `sudo head -c 8 ~trader/projects/trading-agent/secrets/vnc_password; echo`.
+**8.3 The gateway's screen.** On the Zenbook desktop, open **Remmina**, protocol VNC, server `localhost:5900`. The password is the first 8 characters of the VNC secret: `head -c 8 ~/projects/trading-agent/secrets/vnc_password; echo`.
 
 **8.4 `ibkr-check` times out.** The running agent uses client id 11; the check needs its own: `-e IB_CLIENT_ID=12`.
 
@@ -298,7 +297,7 @@ git fetch origin && git reset --hard origin/main
 | `dashboard` container | Zenbook, `127.0.0.1:8501` | Your tailnet via `tailscale serve` (https) |
 | `db` container (PostgreSQL) | Zenbook, only inside Docker | `docker compose exec db psql -U dashboard -d trading` (read-only) |
 | `ib-gateway` container | Zenbook; API port 4004 only inside Docker, VNC `127.0.0.1:5900` | The agent; Remmina on the Zenbook |
-| Zenbook shell | Zenbook | Its desktop; SSH only from the tailnet (`trader@100.116.207.96`) |
+| Zenbook shell | Zenbook | Its desktop; SSH only from the tailnet (`<user>@100.116.207.96`) |
 | IBKR paper account | IBKR's servers | Client Portal, IBKR app |
 | Code | GitHub (`klausrossmann/trading-agent`), copy on the Zenbook | `git pull` with a read-only deploy key |
 | Heartbeat | healthchecks.io | Its website (Checks) and alert e-mails; the ping URL only receives pings (3.1) |
@@ -317,7 +316,7 @@ Nothing on the Zenbook accepts connections from the internet or the home network
 | Langfuse API keys | `secrets/trace_headers` (`make trace-headers`) | The agent sending traces |
 | Backup decryption key | Only your password manager | Restoring an encrypted backup |
 
-`.env` and `secrets/` never go to GitHub and are readable only by `trader`.
+`.env` and `secrets/` never go to GitHub; `.env` is `chmod 600` and `secrets/` `chmod 700`.
 
 ### 9.3 One-time setup
 
@@ -355,8 +354,8 @@ Done on this Zenbook, except backups (9.4). For a new machine (e.g. the mini PC)
 ### 9.4 Backups
 
 ```sh
-sudo apt install age                         # as your desktop user
-age-keygen -o /tmp/age-key.txt               # as trader; prints "Public key: age1…"
+sudo apt install age
+age-keygen -o /tmp/age-key.txt               # prints "Public key: age1…"
 cat /tmp/age-key.txt                         # copy the whole content into your password manager
 shred -u /tmp/age-key.txt                    # the private key must not stay on the Zenbook
 nano .env                                    # BACKUP_AGE_RECIPIENT=age1…

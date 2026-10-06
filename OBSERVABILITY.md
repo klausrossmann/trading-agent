@@ -52,7 +52,7 @@ Why Langfuse Cloud: it's free, has no infrastructure to run, and keeps 30 days (
 ## Setup
 
 1. At [cloud.langfuse.com](https://cloud.langfuse.com), sign up and choose the **EU** region. Create the organisation, then the project `trading-agent`. Under **Project settings → API keys → Create**, keep the public key (`pk-lf-…`) and the secret key (`sk-lf-…`).
-2. On the Zenbook as `trader`: `git pull && make trace-headers`. Paste the public key, then the secret key (not echoed).
+2. On the Zenbook: `git pull && make trace-headers`. Paste the public key, then the secret key (not echoed).
 3. In `.env`: `TRACE_UI_URL=https://cloud.langfuse.com/project/<id>` (the project page's address up to the id).
 4. `make build && make migrate && make up`.
 5. Check: `/status` shows `LLM tracing: on (cloud.langfuse.com, paper)`. `docker compose run --rm agent trading-agent analyse --top 1` creates a `cli analyse` trace in Langfuse, and dashboard → Analyses → **Open trace** opens it.
