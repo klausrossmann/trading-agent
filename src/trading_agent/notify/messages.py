@@ -156,6 +156,8 @@ class StatusSnapshot:
     kill_switch: str = "unknown"
     interlock: str | None = None  # live mode only
     tracing: str = "off"
+    trace_ui_url: str = ""
+    dashboard_ui_url: str = ""
 
 
 def render_status(s: StatusSnapshot) -> str:
@@ -180,7 +182,10 @@ def render_status(s: StatusSnapshot) -> str:
         f"Kill switch: {s.kill_switch}",
         *([f"Live interlock: {s.interlock}"] if s.interlock else []),
         f"LLM tracing: {s.tracing}",
+        *([f"Tracing UI: {s.trace_ui_url}"] if s.trace_ui_url else []),
+        *([f"Dashboard: {s.dashboard_ui_url}"] if s.dashboard_ui_url else []),
         "LLM spend: /budget",
+        "Commands: /briefing, /proposals, /why SYMBOL, /review",
     ]
     return "\n".join(lines)
 

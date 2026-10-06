@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     trace_content: bool = True  # prompts and answers in the spans
     trace_environment: str | None = None  # default: APP_MODE
     trace_ui_url: str = ""  # e.g. https://cloud.langfuse.com/project/<id>, for links
+    dashboard_ui_url: str = ""  # e.g. https://agent.example.com, for /status links
 
     db_host: str = "db"
     db_port: int = 5432

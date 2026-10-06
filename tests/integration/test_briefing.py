@@ -157,3 +157,15 @@ async def test_status_from_database(book: jobs.BookContext) -> None:
     assert "Heartbeat: not configured" in text
     assert "last bars US 05 Oct, EU -" in text
     assert "not checked since start" in text
+
+
+async def test_status_from_database_with_links(book: jobs.BookContext) -> None:
+    state = jobs.RuntimeState(
+        mode="paper",
+        started_at=NOW - timedelta(minutes=30),
+        trace_ui_url="https://cloud.langfuse.com/project/p1",
+        dashboard_ui_url="https://agent.example.com",
+    )
+    text = await jobs.status_text(state, book.sessions, now=NOW)
+    assert "Tracing UI: https://cloud.langfuse.com/project/p1" in text
+    assert "Dashboard: https://agent.example.com" in text

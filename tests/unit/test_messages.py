@@ -99,6 +99,9 @@ def test_status_text() -> None:
     assert "ingest_eod_eu:2026-10-05 Mon 05 Oct 18:00" in text  # Berlin time
     assert "Kill switch: unknown" in text
     assert "LLM tracing: off" in text
+    assert "Commands: /briefing, /proposals, /why SYMBOL, /review" in text
+    assert "Tracing UI:" not in text
+    assert "Dashboard:" not in text
     assert "Live interlock" not in text
 
 
@@ -132,6 +135,26 @@ def test_kill_switch_texts() -> None:
     assert "Kill switch: paused (daily loss limit)" in status
     assert "Live interlock: waiting for /confirm_live CODE" in status
     assert "LLM tracing: on (cloud.langfuse.com, live)" in status
+
+
+def test_status_links() -> None:
+    now = datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
+    status = m.render_status(
+        m.StatusSnapshot(
+            mode="paper",
+            started_at=now,
+            now=now,
+            heartbeat_at=None,
+            heartbeat_ok=None,
+            last_bars={},
+            blocked={},
+            next_jobs=[],
+            trace_ui_url="https://cloud.langfuse.com/project/p1",
+            dashboard_ui_url="https://agent.example.com",
+        )
+    )
+    assert "Tracing UI: https://cloud.langfuse.com/project/p1" in status
+    assert "Dashboard: https://agent.example.com" in status
 
 
 def test_alerts() -> None:

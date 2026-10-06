@@ -313,7 +313,11 @@ async def serve(
             deactivated=sync.removed,
         )
         state = jobs.RuntimeState(
-            mode=settings.app_mode, started_at=datetime.now(UTC), tracing=telemetry.state()
+            mode=settings.app_mode,
+            started_at=datetime.now(UTC),
+            tracing=telemetry.state(),
+            trace_ui_url=settings.trace_ui_url,
+            dashboard_ui_url=settings.dashboard_ui_url,
         )
         book = jobs.BookContext.load(settings.config_dir, sessions, universe)
         analysis = jobs.AnalysisContext.build(settings, sessions, universe)

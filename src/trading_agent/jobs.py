@@ -70,6 +70,8 @@ class RuntimeState:
     kill_switch: Callable[[], Awaitable[str]] | None = None
     interlock: Callable[[], str | None] | None = None
     tracing: str = "off"
+    trace_ui_url: str = ""
+    dashboard_ui_url: str = ""
 
 
 @dataclass
@@ -468,6 +470,8 @@ async def status_text(state: RuntimeState, sessions: Sessions, now: datetime | N
             **({"kill_switch": await state.kill_switch()} if state.kill_switch else {}),
             interlock=state.interlock() if state.interlock else None,
             tracing=state.tracing,
+            trace_ui_url=state.trace_ui_url,
+            dashboard_ui_url=state.dashboard_ui_url,
         )
     )
 
