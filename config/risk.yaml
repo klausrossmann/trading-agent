@@ -25,7 +25,7 @@ per_trade:
   stop_atr_max: 4.0
 
 portfolio:
-  max_open_positions: 8
+  max_open_positions: 20
   max_sector_pct: 60
   max_correlated_cluster_pct: 60   # holdings with rho > 0.7 counted together
 
