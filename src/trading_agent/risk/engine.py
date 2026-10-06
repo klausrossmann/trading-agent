@@ -119,18 +119,31 @@ def _levels(
 
 
 def _sizing(
-    plan: _Plan, portfolio: PortfolioState, market: MarketSnapshot, limits: RiskConfig
+    proposal: Proposal,
+    plan: _Plan,
+    portfolio: PortfolioState,
+    market: MarketSnapshot,
+    limits: RiskConfig,
 ) -> tuple[Check, Sizing | None]:
+    # A proposal without a confidence gets the smallest position.
+    confidence = (
+        Decimal(str(proposal.confidence)) if proposal.confidence is not None else Decimal(0)
+    )
     sizing = position_size(
         entry=plan.entry,
         stop=plan.stop,
         settled_cash=portfolio.settled_cash_eur * market.eur_rate,
         eur_rate=market.eur_rate,
         limits=limits.sizing_limits(),
+        confidence=confidence,
     )
     if sizing.quantity == 0:
         return _check("sizing", [str(sizing.reason)]), None
-    return _check("sizing", [], f"{sizing.quantity} shares, {sizing.binding} limit binds"), sizing
+    detail = (
+        f"{sizing.quantity.normalize():f} shares, {sizing.binding} limit binds, "
+        f"conviction {sizing.conviction:.0%}"
+    )
+    return _check("sizing", [], detail), sizing
 
 
 def _fees(
@@ -238,7 +251,7 @@ def evaluate(
     if plan is None:
         checks += [_skip("sizing"), _skip("fees")]
     else:
-        sizing_check, sizing = _sizing(plan, portfolio, market, limits)
+        sizing_check, sizing = _sizing(proposal, plan, portfolio, market, limits)
         checks.append(sizing_check)
         if sizing is None:
             checks.append(_skip("fees"))

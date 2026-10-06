@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+QUANTITY_STEP = Decimal("0.0001")  # smallest tradable fraction of a share; matches Numeric(14, 4)
+
 
 def to_decimal(value: float, places: int = 4) -> Decimal:
     return Decimal(str(round(value, places)))

@@ -23,8 +23,14 @@ class Capital(_Strict):
 
 
 class PerTrade(_Strict):
+    # Risk and position size grow linearly with the agents' confidence: the minimum at
+    # min_confidence and below, the maximum at max_confidence and above.
+    min_risk_pct: Decimal = Field(gt=0, le=5)
     max_risk_pct: Decimal = Field(gt=0, le=5)
+    min_position_pct: Decimal = Field(gt=0, le=100)
     max_position_pct: Decimal = Field(gt=0, le=100)
+    min_confidence: Decimal = Field(ge=0, le=1)
+    max_confidence: Decimal = Field(ge=0, le=1)
     min_position_eur: Decimal = Field(ge=0)
     max_fee_to_risk_pct: Decimal = Field(gt=0)
     require_broker_side_stop: bool
@@ -38,6 +44,16 @@ class PerTrade(_Strict):
     def _stop_atr_range(self) -> "PerTrade":
         if self.stop_atr_min >= self.stop_atr_max:
             raise ValueError("stop_atr_min must be below stop_atr_max")
+        return self
+
+    @model_validator(mode="after")
+    def _size_ranges(self) -> "PerTrade":
+        if self.min_risk_pct > self.max_risk_pct:
+            raise ValueError("min_risk_pct must not exceed max_risk_pct")
+        if self.min_position_pct > self.max_position_pct:
+            raise ValueError("min_position_pct must not exceed max_position_pct")
+        if self.min_confidence >= self.max_confidence:
+            raise ValueError("min_confidence must be below max_confidence")
         return self
 
 
@@ -84,8 +100,12 @@ class RiskConfig(_Strict):
     def sizing_limits(self) -> SizingLimits:
         return SizingLimits(
             budget_eur=self.capital.agent_budget_eur,
+            min_risk_pct=self.per_trade.min_risk_pct,
             max_risk_pct=self.per_trade.max_risk_pct,
+            min_position_pct=self.per_trade.min_position_pct,
             max_position_pct=self.per_trade.max_position_pct,
+            min_confidence=self.per_trade.min_confidence,
+            max_confidence=self.per_trade.max_confidence,
             min_position_eur=self.per_trade.min_position_eur,
             cash_reserve_pct=self.capital.min_cash_reserve_pct,
         )

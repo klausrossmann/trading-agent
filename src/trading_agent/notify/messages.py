@@ -6,6 +6,7 @@ Privacy (IMPLEMENTATION.md 12.4): no account numbers or credentials; amounts in 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from trading_agent.domain.market import BERLIN
@@ -24,6 +25,11 @@ def money(eur: float, budget_eur: float) -> str:
 
 def pct(value: float) -> str:
     return f"{value:+.1f} %".replace("-", "−")
+
+
+def shares(quantity: Decimal | float) -> str:
+    """'2', '0.5', '12.3456': no trailing zeros."""
+    return format(Decimal(str(quantity)).normalize(), "f")
 
 
 def day_label(d: date) -> str:
@@ -434,7 +440,7 @@ def live_confirm_alert() -> str:
 @dataclass(frozen=True)
 class PlacedLine:
     symbol: str
-    quantity: int
+    quantity: Decimal
     entry: float
     stop: float
     target: float
@@ -445,7 +451,8 @@ def placement_summary(
 ) -> str:
     lines = [f"📤 Orders {market} ({broker})"]
     lines += [
-        f"  {p.symbol} {p.quantity} @ {p.entry:.2f}, stop {p.stop:.2f}, target {p.target:.2f}"
+        f"  {p.symbol} {shares(p.quantity)} @ {p.entry:.2f}, stop {p.stop:.2f}, "
+        f"target {p.target:.2f}"
         for p in placed
     ]
     if not placed:
@@ -454,12 +461,12 @@ def placement_summary(
     return "\n".join(lines)
 
 
-def fill_alert(symbol: str, quantity: int, price: float) -> str:
-    return f"🟢 Bought {symbol} {quantity} @ {price:.2f}"
+def fill_alert(symbol: str, quantity: Decimal, price: float) -> str:
+    return f"🟢 Bought {symbol} {shares(quantity)} @ {price:.2f}"
 
 
-def exit_alert(symbol: str, quantity: int, price: float, reason: str) -> str:
-    return f"🔴 Sold {symbol} {quantity} @ {price:.2f} ({reason})"
+def exit_alert(symbol: str, quantity: Decimal, price: float, reason: str) -> str:
+    return f"🔴 Sold {symbol} {shares(quantity)} @ {price:.2f} ({reason})"
 
 
 def entry_ended_alert(symbol: str, outcome: str) -> str:
@@ -480,7 +487,7 @@ def review_alert(symbol: str, confidence: float, reasons: str) -> str:
 @dataclass(frozen=True)
 class HeldLine:
     symbol: str
-    quantity: int
+    quantity: Decimal
     entry: float
     stop: float
     target: float
@@ -494,7 +501,7 @@ class HeldLine:
 @dataclass(frozen=True)
 class PendingLine:
     symbol: str
-    quantity: int
+    quantity: Decimal
     limit: float
     until: datetime
 
@@ -505,12 +512,12 @@ def render_positions(book: str, held: Sequence[HeldLine], pending: Sequence[Pend
     lines = [f"📊 {book}"]
     for h in held:
         lines.append(
-            f"  {h.symbol} {h.quantity} @ {h.entry:.2f}, stop {h.stop:.2f}, target {h.target:.2f}"
-            f", last {h.last:.2f}: {h.r_now:+.2f} R, {money(h.pnl_eur, h.budget_eur)}"
-            + (" (exit order out)" if h.exiting else "")
+            f"  {h.symbol} {shares(h.quantity)} @ {h.entry:.2f}, stop {h.stop:.2f}, "
+            f"target {h.target:.2f}, last {h.last:.2f}: {h.r_now:+.2f} R, "
+            f"{money(h.pnl_eur, h.budget_eur)}" + (" (exit order out)" if h.exiting else "")
         )
     lines += [
-        f"  pending {p.symbol} {p.quantity} limit {p.limit:.2f} until {when(p.until)}"
+        f"  pending {p.symbol} {shares(p.quantity)} limit {p.limit:.2f} until {when(p.until)}"
         for p in pending
     ]
     return "\n".join(lines)

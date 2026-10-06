@@ -30,7 +30,7 @@ PLACED = datetime(2026, 10, 5, 13, 45, tzinfo=UTC)
 DAY1 = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
 DAY2 = DAY1 + timedelta(days=1)
 DAY3 = DAY1 + timedelta(days=2)
-DECISION = RiskDecision(approved=True, checks=(), quantity=3)
+DECISION = RiskDecision(approved=True, checks=(), quantity=D(3))
 
 
 class Clock:
@@ -81,7 +81,7 @@ def _request(inst: Instrument, bracket_id: UUID) -> BracketRequest:
     return BracketRequest(
         id=bracket_id,
         instrument=inst,
-        quantity=3,
+        quantity=D(3),
         entry=D(100),
         stop=D(96),
         target=D(108),
@@ -205,3 +205,26 @@ async def test_invalid_broker_state_leaves_the_stored_orders(sessions: Sessions)
 async def _orders(sessions: Sessions, bid: UUID) -> list[tuple[OrderSpec, BrokerOrder, datetime]]:
     async with sessions() as s:
         return await repo.orders(s, [bid])
+
+
+async def test_fractional_bracket_round_trip(sessions: Sessions) -> None:
+    inst, (bid,) = await _seed(sessions, 1)
+    clock = Clock()
+    broker = SimBroker(clock=clock)
+    ex = Executor(sessions, broker, "agent_paper", clock)
+    quantity = D("2.5123")
+    req = _request(inst, bid).model_copy(update={"quantity": quantity})
+    await ex.submit(req, RiskDecision(approved=True, checks=(), quantity=quantity))
+    await ex.sync()
+
+    broker.on_bar(inst.id or 0, Bar(101, 102, 99, 101), DAY1)
+    clock.now = DAY1
+    [b] = await ex.sync()
+    assert (b.state, b.filled_qty) == ("filled", quantity)
+    broker.on_bar(inst.id or 0, Bar(103, 109, 102, 108), DAY2)
+    clock.now = DAY2
+    [b] = await ex.sync()
+    assert (b.state, b.exit_qty, b.exit_reason) == ("closed", quantity, "target")
+    async with sessions() as s:
+        fills = [f for b_, _, f in await repo.book_fills(s, "agent_paper") if b_ == bid]
+    assert [f.quantity for f in fills] == [quantity, quantity]

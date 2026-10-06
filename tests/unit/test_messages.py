@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 from trading_agent.domain.proposals import Proposal
@@ -11,6 +12,24 @@ def test_money_shows_euros_and_percent() -> None:
     assert m.money(-15.2, 1000) == "−€15.20 (−1.5 %)"
     assert m.money(0, 1000) == "€0.00 (0.0 %)"
     assert m.pct(-0.25) == "−0.2 %"
+
+
+def test_shares_drop_trailing_zeros() -> None:
+    assert [m.shares(Decimal(q)) for q in ("2", "2.0000", "0.5000", "12.3456", "100")] == [
+        "2",
+        "2",
+        "0.5",
+        "12.3456",
+        "100",
+    ]
+    assert m.shares(3.3) == "3.3"
+    assert m.fill_alert("AAA", Decimal("1.5000"), 100.05) == "🟢 Bought AAA 1.5 @ 100.05"
+    assert (
+        m.placement_summary(
+            "US", [m.PlacedLine("GOOG", Decimal("0.4321"), 300.0, 290.0, 320.0)], [], "simulator"
+        ).splitlines()[1]
+        == "  GOOG 0.4321 @ 300.00, stop 290.00, target 320.00"
+    )
 
 
 def _briefing(**kw: object) -> m.Briefing:

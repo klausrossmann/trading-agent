@@ -17,6 +17,7 @@ BracketState = Literal[
     "approved", "submitted", "working", "filled", "exiting", "closed", "expired", "cancelled"
 ]
 TERMINAL: frozenset[BracketState] = frozenset({"closed", "expired", "cancelled"})
+ZERO = Decimal(0)
 
 
 class _Frozen(BaseModel):
@@ -37,7 +38,7 @@ class OrderSpec(_Frozen):
     kind: OrderKind
     action: Literal["BUY", "SELL"]
     order_type: OrderType
-    quantity: int
+    quantity: Decimal
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
     tif: TimeInForce
@@ -51,7 +52,7 @@ class BrokerOrder(_Frozen):
 
     order_ref: str
     status: BrokerStatus
-    filled: int = 0
+    filled: Decimal = ZERO
     avg_fill_price: Decimal | None = None
     broker_order_id: int | None = None
     perm_id: int | None = None
@@ -61,7 +62,7 @@ class BrokerFill(_Frozen):
     exec_id: str
     order_ref: str
     ts: datetime
-    quantity: int
+    quantity: Decimal
     price: Decimal
     commission: Decimal | None = None
 
@@ -71,7 +72,7 @@ class BracketRequest(_Frozen):
 
     id: UUID  # the proposal's id, so one proposal can never become two brackets
     instrument: Instrument
-    quantity: int
+    quantity: Decimal
     entry: Decimal
     stop: Decimal
     target: Decimal
@@ -85,21 +86,21 @@ class Bracket(_Frozen):
     book: str
     instrument_id: int
     state: BracketState = "approved"
-    quantity: int
+    quantity: Decimal
     entry: Decimal
     stop: Decimal  # current protective stop
     initial_stop: Decimal
     target: Decimal
     expires: datetime
-    filled_qty: int = 0
+    filled_qty: Decimal = ZERO
     entry_price: Decimal | None = None  # average fill
-    exit_qty: int = 0
+    exit_qty: Decimal = ZERO
     exit_price: Decimal | None = None  # average fill
     exit_reason: str | None = None  # stop, target, time, invalidated, ...
     cancel_reason: str | None = None  # set when we asked the broker to cancel the entry
 
     @property
-    def open_qty(self) -> int:
+    def open_qty(self) -> Decimal:
         return self.filled_qty - self.exit_qty
 
 
@@ -116,7 +117,7 @@ class Acknowledged(_Frozen):
 
 class EntryFilled(_Frozen):
     kind: Literal["entry_filled"] = "entry_filled"
-    quantity: int
+    quantity: Decimal
     price: Decimal
 
 
@@ -139,7 +140,7 @@ class ExitRequested(_Frozen):
 
 class ExitFilled(_Frozen):
     kind: Literal["exit_filled"] = "exit_filled"
-    quantity: int
+    quantity: Decimal
     price: Decimal
     reason: str
 

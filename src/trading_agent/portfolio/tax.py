@@ -24,7 +24,7 @@ TAX_RATE = Decimal("0.25") * Decimal("1.055")  # Abgeltungsteuer plus SolidaritÃ
 class Sale:
     day: date
     symbol: str
-    quantity: int
+    quantity: Decimal
     bought: date
     cost_eur: Decimal  # average purchase cost incl. buy fees for the shares sold
     proceeds_eur: Decimal  # after sell fees
@@ -48,7 +48,7 @@ def sales(
     out: list[Sale] = []
     for b in brackets:
         entries = [f for f in by_bracket[b.id] if f.kind == "entry"]
-        bought = sum(f.quantity for f in entries)
+        bought = sum((f.quantity for f in entries), Decimal(0))
         if not bought:
             continue
         cost = sum(((f.quantity * f.price + f.fee) / f.eur_rate for f in entries), Decimal(0))
@@ -56,7 +56,7 @@ def sales(
         for f in by_bracket[b.id]:
             if f.kind == "entry" or f.day.year != year:
                 continue
-            share = Decimal(f.quantity) / bought
+            share = f.quantity / bought
             out.append(
                 Sale(
                     day=f.day,
@@ -98,7 +98,8 @@ def render(year: int, book: str, items: Sequence[Sale]) -> str:
         "| Sold | Symbol | Qty | Bought | Cost | Proceeds | Fees | Gain |",
         "|---|---|---|---|---|---|---|---|",
         *[
-            f"| {s.day} | {s.symbol} | {s.quantity} | {s.bought} | {s.cost_eur:.2f} | "
+            f"| {s.day} | {s.symbol} | {s.quantity.normalize():f} | {s.bought} | "
+            f"{s.cost_eur:.2f} | "
             f"{s.proceeds_eur:.2f} | {s.fees_eur:.2f} | {s.gain_eur:.2f} |"
             for s in items
         ],

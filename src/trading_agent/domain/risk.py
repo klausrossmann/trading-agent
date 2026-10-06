@@ -93,7 +93,7 @@ class RiskDecision(_Frozen):
     approved: bool
     checks: tuple[Check, ...]
     trip: Trip | None = None
-    quantity: int = 0
+    quantity: Decimal = ZERO
     entry: Decimal | None = None
     stop: Decimal | None = None
     target: Decimal | None = None

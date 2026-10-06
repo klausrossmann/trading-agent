@@ -27,9 +27,28 @@ from trading_agent.settings import load_fees
 D = Decimal
 CONFIG = Path(__file__).resolve().parents[3] / "config"
 FEES = load_fees(CONFIG)
-SLEEVES: dict[Market, RiskConfig] = {
-    ms[0]: cfg for ms, cfg in load_risk_config(CONFIG).sleeves(["US", "EU"], "paper")
-}
+REPO = load_risk_config(CONFIG)
+# The rules below are tested against fixed-size limits (confidence has no effect) in a EUR 1,000
+# US and a EUR 5,000 EU sleeve; the confidence scaling has its own tests with the repo's values.
+FIXED = REPO.model_copy(
+    update={
+        "capital": REPO.capital.model_copy(
+            update={"paper_budget_eur": {"US": D(1000), "EU": D(5000)}}
+        ),
+        "per_trade": REPO.per_trade.model_copy(
+            update={
+                "min_risk_pct": D("1.5"),
+                "max_risk_pct": D("1.5"),
+                "min_position_pct": D(30),
+                "max_position_pct": D(30),
+                "min_position_eur": D(200),
+            }
+        ),
+        "portfolio": REPO.portfolio.model_copy(update={"max_open_positions": 4}),
+        "execution": REPO.execution.model_copy(update={"max_orders_per_day": 6}),
+    }
+)
+SLEEVES: dict[Market, RiskConfig] = {ms[0]: cfg for ms, cfg in FIXED.sleeves(["US", "EU"], "paper")}
 OPEN = datetime(2026, 10, 5, 13, 30, tzinfo=UTC)  # NYSE 09:30 New York
 CLOSE = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
 NOW = OPEN + timedelta(minutes=30)
@@ -102,7 +121,7 @@ def outcome(decision: RiskDecision, name: str) -> tuple[str, str]:
 
 
 def test_approves_a_clean_proposal() -> None:
-    # B = 1100 USD: risk cap 16.5 / 4 = 4.1, position cap 330 / 100 = 3.3 -> 3 shares
+    # B = 1100 USD: risk cap 16.5 / 4 = 4.125, position cap 330 / 100 = 3.3 shares
     d = run()
     assert d.approved
     assert d.failures == []
@@ -117,10 +136,10 @@ def test_approves_a_clean_proposal() -> None:
         "loss_limits",
         "rate_limits",
     ]
-    assert (d.quantity, d.entry, d.stop, d.target) == (3, D(100), D(96), D(108))
-    assert (d.risk, d.value, d.fees) == (D(12), D(300), D("0.73"))
+    assert (d.quantity, d.entry, d.stop, d.target) == (D("3.3"), D(100), D(96), D(108))
+    assert (d.risk, d.value, d.fees) == (D("13.2"), D(330), D("0.75"))
     assert d.trip is None
-    assert outcome(d, "sizing") == ("pass", "3 shares, position limit binds")
+    assert outcome(d, "sizing") == ("pass", "3.3 shares, position limit binds, conviction 0%")
 
 
 def test_eu_uses_its_own_sleeve() -> None:
@@ -132,6 +151,35 @@ def test_eu_uses_its_own_sleeve() -> None:
     )
     assert d.approved
     assert d.quantity == 15
+
+
+@pytest.mark.parametrize(
+    ("confidence", "quantity", "detail"),
+    [
+        (0.2, D(11), "11 shares, position limit binds, conviction 0%"),  # 10 % of 11,000 USD
+        (0.45, D("19.25"), "19.25 shares, position limit binds, conviction 50%"),
+        (0.6, D("27.5"), "27.5 shares, position limit binds, conviction 100%"),
+        (0.9, D("27.5"), "27.5 shares, position limit binds, conviction 100%"),
+        (None, D(11), "11 shares, position limit binds, conviction 0%"),
+    ],
+)
+def test_the_more_confident_the_bigger_the_position(
+    confidence: float | None, quantity: Decimal, detail: str
+) -> None:
+    us = {ms[0]: cfg for ms, cfg in REPO.sleeves(["US", "EU"], "paper")}["US"]
+    d = evaluate(
+        PROPOSAL.model_copy(update={"confidence": confidence}),
+        LEVELS,
+        PORTFOLIO.model_copy(update={"settled_cash_eur": D(10000)}),
+        MARKET,
+        PAPER,
+        us,
+        FEES,
+        NOW,
+    )
+    assert d.approved
+    assert d.quantity == quantity
+    assert outcome(d, "sizing") == ("pass", detail)
 
 
 @pytest.mark.parametrize(
@@ -166,16 +214,16 @@ def test_eu_uses_its_own_sleeve() -> None:
         ({"market": {"atr": D("0.9")}}, "levels", "stop 4.44 ATR outside the bounds"),
         ({"market": {"mid": D(98)}}, "levels", "entry more than 1.0 % above mid"),
         ({"market": {"mid": D(96)}}, "levels", "price at or below the stop"),
-        ({"portfolio": {"settled_cash_eur": D(150)}}, "sizing", "no capacity (cash limit"),
-        ({"portfolio": {"settled_cash_eur": D(300)}}, "sizing", "below the minimum size"),
-        # risk 3 x 1 USD: fee cap 0.30 < 0.73
+        ({"portfolio": {"settled_cash_eur": D(100)}}, "sizing", "no capacity (cash limit"),
+        ({"portfolio": {"settled_cash_eur": D(290)}}, "sizing", "below the minimum size"),
+        # risk 3.3 x 1 USD: fee cap 0.33 < 0.75
         (
             {
                 "levels": {**LEVELS, "swing_low": D(99), "resistance": D(102)},
                 "market": {"atr": D("0.5")},
             },
             "fees",
-            "fees 0.73 above 0.30",
+            "fees 0.75 above 0.33",
         ),
         ({"portfolio": {"orders_today": 6}}, "rate_limits", "6 orders today"),
     ],
@@ -260,14 +308,14 @@ def test_max_open_positions_counts_pending_entries() -> None:
 
 
 def test_sector_cap() -> None:
-    # new 300 USD = 272.73 EUR; 272.73 + 330 > 600
+    # new 330 USD = 300 EUR; 300 + 330 > 600
     d = run(
         portfolio={"holdings": (holding(2, "Technology", "330"),)},
         market={"correlations": {2: 0.0}},
     )
-    assert outcome(d, "portfolio") == ("fail", "sector Technology would be 602.73 EUR")
+    assert outcome(d, "portfolio") == ("fail", "sector Technology would be 630.00 EUR")
     d = run(
-        portfolio={"holdings": (holding(2, "Technology", "320"),)},
+        portfolio={"holdings": (holding(2, "Technology", "290"),)},
         market={"correlations": {2: 0.0}},
     )
     assert d.approved
@@ -276,7 +324,7 @@ def test_sector_cap() -> None:
 def test_correlated_cluster_cap() -> None:
     other = (holding(2, "Energy", "330"),)
     d = run(portfolio={"holdings": other}, market={"correlations": {2: 0.71}})
-    assert outcome(d, "portfolio") == ("fail", "correlated cluster would be 602.73 EUR")
+    assert outcome(d, "portfolio") == ("fail", "correlated cluster would be 630.00 EUR")
     # without an estimate the holding counts as correlated
     assert not run(portfolio={"holdings": other}).approved
     assert run(portfolio={"holdings": other}, market={"correlations": {2: CLUSTER_RHO}}).approved
@@ -459,7 +507,7 @@ def test_no_approval_breaks_a_limit(s: dict[str, Any]) -> None:
     assert e <= m.mid * D("1.01")
     assert m.mid > st_
     # 4 sizing
-    assert q >= 1
+    assert q > 0
     assert q * (e - st_) <= D("0.015") * budget * rate
     assert q * e <= D("0.30") * budget * rate
     assert q * e <= pf.settled_cash_eur * rate - D("0.10") * budget * rate

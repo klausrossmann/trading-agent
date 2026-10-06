@@ -30,7 +30,7 @@ class Trade(BaseModel):
     signal_date: date
     entry_date: date
     entry_price: float
-    quantity: int
+    quantity: float
     stop: float  # initial stop
     target: float
     risk_eur: float  # quantity * (planned entry - stop), at the entry FX rate

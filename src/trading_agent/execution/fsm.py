@@ -28,12 +28,12 @@ def _require(b: Bracket, event: BracketEvent, *states: BracketState) -> None:
         raise InvalidTransition(f"{event.kind} in state {b.state}")
 
 
-def _quantity(q: int, available: int) -> None:
+def _quantity(q: Decimal, available: Decimal) -> None:
     if not 0 < q <= available:
-        raise InvalidTransition(f"quantity {q} outside 1..{available}")
+        raise InvalidTransition(f"quantity {q} outside 0..{available}")
 
 
-def _average(qty: int, price: Decimal | None, add_qty: int, add_price: Decimal) -> Decimal:
+def _average(qty: Decimal, price: Decimal | None, add_qty: Decimal, add_price: Decimal) -> Decimal:
     if price is None or qty == 0:
         return add_price
     return ((price * qty + add_price * add_qty) / (qty + add_qty)).quantize(PRICE)

@@ -31,13 +31,13 @@ def bracket(inst: int) -> Bracket:
         book="agent_live",
         instrument_id=inst,
         state="closed",
-        quantity=4,
+        quantity=D(4),
         entry=D(100),
         stop=D(96),
         initial_stop=D(96),
         target=D(108),
         expires=datetime(2027, 1, 1, tzinfo=UTC),
-        filled_qty=4,
+        filled_qty=D(4),
     )
 
 
@@ -46,7 +46,7 @@ def fill(b: Bracket, kind: str, qty: int, price: str, day: date, rate: str) -> B
         bracket_id=b.id,
         kind=kind,  # pyright: ignore[reportArgumentType]
         day=day,
-        quantity=qty,
+        quantity=D(qty),
         price=D(price),
         fee=D(1),
         eur_rate=D(rate),

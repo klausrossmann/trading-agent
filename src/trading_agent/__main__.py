@@ -373,7 +373,9 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
 
     result = _with_db(settings, _run)
     for p in result.placed:
-        typer.echo(f"placed {p.symbol} {p.quantity} @ {p.entry:.2f} (stop {p.stop:.2f})")
+        typer.echo(
+            f"placed {p.symbol} {p.quantity.normalize():f} @ {p.entry:.2f} (stop {p.stop:.2f})"
+        )
     for symbol, reason in result.rejected:
         typer.echo(f"not placed {symbol}: {reason}")
     if not result.placed and not result.rejected:

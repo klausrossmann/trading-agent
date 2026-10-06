@@ -80,13 +80,13 @@ def test_exit_spec_sells_the_open_quantity() -> None:
         book="agent_paper",
         instrument_id=7,
         state="filled",
-        quantity=3,
+        quantity=D(3),
         entry=D(100),
         stop=D(96),
         initial_stop=D(96),
         target=D(108),
         expires=DAY2,
-        filled_qty=2,
+        filled_qty=D(2),
     )
     spec = exit_spec(b, AAPL)
     assert (spec.kind, spec.order_type, spec.action, spec.quantity, spec.tif) == (
@@ -105,7 +105,7 @@ async def placed(req: BracketRequest, broker: SimBroker | None = None) -> SimBro
     return broker
 
 
-async def status(broker: SimBroker) -> dict[str, tuple[str, int, Decimal | None]]:
+async def status(broker: SimBroker) -> dict[str, tuple[str, Decimal, Decimal | None]]:
     return {
         o.order_ref.split(":")[1]: (o.status, o.filled, o.avg_fill_price)
         for o in await broker.orders()
@@ -208,13 +208,13 @@ async def test_market_exit_fills_at_the_open() -> None:
         book="agent_paper",
         instrument_id=7,
         state="filled",
-        quantity=3,
+        quantity=D(3),
         entry=D(100),
         stop=D(96),
         initial_stop=D(96),
         target=D(108),
         expires=DAY2,
-        filled_qty=3,
+        filled_qty=D(3),
     )
     await broker.place([exit_spec(b, AAPL)])
     broker.on_bar(7, Bar(103, 109, 95, 104), DAY2)
@@ -232,7 +232,10 @@ async def test_restore_continues_where_it_stopped() -> None:
             (
                 specs[0],
                 BrokerOrder(
-                    order_ref=specs[0].order_ref, status="filled", filled=3, avg_fill_price=D(100)
+                    order_ref=specs[0].order_ref,
+                    status="filled",
+                    filled=D(3),
+                    avg_fill_price=D(100),
                 ),
                 PLACED,
             ),

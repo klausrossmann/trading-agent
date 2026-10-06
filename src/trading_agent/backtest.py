@@ -199,7 +199,7 @@ class _Pending:
     signal_date: date
     signal_row: int
     plan: TradePlan
-    quantity: int
+    quantity: Decimal
     reserved_eur: float
     strategy: str
 
@@ -209,7 +209,7 @@ class _Position:
     data: InstrumentData
     signal_date: date
     plan: TradePlan
-    quantity: int
+    quantity: Decimal
     entry_date: date
     entry_row: int
     entry_price: float
@@ -234,7 +234,7 @@ class _Position:
             signal_date=self.signal_date,
             entry_date=self.entry_date,
             entry_price=self.entry_price,
-            quantity=self.quantity,
+            quantity=float(self.quantity),
             stop=self.plan.stop,
             target=self.plan.target,
             risk_eur=self.risk_eur,
@@ -335,7 +335,7 @@ def run(
         sell_fee = float(
             order_fees(fees, inst.market, "sell", pos.quantity, to_decimal(fill.price))
         )
-        proceeds_eur = to_eur(pos.quantity * fill.price - sell_fee, inst, day)
+        proceeds_eur = to_eur(float(pos.quantity) * fill.price - sell_fee, inst, day)
         cal = calendars.CALENDAR_BY_MARKET[inst.market]
         settles = calendars.session_offset(cal, day, SETTLEMENT_SESSIONS[inst.market])
         unsettled.append((settles, proceeds_eur))
@@ -390,7 +390,7 @@ def run(
                 continue
             pending.remove(order)
             buy_fee = float(order_fees(fees, inst.market, "buy", order.quantity, to_decimal(price)))
-            cost_eur = to_eur(order.quantity * price + buy_fee, inst, day)
+            cost_eur = to_eur(float(order.quantity) * price + buy_fee, inst, day)
             cash -= cost_eur
             pos = _Position(
                 data=order.data,
@@ -404,7 +404,7 @@ def run(
                 fees=buy_fee,
                 fees_eur=to_eur(buy_fee, inst, day),
                 cost_eur=cost_eur,
-                risk_eur=to_eur(order.quantity * order.plan.risk_per_share, inst, day),
+                risk_eur=to_eur(float(order.quantity) * order.plan.risk_per_share, inst, day),
                 strategy=order.strategy,
                 highest_close=order.data.bar(row).close,
             )
@@ -415,7 +415,8 @@ def run(
 
         # 3. Mark to market at the close
         held = sum(
-            to_eur(pos.quantity * pos.data.close_on(day), pos.data.instrument, day) for pos in open_
+            to_eur(float(pos.quantity) * pos.data.close_on(day), pos.data.instrument, day)
+            for pos in open_
         )
         equity[day] = eq = cash + sum(a for _, a in unsettled) + held
         invested[day] = held
@@ -515,7 +516,7 @@ def run(
             if round_trip_fees(fees, inst.market, q, entry, target) > fee_cap:
                 rejections["fees above limit"] += 1
                 continue
-            value_eur = q * plan.entry / rate
+            value_eur = float(q) * plan.entry / rate
             same_sector = sum(
                 o.reserved_eur for o in pending if o.data.instrument.sector == inst.sector
             ) + sum(pos.cost_eur for pos in open_ if pos.data.instrument.sector == inst.sector)
@@ -538,7 +539,7 @@ def run(
                 continue
             buy_fee = float(order_fees(fees, inst.market, "buy", q, entry))
             pending.append(
-                _Pending(x, day, row, plan, q, (q * plan.entry + buy_fee) / rate, strategy)
+                _Pending(x, day, row, plan, q, (float(q) * plan.entry + buy_fee) / rate, strategy)
             )
             held_returns[x.id] = mine
             placed += 1
@@ -552,7 +553,7 @@ def simulate_trade(
     x: InstrumentData,
     signal_row: int,
     plan: TradePlan,
-    quantity: int,
+    quantity: Decimal,
     cfg: BacktestConfig,
     fees: FeeSchedule,
     *,
@@ -572,7 +573,7 @@ def simulate_trade(
     ) -> Trade:
         e_row, e_day, e_price, buy_fee = entry
         e_rate = data.rate(inst.currency, e_day)
-        cost_eur = (quantity * e_price + buy_fee) / e_rate
+        cost_eur = (float(quantity) * e_price + buy_fee) / e_rate
         sell_fee = 0.0
         pnl = r = None
         if fill is not None:
@@ -580,8 +581,8 @@ def simulate_trade(
                 order_fees(fees, inst.market, "sell", quantity, to_decimal(fill.price))
             )
             x_rate = data.rate(inst.currency, day)
-            pnl = (quantity * fill.price - sell_fee) / x_rate - cost_eur
-        risk_eur = quantity * plan.risk_per_share / e_rate
+            pnl = (float(quantity) * fill.price - sell_fee) / x_rate - cost_eur
+        risk_eur = float(quantity) * plan.risk_per_share / e_rate
         if pnl is not None and risk_eur > 0:
             r = pnl / risk_eur
         return Trade(
@@ -594,7 +595,7 @@ def simulate_trade(
             signal_date=pd.Timestamp(x.frame.index[signal_row]).date(),
             entry_date=e_day,
             entry_price=e_price,
-            quantity=quantity,
+            quantity=float(quantity),
             stop=plan.stop,
             target=plan.target,
             risk_eur=risk_eur,

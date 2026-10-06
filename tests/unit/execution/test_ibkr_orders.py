@@ -29,7 +29,7 @@ GTD = datetime(2026, 10, 6, 20, 0, tzinfo=UTC)
 REQ = BracketRequest(
     id=uuid4(),
     instrument=AAPL,
-    quantity=3,
+    quantity=D(3),
     entry=D("100.05"),
     stop=D(96),
     target=D(108),

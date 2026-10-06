@@ -25,7 +25,7 @@ class BookFill:
     bracket_id: UUID
     kind: OrderKind
     day: date  # trade date at the exchange
-    quantity: int
+    quantity: Decimal
     price: Decimal
     fee: Decimal  # instrument currency: the broker's commission or the fees.yaml estimate
     eur_rate: Decimal  # instrument currency per EUR on that day
@@ -155,7 +155,7 @@ def trades(
                 signal_date=signal_date,
                 entry_date=first.day,
                 entry_price=float(b.entry_price),
-                quantity=b.filled_qty,
+                quantity=float(b.filled_qty),
                 stop=float(b.initial_stop),
                 target=float(b.target),
                 risk_eur=float(risk_eur),

@@ -301,7 +301,7 @@ costs:
   llm_budget_eur_month: 15         # lean mode at 80 %, no LLM calls at 100 %
 ```
 
-The file in the repo adds `capital.paper_budget_eur` (EU €5,000 in paper) and `per_trade.stop_atr_min`/`stop_atr_max` (1–4 ATR). [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.3 explains every key and which ones are not enforced yet.
+The file in the repo differs from this sample (changed 2026-10-06): fractional shares, a position size that grows with the agents' confidence (`per_trade.min_risk_pct`/`max_risk_pct` 0.75–1.5, `min_position_pct`/`max_position_pct` 10–25, `min_confidence`/`max_confidence` 0.30–0.60, `min_position_eur` 100), 8 open positions and 8 orders a day, `capital.paper_budget_eur` (US €10,000, EU €15,000 in paper) and `per_trade.stop_atr_min`/`stop_atr_max` (1–4 ATR). [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 12.3 explains every key and which ones are not enforced yet.
 
 ### 6.2 More safeguards
 - **Separate account or sub-account** that holds only the agent's budget. This is the hardest limit there is.

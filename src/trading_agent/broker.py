@@ -8,6 +8,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 import structlog
@@ -300,7 +301,7 @@ async def _order_test(link: BrokerLink, sessions: Sessions, symbol: str) -> list
         kind="entry",
         action="BUY",
         order_type="LMT",
-        quantity=1,
+        quantity=Decimal(1),
         limit_price=to_tick(mid / 2, False, ticks),
         tif="DAY",
     )

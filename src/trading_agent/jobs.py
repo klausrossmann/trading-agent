@@ -392,7 +392,8 @@ async def build_briefing(
                         symbol=inst.yahoo_symbol,
                         entry_date=r.entry_date,
                         r_now=(close - entry) / (entry - stop) if entry > stop else 0.0,
-                        pnl_eur=r.quantity * (close - entry) / (rate or 1.0) - float(r.fees_eur),
+                        pnl_eur=float(r.quantity) * (close - entry) / (rate or 1.0)
+                        - float(r.fees_eur),
                     )
                 )
             book_lines.append(

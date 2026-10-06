@@ -240,19 +240,21 @@ The proposals are stored and summed up in Telegram (🧠). This is the end of th
 | 2 | Global | The kill switch is active (not paused or halted); in live mode the live interlock is satisfied; the market is open, outside its first 15 and last 10 minutes |
 | 3 | Instrument | The market is allowed in this mode (live: US only); the stock is in the universe and not on the blacklist; price ≥ 5; average traded value ≥ 20 million; no earnings in the next 3 sessions |
 | 4 | Levels | Stop < entry < target; R:R ≥ 2; stop 1–4 ATR below the entry; entry at most 1 % above the current price; the current price above the stop |
-| 5 | Sizing | At least one share fits within all limits, and the position is worth at least €200 |
+| 5 | Sizing | Some shares fit within all limits (fractions are fine), and the position is worth at least €100 |
 | 6 | Fees | Estimated buy and sell fees are at most 10 % of the money at risk |
-| 7 | Portfolio | Fewer than 4 positions and pending entries; the sector stays ≤ 60 % of the budget; stocks that move together (correlation above 0.7) stay ≤ 60 % together |
+| 7 | Portfolio | Fewer than 8 positions and pending entries; the sector stays ≤ 60 % of the budget; stocks that move together (correlation above 0.7) stay ≤ 60 % together |
 | 8 | Loss limits | Today's loss < 3 %, this week's < 6 %, drawdown < 15 % of the budget |
-| 9 | Rate limits | Fewer than 6 orders today; the stock isn't already held or pending |
+| 9 | Rate limits | Fewer than 8 orders today; the stock isn't already held or pending |
 
-The **position size** is the largest whole number of shares that keeps all three limits:
+The **position size** is the largest number of shares, down to 0.0001 of a share, that keeps all three limits:
 
 $$
-\text{shares} = \left\lfloor \min\left(\frac{1.5\% \cdot \text{budget}}{\text{entry} - \text{stop}},\ \frac{30\% \cdot \text{budget}}{\text{entry}},\ \frac{\text{settled cash} - 10\% \cdot \text{budget}}{\text{entry}}\right) \right\rfloor
+\text{shares} = \min\left(\frac{r \cdot \text{budget}}{\text{entry} - \text{stop}},\ \frac{p \cdot \text{budget}}{\text{entry}},\ \frac{\text{settled cash} - 10\% \cdot \text{budget}}{\text{entry}}\right)
 $$
 
-In words: lose at most €15 if the stop is hit, put at most €300 into one stock, and always keep €100 in cash.
+The risk share $r$ and the position share $p$ grow with the agents' **confidence** (the proposer's, adjusted by the critic). The conviction $c$ is 0 at a confidence of 0.30 or lower and 1 at 0.60 or higher, linear in between; $r = 0.75\% + c \cdot 0.75\%$ and $p = 10\% + c \cdot 15\%$. A proposal without a confidence gets $c = 0$.
+
+In words, on a €1,000 budget: lose at most €7.50 (unsure) to €15 (sure) if the stop is hit, put €100 to €250 into one stock, and always keep €100 in cash. The `/status` check detail and the risk decision show the conviction used.
 
 ### Step 9: Place the order
 
@@ -315,7 +317,7 @@ The system buys a stock only if **all** of the following are true:
 7. The risk engine approved it the next morning, 15 minutes after the open (all 9 checks).
 8. During that session or the next one, the price dipped to the entry limit.
 
-If several proposals pass, they are placed in the portfolio manager's order until the limits are reached (4 positions, 6 orders a day, sector and cash limits).
+If several proposals pass, they are placed in the portfolio manager's order until the limits are reached (8 positions, 8 orders a day, sector and cash limits).
 
 ---
 
@@ -454,7 +456,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 | Safety net | What it does |
 |---|---|
 | **Stops at the broker** | Every position has a stop and a target at the broker from the moment it's bought, so a crash, a power cut or a reboot never leaves a position unprotected (once orders go to IBKR). |
-| **Hard limits in code** | €15 risk per trade, €300 per position, 4 positions, €100 cash reserve, sector and correlation caps, 6 orders a day. AI output can't change them. |
+| **Hard limits in code** | €7.50 to €15 risk per trade and €100 to €250 per position (by confidence), 8 positions, €100 cash reserve, sector and correlation caps, 8 orders a day. AI output can't change them. |
 | **Loss limits** | Down 3 % on a day: no new entries the next trading day. Down 6 % this week: none until Monday. Down 15 % from the peak: **halt** (see below). Measured every evening after the close (the account value at the closing prices), with a Telegram message, and checked again before each new trade. |
 | **Kill switch** | Three states: **active** (normal), **paused** (no new entries; via `/pause` or a daily or weekly loss limit), **halted** (no new entries, all unfilled entries cancelled; via `/stop`, the drawdown limit or a reconciliation mismatch). |
 | **Reset needs two keys** | A halt only ends with a code printed on the host (`trading-agent reset`), sent from your phone with `/reset CODE` within 15 minutes. A reset needs both the host and your phone. |
@@ -569,15 +571,16 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 |---|---|---|
 | `capital.agent_budget_eur` | 1000 | The money the agent may use, whatever the account really holds. All percentages below are of this amount. |
 | `capital.min_cash_reserve_pct` | 10 | Cash that is never spent (€100) |
-| `capital.paper_budget_eur` | EU: 5000 | Paper only: a separate simulated budget per market. Germany gets €5,000 because its minimum fees make €1,000 trades fail the fee check. |
+| `capital.paper_budget_eur` | US: 10000, EU: 15000 | Paper only: a separate simulated budget per market, so more trades fit. The budgets must differ: markets with the same budget share one account. Germany gets more because its minimum fees weigh more on small positions. |
 
 **Per trade**
 
 | Setting | Current | What it does | Higher means |
 |---|---|---|---|
-| `per_trade.max_risk_pct` | 1.5 | Most you can lose on one trade if the stop holds (€15) | Bigger positions, bigger losses per trade |
-| `per_trade.max_position_pct` | 30 | Most money in one stock (€300) | Fewer, larger positions; more expensive stocks become buyable |
-| `per_trade.min_position_eur` | 200 | Smallest position worth the fees | Fewer small trades |
+| `per_trade.min_risk_pct` / `max_risk_pct` | 0.75 / 1.5 | Most you can lose on one trade if the stop holds, at the lowest and the highest confidence (€7.50 to €15 on €1,000) | Bigger positions, bigger losses per trade |
+| `per_trade.min_position_pct` / `max_position_pct` | 10 / 25 | Most money in one stock at the lowest and the highest confidence (€100 to €250 on €1,000) | Larger positions, fewer at a time |
+| `per_trade.min_confidence` / `max_confidence` | 0.30 / 0.60 | The confidence at or below which positions are smallest, and at or above which they are largest. The proposer's confidence is the probability that the target is hit before the stop; with R:R 2 the break-even is 0.33 and most setups are 0.3 to 0.5. | A higher `max_confidence` makes full size rarer |
+| `per_trade.min_position_eur` | 100 | Smallest position worth the fees | Fewer small trades |
 | `per_trade.max_fee_to_risk_pct` | 10 | Reject if buy and sell fees exceed this share of the risk | More trades where fees eat the profit |
 | `per_trade.min_risk_reward` | 2.0 | Minimum (target − entry) ÷ (entry − stop). The AI is told this rule too. | Fewer trades with bigger targets, which are hit less often |
 | `per_trade.stop_atr_min` / `stop_atr_max` | 1.0 / 4.0 | Allowed stop distance in ATRs. Below 1 the stop sits in normal daily noise; above 4 the position gets very small. | |
@@ -588,7 +591,7 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 
 | Setting | Current | What it does |
 |---|---|---|
-| `portfolio.max_open_positions` | 4 | Positions plus pending entries at the same time |
+| `portfolio.max_open_positions` | 8 | Positions plus pending entries at the same time |
 | `portfolio.max_sector_pct` | 60 | Most of the budget in one sector, for example technology |
 | `portfolio.max_correlated_cluster_pct` | 60 | Most of the budget in stocks that move together (correlation of daily returns above 0.7 over 60 sessions). A stock without enough history counts as correlated. |
 
@@ -608,7 +611,7 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 | `instruments.min_price` | 5 | Lowest share price |
 | `instruments.min_avg_daily_dollar_volume` | 20,000,000 | Lowest 20-day average traded value, in the stock's currency |
 | `instruments.blacklist` | [] | Yahoo symbols that are never scanned or traded, e.g. `[TSLA, SAP.DE]` |
-| `execution.max_orders_per_day` | 6 | New brackets per day, across the whole book |
+| `execution.max_orders_per_day` | 8 | New brackets per day, across the whole book |
 | `execution.no_trading_first_minutes` / `last_minutes` | 15 / 10 | No new entries this close to the open or close |
 | `execution.no_new_entries_before_earnings_days` | 3 | No new entry if a report is this many sessions away or fewer |
 

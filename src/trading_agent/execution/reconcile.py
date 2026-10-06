@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from trading_agent.domain.broker import BrokerPosition
 
+TOLERANCE = 0.00005  # half of QUANTITY_STEP: floats from the broker vs the stored decimals
+
 
 @dataclass(frozen=True)
 class Mismatch:
@@ -39,6 +41,6 @@ def reconcile(
         p = held.get(conid)
         if p is None:
             missing.append(Mismatch(symbol, qty, 0.0))
-        elif p.quantity != qty:
+        elif abs(p.quantity - qty) > TOLERANCE:
             quantity.append(Mismatch(symbol, qty, p.quantity))
     return ReconcileReport(unknown, missing, quantity)

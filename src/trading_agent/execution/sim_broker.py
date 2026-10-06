@@ -17,6 +17,7 @@ from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, O
 from trading_agent.execution import sim
 
 PRICE = Decimal("0.0001")
+ZERO = Decimal(0)
 
 
 @dataclass
@@ -24,7 +25,7 @@ class _Order:
     spec: OrderSpec
     placed_at: datetime
     status: BrokerStatus = "working"
-    filled: int = 0
+    filled: Decimal = ZERO
     avg: Decimal | None = None
 
     def view(self) -> BrokerOrder:
@@ -94,7 +95,7 @@ class SimBroker:
         entry = kinds.pop("entry", None)
         return entry, kinds
 
-    def _fill(self, o: _Order, qty: int, price: float, at: datetime) -> None:
+    def _fill(self, o: _Order, qty: Decimal, price: float, at: datetime) -> None:
         p = to_decimal(price)
         o.avg = (
             p
@@ -114,7 +115,12 @@ class SimBroker:
         )
 
     def _exit(
-        self, exits: dict[OrderKind, _Order], kind: OrderKind, qty: int, price: float, at: datetime
+        self,
+        exits: dict[OrderKind, _Order],
+        kind: OrderKind,
+        qty: Decimal,
+        price: float,
+        at: datetime,
     ) -> None:
         self._fill(exits[kind], qty, price, at)
         _deactivate(exits.values())  # OCA
@@ -142,7 +148,7 @@ class SimBroker:
                     if hit is not None:
                         self._exit(exits, "stop", entry.filled, hit.price, at)
                 continue
-            held = (entry.filled if entry else 0) - sum(o.filled for o in exits.values())
+            held = (entry.filled if entry else ZERO) - sum((o.filled for o in exits.values()), ZERO)
             market = exits.get("exit")
             if held <= 0:
                 continue

@@ -3,12 +3,19 @@ capital:
   agent_budget_eur: 1000           # hard cap, also in paper (ignores the paper account's simulated balance)
   min_cash_reserve_pct: 10
   paper_budget_eur:                # paper only: separate notional sleeve per market (IMPLEMENTATION.md 19.1)
-    EU: 5000                       # Xetra minimum fees don't fit EUR 1,000
+    US: 10000                      # budgets must differ: markets with the same budget share one account
+    EU: 15000                      # Xetra minimum fees weigh more on small positions
 
 per_trade:
-  max_risk_pct: 1.5                # (entry - stop) * qty <= EUR 15
-  max_position_pct: 30             # few, larger positions keep minimum fees small relative to size
-  min_position_eur: 200
+  # Fractional shares: size grows linearly with the agents' confidence (proposer, adjusted by the
+  # critic) from the min values at min_confidence to the max values at max_confidence.
+  min_risk_pct: 0.75               # (entry - stop) * qty <= 0.75 % of the budget at min confidence
+  max_risk_pct: 1.5                # ... 1.5 % at max confidence (EUR 15 on EUR 1,000)
+  min_position_pct: 10             # entry * qty <= 10 % of the budget at min confidence
+  max_position_pct: 25             # ... 25 % at max confidence
+  min_confidence: 0.30             # break-even at reward to risk 2 is 0.33; most setups are 0.3-0.5
+  max_confidence: 0.60
+  min_position_eur: 100
   max_fee_to_risk_pct: 10          # reject if round-trip fees exceed 10 % of the money at risk
   require_broker_side_stop: true   # GTC stop at IBKR, so downtime never leaves a position unprotected
   order_type: limit_only
@@ -18,7 +25,7 @@ per_trade:
   stop_atr_max: 4.0
 
 portfolio:
-  max_open_positions: 4
+  max_open_positions: 8
   max_sector_pct: 60
   max_correlated_cluster_pct: 60   # holdings with rho > 0.7 counted together
 
@@ -38,7 +45,7 @@ instruments:                       # the universe itself is config/universe.yaml
 
 execution:
   routing: smart                   # IBKR Tiered pricing is not available for directed API orders
-  max_orders_per_day: 6
+  max_orders_per_day: 8
   no_trading_first_minutes: 15
   no_trading_last_minutes: 10
   no_new_entries_before_earnings_days: 3   # unless strategy == earnings

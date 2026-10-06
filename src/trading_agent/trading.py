@@ -448,7 +448,7 @@ async def expected_positions(ctx: TradingContext) -> dict[int, tuple[str, float]
         inst = loaded.instruments[b.instrument_id]
         if b.open_qty > 0 and inst.conid is not None:
             symbol, qty = out.get(inst.conid, (inst.yahoo_symbol, 0.0))
-            out[inst.conid] = (symbol, qty + b.open_qty)
+            out[inst.conid] = (symbol, qty + float(b.open_qty))
     return out
 
 
@@ -563,9 +563,9 @@ async def manual_exit(ctx: TradingContext, symbol: str) -> str:
         if b.state != "filled":
             return f"{inst.yahoo_symbol}: an exit is already under way ({b.state})."
         await ctx.executor.request_exit(b.id, "manual")
-        log.info("exit.manual", symbol=inst.yahoo_symbol, quantity=b.open_qty)
+        log.info("exit.manual", symbol=inst.yahoo_symbol, quantity=str(b.open_qty))
         return (
-            f"Exit order for {inst.yahoo_symbol}: sell {b.open_qty} at the market, "
-            "at the next open. Stop and target are cancelled when it fills."
+            f"Exit order for {inst.yahoo_symbol}: sell {messages.shares(b.open_qty)} at the "
+            "market, at the next open. Stop and target are cancelled when it fills."
         )
     return f"No open position in {wanted}."

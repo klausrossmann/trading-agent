@@ -5,7 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from trading_agent.domain.numbers import QUANTITY_STEP
+
 ZERO = Decimal(0)
+ONE = Decimal(1)
 
 Binding = Literal["risk", "position", "cash"]
 Rejection = Literal["invalid", "no_capacity", "below_minimum"]
@@ -15,8 +18,13 @@ class SizingLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     budget_eur: Decimal  # the agent's capital cap, also in paper
-    max_risk_pct: Decimal  # of budget, per trade: (entry - stop) * qty
-    max_position_pct: Decimal  # of budget, per position: entry * qty
+    # Risk and position caps run from min (at min_confidence) to max (at max_confidence).
+    min_risk_pct: Decimal  # of budget, per trade: (entry - stop) * qty
+    max_risk_pct: Decimal
+    min_position_pct: Decimal  # of budget, per position: entry * qty
+    max_position_pct: Decimal
+    min_confidence: Decimal
+    max_confidence: Decimal
     min_position_eur: Decimal
     cash_reserve_pct: Decimal  # of budget, never spent
 
@@ -24,18 +32,29 @@ class SizingLimits(BaseModel):
 class Sizing(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    quantity: int
+    quantity: Decimal  # shares, rounded down to QUANTITY_STEP
     binding: Binding | None  # the cap that limited the quantity
     rejection: Rejection | None = None
     reason: str | None  # why the quantity is 0
     risk: Decimal  # quantity * (entry - stop), instrument currency
     value: Decimal  # quantity * entry, instrument currency
+    conviction: Decimal = ONE  # 0 = smallest position the limits allow, 1 = largest
 
 
 def _rejected(rejection: Rejection, reason: str) -> Sizing:
     return Sizing(
-        quantity=0, binding=None, rejection=rejection, reason=reason, risk=ZERO, value=ZERO
+        quantity=ZERO, binding=None, rejection=rejection, reason=reason, risk=ZERO, value=ZERO
     )
+
+
+def conviction(confidence: Decimal | None, limits: SizingLimits) -> Decimal:
+    """0 at `min_confidence` rising linearly to 1 at `max_confidence`; None means full size."""
+    if confidence is None:
+        return ONE
+    span = limits.max_confidence - limits.min_confidence
+    if span <= 0:
+        return ONE if confidence >= limits.max_confidence else ZERO
+    return min(max((confidence - limits.min_confidence) / span, ZERO), ONE)
 
 
 def position_size(
@@ -45,10 +64,14 @@ def position_size(
     settled_cash: Decimal,
     eur_rate: Decimal,
     limits: SizingLimits,
+    confidence: Decimal | None = None,
 ) -> Sizing:
-    """Whole shares for a long trade.
+    """Fractional shares for a long trade.
 
-    q = floor(min(risk_pct * B / (E - S), position_pct * B / E, (cash - reserve) / E))
+    q = min(risk_pct * B / (E - S), position_pct * B / E, (cash - reserve) / E), rounded down
+
+    risk_pct and position_pct grow with the conviction c in [0, 1] derived from `confidence`:
+    pct = min_pct + c * (max_pct - min_pct).
 
     `settled_cash` is in the instrument currency; `eur_rate` converts EUR into it (units per
     1 EUR, 1 for EUR instruments). Returns quantity 0 with a reason instead of raising.
@@ -58,16 +81,19 @@ def position_size(
     if stop >= entry:
         return _rejected("invalid", "stop must be below entry for a long trade")
 
+    c = conviction(confidence, limits)
+    risk_pct = limits.min_risk_pct + c * (limits.max_risk_pct - limits.min_risk_pct)
+    position_pct = limits.min_position_pct + c * (limits.max_position_pct - limits.min_position_pct)
     budget = limits.budget_eur * eur_rate
     caps: dict[Binding, Decimal] = {
-        "risk": limits.max_risk_pct / 100 * budget / (entry - stop),
-        "position": limits.max_position_pct / 100 * budget / entry,
+        "risk": risk_pct / 100 * budget / (entry - stop),
+        "position": position_pct / 100 * budget / entry,
         "cash": (settled_cash - limits.cash_reserve_pct / 100 * budget) / entry,
     }
     binding = min(caps, key=lambda k: caps[k])
-    quantity = max(int(caps[binding].to_integral_value(rounding=ROUND_FLOOR)), 0)
+    quantity = max(caps[binding].quantize(QUANTITY_STEP, rounding=ROUND_FLOOR), ZERO)
     if quantity == 0:
-        return _rejected("no_capacity", f"no capacity ({binding} limit allows less than one share)")
+        return _rejected("no_capacity", f"no capacity ({binding} limit leaves no room)")
     value = entry * quantity
     if value < limits.min_position_eur * eur_rate:
         return _rejected(
@@ -79,4 +105,5 @@ def position_size(
         reason=None,
         risk=(entry - stop) * quantity,
         value=value,
+        conviction=c,
     )

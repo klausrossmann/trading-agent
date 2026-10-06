@@ -46,7 +46,7 @@ class FeeSchedule(_Frozen):
     markets: dict[Market, MarketFees]
 
 
-def _commission(rule: CommissionRule, quantity: int, value: Decimal) -> Decimal:
+def _commission(rule: CommissionRule, quantity: Decimal, value: Decimal) -> Decimal:
     fee = max(rule.per_share * quantity + rule.pct_of_value / 100 * value, rule.min)
     caps: list[Decimal] = []
     if rule.max is not None:
@@ -57,7 +57,7 @@ def _commission(rule: CommissionRule, quantity: int, value: Decimal) -> Decimal:
     return min([fee, *caps])
 
 
-def _third_party(rule: CommissionRule, quantity: int, value: Decimal) -> Decimal:
+def _third_party(rule: CommissionRule, quantity: Decimal, value: Decimal) -> Decimal:
     variable = rule.third_party_per_share * quantity + rule.third_party_pct_of_value / 100 * value
     return max(variable, rule.third_party_min) if variable > 0 else ZERO
 
@@ -66,7 +66,7 @@ def order_fees(
     schedule: FeeSchedule,
     market: Market,
     side: Literal["buy", "sell"],
-    quantity: int,
+    quantity: Decimal,
     price: Decimal,
 ) -> Decimal:
     """Estimated fees for one order in the instrument currency, rounded up to the cent."""
@@ -86,7 +86,7 @@ def order_fees(
 
 
 def round_trip_fees(
-    schedule: FeeSchedule, market: Market, quantity: int, entry: Decimal, exit_price: Decimal
+    schedule: FeeSchedule, market: Market, quantity: Decimal, entry: Decimal, exit_price: Decimal
 ) -> Decimal:
     return order_fees(schedule, market, "buy", quantity, entry) + order_fees(
         schedule, market, "sell", quantity, exit_price

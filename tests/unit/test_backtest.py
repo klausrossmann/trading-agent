@@ -18,7 +18,26 @@ from trading_agent.settings import load_fees
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = bt.BacktestConfig(baseline_book=bt.BaselineBook(start=date(2026, 1, 1)))
-RISK = load_risk_config(ROOT / "config")
+RISK_REPO = load_risk_config(ROOT / "config")
+# The hand-made paths expect fixed-size limits on a EUR 1,000 US account.
+RISK = RISK_REPO.model_copy(
+    update={
+        "capital": RISK_REPO.capital.model_copy(
+            update={"paper_budget_eur": {"US": Decimal(1000), "EU": Decimal(5000)}}
+        ),
+        "per_trade": RISK_REPO.per_trade.model_copy(
+            update={
+                "min_risk_pct": Decimal("1.5"),
+                "max_risk_pct": Decimal("1.5"),
+                "min_position_pct": Decimal(30),
+                "max_position_pct": Decimal(30),
+                "min_position_eur": Decimal(200),
+            }
+        ),
+        "portfolio": RISK_REPO.portfolio.model_copy(update={"max_open_positions": 4}),
+        "execution": RISK_REPO.execution.model_copy(update={"max_orders_per_day": 6}),
+    }
+)
 FEES = load_fees(ROOT / "config")
 DAYS = pd.bdate_range("2026-02-02", periods=45)  # row % 5 is the weekday, 0 = Monday
 SIGNAL = 19  # setup on bar 19 -> limit 50.10, stop 48.10 (2 x ATR 1), target 54.10
@@ -101,11 +120,12 @@ def test_target_hit() -> None:
     t = only_trade(result := run(x))
     assert (t.entry_date, t.exit_date) == (DAYS[20].date(), DAYS[21].date())
     assert t.entry_price == pytest.approx(50 * 1.0005)  # opened below the 50.10 limit
-    # risk cap 15 / 2.00 = 7.5 shares, position cap 300 / 50.10 = 5.99 -> 5 shares
-    assert t.quantity == 5
+    # risk cap 15 / 2.00 = 7.5 shares, position cap 300 / 50.10 = 5.988 shares
+    assert t.quantity == pytest.approx(5.988)
     assert t.exit_reason == "target"
     assert t.exit_price == pytest.approx(54.10 * 0.9995)
-    assert t.r_multiple == pytest.approx((t.pnl_net_eur or 0) / 10.0)
+    assert t.risk_eur == pytest.approx(5.988 * 2.0)
+    assert t.r_multiple == pytest.approx((t.pnl_net_eur or 0) / t.risk_eur)
     assert 1.8 < (t.r_multiple or 0) < 2.1
     assert_books_balance(result)
 
@@ -178,7 +198,7 @@ def test_external_signals_replace_the_baseline_setups() -> None:
 
 def test_max_open_positions_and_ranking() -> None:
     small = NO_CLUSTER.model_copy(
-        update={"per_trade": RISK.per_trade.model_copy(update={"max_position_pct": Decimal(25)})}
+        update={"per_trade": RISK.per_trade.model_copy(update={"max_position_pct": Decimal(22)})}
     )
     xs = [instrument(n, sector=f"S{n}") for n in range(1, 7)]
     result = run(*xs, risk=small)
@@ -188,16 +208,18 @@ def test_max_open_positions_and_ranking() -> None:
 
 
 def test_cash_reserve_limits_positions() -> None:
-    # 3 x ~EUR 251 reserved leaves (1000 - 753 - 100 reserve) / 50.10 = 2 shares < EUR 200
+    # 2 x EUR 300 reserved, then 3rd gets (1000 - 602 - 100 reserve) = 298; the 4th has nothing
+    # above the reserve
     xs = [instrument(n, sector=f"S{n}") for n in range(1, 7)]
     result = run(*xs, risk=NO_CLUSTER)
     assert {t.instrument_id for t in result.trades} == {4, 5, 6}
-    assert result.rejections["sizing: below_minimum"] == 3
+    assert result.rejections["sizing: no_capacity"] == 3
 
 
 def test_sector_cap() -> None:
     xs = [instrument(n, sector="Tech") for n in range(1, 4)]
-    result = run(*xs)
+    smaller = risk_with("per_trade", min_position_pct=Decimal(25), max_position_pct=Decimal(25))
+    result = run(*xs, risk=smaller)
     assert len(result.trades) == 2  # 2 x ~EUR 250 fits 60 % of EUR 1,000, a third does not
     assert result.rejections["sector cap"] == 1
 
@@ -355,12 +377,12 @@ def test_shadow_ignores_portfolio_capacity() -> None:
     assert len(trades) == 5
     assert rejections == {}
     t = trades[0]
-    assert (t.book, t.signal_date, t.entry_date, t.quantity) == (
+    assert (t.book, t.signal_date, t.entry_date) == (
         "agent_shadow",
         DAYS[22].date(),
         DAYS[23].date(),
-        5,
     )
+    assert t.quantity == pytest.approx(5.988)
     assert (t.exit_reason, t.holding_sessions) == ("time", 15)
 
 

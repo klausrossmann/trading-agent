@@ -50,7 +50,7 @@ def ib_order(spec: OrderSpec, order_id: int, parent_id: int, transmit: bool) -> 
     order = Order(
         orderId=order_id,
         action=spec.action,
-        totalQuantity=spec.quantity,
+        totalQuantity=float(spec.quantity),
         orderType=spec.order_type,
         tif=spec.tif,
         orderRef=spec.order_ref,
@@ -74,7 +74,7 @@ def _view(trade: Trade) -> BrokerOrder:
     return BrokerOrder(
         order_ref=trade.order.orderRef,
         status=STATUS.get(s.status, "pending"),
-        filled=int(s.filled),
+        filled=to_decimal(float(s.filled), 4),
         avg_fill_price=to_decimal(s.avgFillPrice) if s.filled else None,
         broker_order_id=trade.order.orderId or None,
         perm_id=trade.order.permId or None,
@@ -161,7 +161,7 @@ class IbkrBroker:
                 exec_id=f.execution.execId,
                 order_ref=f.execution.orderRef,
                 ts=f.time,
-                quantity=int(f.execution.shares),
+                quantity=to_decimal(float(f.execution.shares), 4),
                 price=to_decimal(f.execution.price),
                 commission=_commission(f.commissionReport.commission),
             )

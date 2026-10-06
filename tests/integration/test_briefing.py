@@ -138,7 +138,7 @@ async def test_briefing_from_database(book: jobs.BookContext) -> None:
     assert [(e.symbol, e.date) for e in b.earnings] == [("AAA", date(2026, 10, 8))]
     assert b.book is not None
     us = next(s for s in b.book if s.label == "US")
-    assert (us.closed_trades, us.closed_pnl_eur, us.budget_eur) == (1, 30.0, 1000)
+    assert (us.closed_trades, us.closed_pnl_eur, us.budget_eur) == (1, 30.0, 10000)
     (position,) = us.open
     # last close 131.9: (131.9 - 129.9) / 2 = +1 R; 10 x 2 USD / 1.25 - 0.64 fees
     assert position.r_now == pytest.approx(1.0)

@@ -196,6 +196,13 @@ def test_reconcile() -> None:
     assert reconcile(held[:1], {1: ("AAA", 5)}).clean
 
 
+def test_reconcile_compares_fractions_within_the_quantity_step() -> None:
+    held = [BrokerPosition(conid=1, symbol="AAA", currency="USD", quantity=2.5123, avg_cost=1)]
+    assert reconcile(held, {1: ("AAA", 2.5123)}).clean
+    assert reconcile(held, {1: ("AAA", 0.1 + 0.2 + 2.2123)}).clean  # float noise from summing
+    assert not reconcile(held, {1: ("AAA", 2.5124)}).clean
+
+
 class Inbox:
     def __init__(self) -> None:
         self.sent: list[str] = []

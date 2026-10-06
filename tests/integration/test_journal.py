@@ -192,7 +192,7 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
         "Risk engine: placed none",
         "  rejected AAA: portfolio: 4 positions and entries open",
         "agent_paper: 0 open",
-        "agent_shadow: 0 open; closed AAA +€12.30 (+1.2 %) (target)",
+        "agent_shadow: 0 open; closed AAA +€12.30 (+0.1 %) (target)",
         "baseline_sim: 0 open",
         "LLM today: $0.0000",
     ]

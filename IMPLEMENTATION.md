@@ -271,7 +271,7 @@ Rules:
 - Earnings: future dates the source no longer reports (moved announcements) are deleted. Announcement times are classified as before open, during, after close, or unknown.
 - Data quality checks run after each end-of-day ingestion (`trading-agent quality` on demand): missing sessions against the exchange calendar, bars on non-session dates, invalid OHLC, close-to-close jumps > 40 % (unadjusted splits), zero volume, stale data. Issues from the last 20 sessions mark the symbol as **blocked**; zero volume only blocks on the latest bar, because Yahoo's Xetra data has sporadic zero-volume days with valid prices. Blocked symbols are logged, sent to Telegram once (from M4) and listed in `/status` and the briefing. Gap: the scan's candidate list (`jobs.candidates`) only drops symbols without a bar for the latest session; it doesn't read the blocked list yet.
 - Backtests on current index members have **survivorship bias**. That is acceptable for a sanity check of the baseline, but not as proof of an edge.
-- Instruments must allow at least 2 whole shares within the maximum position size, unless fractional orders via the API turn out to work (to verify in milestone M6).
+- Quantities are fractional (`Numeric(14, 4)`, steps of 0.0001 share), so no instrument is excluded for its share price. Fractional orders and the GTC stop on a fractional position still have to be confirmed on the IBKR paper account (M8 step 5).
 
 ---
 
@@ -537,12 +537,12 @@ It is a pure function with no I/O and no LLM. Property-based tests (`hypothesis`
 4. **Sizing**:
 
 $$
-q = \left\lfloor \min\left(\frac{0.015 \cdot B}{E - S},\ \frac{0.30 \cdot B}{E},\ \frac{C_{settled} - R_{cash}}{E}\right) \right\rfloor
+q = \min\left(\frac{r \cdot B}{E - S},\ \frac{p \cdot B}{E},\ \frac{C_{settled} - R_{cash}}{E}\right)
 $$
 
-   where $B$ is the agent budget (€1,000, converted to the instrument currency), $E$ the entry price, $S$ the stop, $C_{settled}$ the settled cash, and $R_{cash}$ the 10 % cash reserve. The position value must be at least €200.
+   rounded down to 0.0001 share, where $B$ is the agent budget (converted to the instrument currency), $E$ the entry price, $S$ the stop, $C_{settled}$ the settled cash, and $R_{cash}$ the 10 % cash reserve. The risk share $r$ and the position share $p$ scale with the conviction $c \in [0, 1]$, which is linear in the proposal's confidence from 0 at `min_confidence` (0.30) to 1 at `max_confidence` (0.60): $r = r_{min} + c\,(r_{max} - r_{min})$ with 0.75 % to 1.5 %, and $p = p_{min} + c\,(p_{max} - p_{min})$ with 10 % to 25 % (`per_trade.*` in `risk.yaml`). The confidence is the proposer's probability that the target is hit before the stop, adjusted by the critic; a proposal without one gets $c = 0$, the rule-based baseline gets $c = 1$. The position value must be at least `min_position_eur` (€100). The sizing check's detail shows the shares, the binding limit and the conviction.
 5. **Fees**: estimated round-trip fees ≤ 10 % of $q \cdot (E - S)$.
-6. **Portfolio**: at most 4 open positions (including pending entries), sector ≤ 60 %, correlation cluster (ρ > 0.7 over 60 days) ≤ 60 %.
+6. **Portfolio**: at most 8 open positions (including pending entries), sector ≤ 60 %, correlation cluster (ρ > 0.7 over 60 days) ≤ 60 %.
 7. **Loss limits**: daily −3 %, weekly −6 %, drawdown −15 %. A breach blocks new entries; the drawdown limit also trips the kill switch.
 8. **Rate limits**: at most 6 orders per day, and no duplicate proposal for an instrument that already has an open position or order.
 
@@ -833,10 +833,10 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 
 ### 15.1 Zenbook preparation (once, on the existing Ubuntu desktop)
 
-Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a normal desktop for browsing; the stack runs alongside under its own user.
+Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a normal desktop for browsing; the stack runs alongside under the same user. (Revised 2026-10-06: a separate `trader` user was dropped.)
 
 1. Ubuntu version (`lsb_release -d`): 24.04 or 26.04 LTS stays as it is. 22.04: upgrade in place once with `sudo do-release-upgrade` (back up personal files first); older releases one LTS step at a time. At least 15 GB free (`df -h /`).
-2. A separate user `trader` runs the stack and owns `~/projects/trading-agent`, `.env` and `secrets/`. Only `trader` is in the `docker` group (that membership equals root rights); your own user browses as before and never gets the secrets.
+2. Your normal user runs the stack and owns `~/projects/trading-agent`, `.env` (`chmod 600`) and `secrets/` (`chmod 700`), and is in the `docker` group (that membership equals root rights). Anything running as this user can therefore read the secrets and control the stack; acceptable for paper trading, to be reconsidered for the live mini PC (15.4).
 3. Never sleep:
    - `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`
    - In `/etc/systemd/logind.conf`, set `HandleLidSwitch=ignore`, `HandleLidSwitchExternalPower=ignore` and `HandleLidSwitchDocked=ignore`, then reboot (restarting `systemd-logind` would end the desktop session). Screen blanking and locking stay on.
@@ -967,7 +967,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 
 > Status 2026-10-04: no step done yet (Zenbook not at hand); start at step 1. Steps 1–10 need about an hour plus the backfill; steps 11 and 12 a few minutes each; step 13 waits for the IBKR paper login.
 
-1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as `trader` (`sudo -iu trader`).
+1. **OS**: prepare the machine as in 15.1, plus `sudo apt install git make openssl curl`. All following steps run as your normal user.
 2. **Code**: the repo is private, so create a read-only deploy key (`ssh-keygen -t ed25519`, add the public key under GitHub → repo → Settings → Deploy keys), then `git clone git@github.com:klausrossmann/trading-agent.git ~/projects/trading-agent && cd ~/projects/trading-agent`.
 3. **Secrets**: `make secrets` creates the database passwords in `secrets/` (`postgres_password`, `agent_db_password`, `dashboard_db_password`).
 4. **Keys and `.env`**: `cp .env.example .env && chmod 600 .env`, then fill in:
@@ -998,7 +998,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
 16. **Backups** (M9):
     - Key pair on the Zenbook, private key only in your password manager: `age-keygen -o /tmp/age-key.txt`, copy the file's content into the password manager, `shred -u /tmp/age-key.txt`. The printed public key (`age1...`) goes into `.env` as `BACKUP_AGE_RECIPIENT`.
     - Optional: a second healthchecks.io check (daily, 2 h grace) as `BACKUP_HEARTBEAT_URL`.
-    - On the Zenbook as `trader`: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
+    - On the Zenbook: `sudo apt install age`, then `make backup` 📋 (prints `backup ok: ...`), `OFFSITE=1 make backup` (writes `backups/offsite/*.age`), and `make restore-check FILE=backups/<newest>.dump` 📋.
     - `crontab -e`: `15 3 * * * cd ~/projects/trading-agent && scripts/backup.sh >> backups/backup.log 2>&1`.
     - Decrypt test: paste the private key into `/tmp/age-key.txt`, `AGE_KEY=/tmp/age-key.txt make restore-check FILE=backups/offsite/<newest>.dump.age` 📋, `shred -u /tmp/age-key.txt`. The "restore on another machine" test of section 18 follows on the mini PC.
 17. **IBKR orders and chaos tests** (M8 step 5, after step 13 works; outside US hours for the switch, the tests during a session):
@@ -1094,7 +1094,7 @@ flowchart LR
 
 | # | Question | Answer | Consequence |
 |---|---|---|---|
-| 1 | Ubuntu on the Zenbook | Reinstall an LTS; keep it plugged in. Revised 2026-10-04: keep the existing desktop install (no USB stick; the notebook stays usable for browsing) | Existing Ubuntu desktop, upgraded in place if older than 24.04, stack under a separate `trader` user (15.1). Battery health is irrelevant as long as it stays plugged in. |
+| 1 | Ubuntu on the Zenbook | Reinstall an LTS; keep it plugged in. Revised 2026-10-04: keep the existing desktop install (no USB stick; the notebook stays usable for browsing) | Existing Ubuntu desktop, upgraded in place if older than 24.04, stack under the normal user (15.1; first planned under a separate `trader` user, dropped 2026-10-06). Battery health is irrelevant as long as it stays plugged in. |
 | 2 | Universe size | Start smaller | S&P 100 + DAX 40 (about 140 symbols); larger indices later (section 5) |
 | 3 | Telegram amounts | Both | `−€15.20 (−1.5 %)` format (12.4) |
 | 4 | IBKR account | Application started, not ready yet | M0–M5 don't need IBKR (`yfinance` + simulator). M6 starts once the paper login exists. |
@@ -1105,8 +1105,8 @@ flowchart LR
 
 | # | Question | Decision | Consequence |
 |---|---|---|---|
-| 1 | EU in paper: every Xetra trade fails the 10 % fee-to-risk rule at EUR 1,000 | (b) separate notional EU paper budget of EUR 5,000 | `capital.paper_budget_eur: {EU: 5000}` in `risk.yaml`. Paper books and backtests run one simulated account per budget sleeve (US EUR 1,000, EU EUR 5,000). Live rules are unchanged. |
-| 2 | 32 of 101 US stocks can't be bought within the EUR 300 position cap | Accepted | They stay unbuyable until fractional shares via the API are checked in M6. |
+| 1 | EU in paper: every Xetra trade fails the 10 % fee-to-risk rule at EUR 1,000 | (b) separate notional EU paper budget of EUR 5,000 | `capital.paper_budget_eur: {EU: 5000}` in `risk.yaml`. Paper books and backtests run one simulated account per budget sleeve (US EUR 1,000, EU EUR 5,000). Live rules are unchanged. Superseded on 2026-10-06: US EUR 10,000 and EU EUR 15,000 (the budgets must differ, or the markets share one account), 8 open positions, 8 orders a day. |
+| 2 | 32 of 101 US stocks can't be bought within the EUR 300 position cap | Accepted | They stay unbuyable until fractional shares via the API are checked in M6. Superseded on 2026-10-06: fractional quantities everywhere (migration `0012`), position size from 10 % to 25 % of the budget by confidence. |
 
 ### 19.2 Decisions for the risk engine (M8, 2026-10-04)
 

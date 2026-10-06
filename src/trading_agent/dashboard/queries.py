@@ -76,7 +76,7 @@ async def trades(s: AsyncSession) -> list[Trade]:
             signal_date=t.signal_date,
             entry_date=t.entry_date,
             entry_price=float(t.entry_price),
-            quantity=t.quantity,
+            quantity=float(t.quantity),
             stop=float(t.stop),
             target=float(t.target),
             risk_eur=float(t.risk_eur),
@@ -346,10 +346,10 @@ async def open_brackets(s: AsyncSession) -> pd.DataFrame:
             "currency": i.currency,
             "sector": i.sector or "-",
             "state": b.state,
-            "open_qty": b.filled_qty - b.exit_qty,
-            "pending_qty": b.quantity - b.filled_qty
+            "open_qty": float(b.filled_qty - b.exit_qty),
+            "pending_qty": float(b.quantity - b.filled_qty)
             if b.state in ("approved", "submitted", "working")
-            else 0,
+            else 0.0,
             "entry": float(b.entry),
             "entry_price": _float(b.entry_price),
         }

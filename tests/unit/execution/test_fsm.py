@@ -25,7 +25,7 @@ NEW = Bracket(
     id=uuid4(),
     book="agent_paper",
     instrument_id=1,
-    quantity=3,
+    quantity=D(3),
     entry=D(100),
     stop=D(96),
     initial_stop=D(96),
@@ -41,7 +41,7 @@ def run(b: Bracket, *events: BracketEvent) -> Bracket:
 
 
 WORKING = run(NEW, Submitted(), Acknowledged())
-FILLED = run(WORKING, EntryFilled(quantity=3, price=D("99.5")))
+FILLED = run(WORKING, EntryFilled(quantity=D(3), price=D("99.5")))
 
 
 def test_happy_path_to_target() -> None:
@@ -49,7 +49,7 @@ def test_happy_path_to_target() -> None:
     assert WORKING.state == "working"
     assert apply(WORKING, Acknowledged()) == WORKING
     assert (FILLED.state, FILLED.filled_qty, FILLED.entry_price) == ("filled", 3, D("99.5"))
-    closed = apply(FILLED, ExitFilled(quantity=3, price=D(108), reason="target"))
+    closed = apply(FILLED, ExitFilled(quantity=D(3), price=D(108), reason="target"))
     assert (closed.state, closed.exit_qty, closed.exit_price, closed.exit_reason) == (
         "closed",
         3,
@@ -59,16 +59,20 @@ def test_happy_path_to_target() -> None:
 
 
 def test_partial_fills_average_the_price() -> None:
-    b = run(WORKING, EntryFilled(quantity=1, price=D(100)), EntryFilled(quantity=2, price=D(99)))
+    b = run(
+        WORKING,
+        EntryFilled(quantity=D(1), price=D(100)),
+        EntryFilled(quantity=D(2), price=D(99)),
+    )
     assert (b.state, b.entry_price) == ("filled", D("99.3333"))
-    b = run(b, ExitFilled(quantity=1, price=D(96), reason="stop"))
+    b = run(b, ExitFilled(quantity=D(1), price=D(96), reason="stop"))
     assert (b.state, b.open_qty) == ("exiting", 2)
-    b = apply(b, ExitFilled(quantity=2, price=D(95), reason="stop"))
+    b = apply(b, ExitFilled(quantity=D(2), price=D(95), reason="stop"))
     assert (b.state, b.exit_price) == ("closed", D("95.3333"))
 
 
 def test_fill_straight_from_submitted() -> None:
-    assert run(NEW, Submitted(), EntryFilled(quantity=3, price=D(100))).state == "filled"
+    assert run(NEW, Submitted(), EntryFilled(quantity=D(3), price=D(100))).state == "filled"
 
 
 @pytest.mark.parametrize(("outcome"), ["expired", "cancelled"])
@@ -78,12 +82,12 @@ def test_unfilled_entry_ends(outcome: str) -> None:
 
 
 def test_partial_entry_is_kept_when_it_ends() -> None:
-    partial = apply(WORKING, EntryFilled(quantity=2, price=D(100)))
+    partial = apply(WORKING, EntryFilled(quantity=D(2), price=D(100)))
     assert partial.state == "working"
     kept = apply(partial, EntryEnded(outcome="expired"))
     assert (kept.state, kept.filled_qty, kept.open_qty) == ("filled", 2, 2)
     # stopped out while the entry still worked, then the entry ended: nothing is left
-    stopped = apply(partial, ExitFilled(quantity=2, price=D(96), reason="stop"))
+    stopped = apply(partial, ExitFilled(quantity=D(2), price=D(96), reason="stop"))
     assert stopped.state == "working"
     assert apply(stopped, EntryEnded(outcome="expired")).state == "closed"
 
@@ -103,7 +107,7 @@ def test_requested_exit_keeps_its_reason() -> None:
     exiting = apply(FILLED, ExitRequested(reason="time"))
     assert exiting.state == "exiting"
     assert apply(exiting, ExitRequested(reason="other")) == exiting
-    closed = apply(exiting, ExitFilled(quantity=3, price=D(101), reason="exit"))
+    closed = apply(exiting, ExitFilled(quantity=D(3), price=D(101), reason="exit"))
     assert (closed.state, closed.exit_reason) == ("closed", "time")
 
 
@@ -112,7 +116,7 @@ def test_stops_only_tighten() -> None:
     assert apply(FILLED, StopMoved(stop=D(96))).stop == D(96)
     with pytest.raises(InvalidTransition, match="only ever tightened"):
         apply(FILLED, StopMoved(stop=D(95)))
-    closed = apply(FILLED, ExitFilled(quantity=3, price=D(96), reason="stop"))
+    closed = apply(FILLED, ExitFilled(quantity=D(3), price=D(96), reason="stop"))
     with pytest.raises(InvalidTransition):
         apply(closed, StopMoved(stop=D(97)))
 
@@ -122,14 +126,14 @@ def test_stops_only_tighten() -> None:
     [
         (WORKING, Submitted()),
         (NEW, Acknowledged()),
-        (NEW, EntryFilled(quantity=1, price=D(100))),
-        (WORKING, EntryFilled(quantity=4, price=D(100))),
-        (WORKING, EntryFilled(quantity=0, price=D(100))),
-        (FILLED, EntryFilled(quantity=1, price=D(100))),
+        (NEW, EntryFilled(quantity=D(1), price=D(100))),
+        (WORKING, EntryFilled(quantity=D(4), price=D(100))),
+        (WORKING, EntryFilled(quantity=D(0), price=D(100))),
+        (FILLED, EntryFilled(quantity=D(1), price=D(100))),
         (WORKING, ExitRequested(reason="time")),
-        (WORKING, ExitFilled(quantity=1, price=D(96), reason="stop")),  # nothing filled yet
-        (FILLED, ExitFilled(quantity=4, price=D(96), reason="stop")),
-        (NEW, ExitFilled(quantity=1, price=D(96), reason="stop")),
+        (WORKING, ExitFilled(quantity=D(1), price=D(96), reason="stop")),  # nothing filled yet
+        (FILLED, ExitFilled(quantity=D(4), price=D(96), reason="stop")),
+        (NEW, ExitFilled(quantity=D(1), price=D(96), reason="stop")),
         (run(WORKING, EntryEnded(outcome="expired")), EntryEnded(outcome="expired")),
     ],
 )

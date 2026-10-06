@@ -183,11 +183,11 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     assert [p.symbol for p in result.placed] == ["AAA"]
     assert result.rejected == [("BBB", "levels: R:R 1.50 below 2.0")]
     assert (await trading.positions_text(ctx)).endswith(
-        "pending AAA 3 limit 100.00 until Thu 08 Oct 22:00"
+        "pending AAA 11 limit 100.00 until Thu 08 Oct 22:00"
     )
     assert inbox.sent[-1].splitlines()[:2] == [
         "📤 Orders US (simulator)",
-        "  AAA 3 @ 100.00, stop 96.00, target 108.00",
+        "  AAA 11 @ 100.00, stop 96.00, target 108.00",
     ]
     async with sessions() as s:
         stored = await book_repo.decisions(s, [p.id for p in await proposals_repo.proposals(s)])
@@ -197,22 +197,22 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     await _add_bar(sessions, ids["AAA"], _bar(TODAY, 100.5, 101, 99.5, 100))
     clock.eod(TODAY)
     await trading.end_of_day(ctx, "US")
-    assert inbox.sent[-1] == "🟢 Bought AAA 3 @ 100.05"
+    assert inbox.sent[-1] == "🟢 Bought AAA 11 @ 100.05"
     async with sessions() as s:
         [trade] = await trades_repo.book_trades(s, "agent_paper")
         history = await book_repo.equity_history(s, "agent_paper", "US")
-    assert (trade.quantity, trade.exit_date) == (3, None)
+    assert (trade.quantity, trade.exit_date) == (11, None)
     assert history[0][0] == TODAY
     cmds = trading.commands(ctx)
     positions = await cmds["positions"].run([])
     assert positions == (
-        "📊 agent_paper\n  AAA 3 @ 100.05, stop 96.00, target 108.00, last 100.00: -0.01 R, "
-        "−€0.14 (−0.0 %)"
+        "📊 agent_paper\n  AAA 11 @ 100.05, stop 96.00, target 108.00, last 100.00: -0.01 R, "
+        "−€0.50 (−0.0 %)"
     )
     pnl = str(await cmds["pnl"].run([]))
     assert pnl.splitlines()[0] == "💶 P&L agent_paper (equity at the last close)"
-    assert pnl.splitlines()[1].startswith("US (budget €1,000, Wed 7 Oct): day −€0.")
-    assert pnl.splitlines()[3].startswith("EU (budget €5,000, no close yet): day €0.00")
+    assert pnl.splitlines()[1].startswith("US (budget €10,000, Wed 7 Oct): day −€0.")
+    assert pnl.splitlines()[3].startswith("EU (budget €15,000, no close yet): day €0.00")
 
     day2 = date(2026, 10, 8)
     await _add_bar(sessions, ids["AAA"], _bar(day2, 101, 105, 100.5, 104))
@@ -225,7 +225,7 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     await _add_bar(sessions, ids["AAA"], _bar(day3, 101, 101.5, 99, 99.5))
     clock.eod(day3)
     await trading.end_of_day(ctx, "US")
-    assert inbox.sent[-1] == "🔴 Sold AAA 3 @ 100.00 (stop)"
+    assert inbox.sent[-1] == "🔴 Sold AAA 11 @ 100.00 (stop)"
     async with sessions() as s:
         [trade] = await trades_repo.book_trades(s, "agent_paper")
         history = await book_repo.equity_history(s, "agent_paper", "US")
@@ -237,7 +237,7 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA")])
     book = jobs.BookContext.load(ROOT / "config", sessions, universe)
     body = await reports.tax_report(book, 2026, "agent_paper")
-    assert "| 2026-10-09 | AAA | 3 | 2026-10-07 |" in body
+    assert "| 2026-10-09 | AAA | 11 | 2026-10-07 |" in body
     async with sessions() as s:
         assert [d for d, _ in await reports_repo.reports(s, "tax:agent_paper")] == [
             date(2026, 12, 31)
@@ -266,9 +266,9 @@ async def test_a_loss_at_the_close_pauses_the_next_session(sessions: Sessions) -
     clock.eod(TODAY)
     await trading.end_of_day(ctx, "US")
     assert (await ctx.center.kill_switch()).state == "active"
-    # a gap through the stop: 3 shares lose about 15 USD each, over 3 % of EUR 1,000
+    # a gap through the stop: 11 shares lose about 40 USD each, over 3 % of EUR 10,000
     day2 = date(2026, 10, 8)
-    await _add_bar(sessions, ids["AAA"], _bar(day2, 85, 86, 84, 85))
+    await _add_bar(sessions, ids["AAA"], _bar(day2, 60, 61, 59, 60))
     clock.eod(day2)
     await trading.end_of_day(ctx, "US")
     ks = await ctx.center.kill_switch()
@@ -293,7 +293,7 @@ async def test_time_stop_exits_at_the_next_open(sessions: Sessions) -> None:
     await _add_bar(sessions, ids["AAA"], _bar(day3, 102, 103, 101, 102))
     clock.eod(day3)
     await trading.end_of_day(ctx, "US")
-    assert inbox.sent[-1] == "🔴 Sold AAA 3 @ 101.95 (time)"
+    assert inbox.sent[-1] == "🔴 Sold AAA 11 @ 101.95 (time)"
     assert await ctx.executor.open_brackets() == []
 
 
@@ -428,10 +428,10 @@ async def test_news_review_and_manual_exit(sessions: Sessions) -> None:
     cmds = trading.commands(ctx)
     assert await cmds["exit"].run([]) == "Usage: /exit SYMBOL, e.g. /exit AAPL"
     assert await cmds["exit"].run(["ZZZ"]) == "No open position in ZZZ."
-    assert str(await cmds["exit"].run(["aaa"])).startswith("Exit order for AAA: sell 3 at the")
+    assert str(await cmds["exit"].run(["aaa"])).startswith("Exit order for AAA: sell 11 at the")
     assert await cmds["exit"].run(["AAA"]) == "AAA: an exit is already under way (exiting)."
     day2 = date(2026, 10, 8)
     await _add_bar(sessions, ids["AAA"], _bar(day2, 102, 103, 101, 102))
     clock.eod(day2)
     await trading.end_of_day(ctx, "US")
-    assert inbox.sent[-1] == "🔴 Sold AAA 3 @ 101.95 (manual)"
+    assert inbox.sent[-1] == "🔴 Sold AAA 11 @ 101.95 (manual)"
