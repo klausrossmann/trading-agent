@@ -1,72 +1,216 @@
 """Pure table transforms for the dashboard pages (no Streamlit, no DB)."""
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from trading_agent.data import calendars
 from trading_agent.domain.trading import Trade
-from trading_agent.evaluation import weekly
 from trading_agent.evaluation.kpi import trade_stats
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+# --- day view: one row per stock, one column per phase ---
+
+PHASES = ("screen", "technical", "earnings", "proposer", "critic", "rank", "risk", "order", "fill")
+COLUMNS = ("news", *PHASES, "position", "exit")
+SCREEN = COLUMNS.index("screen")
+COLUMN_OF = {
+    **{p: p for p in PHASES},
+    "news": "news",
+    "broker": "order",
+    "cancel": "fill",
+    "stop": "position",
+    "exit": "exit",
+}
+ICONS = {"passed": "✓", "stopped": "✗", "error": "⚠", "info": "·"}
+CELL_CHARS = 80
+
+
+def _cell(step: Mapping[str, Any]) -> str:
+    text = f"{ICONS[step['status']]} {step['summary']}"
+    return text if len(text) <= CELL_CHARS else text[: CELL_CHARS - 1] + "…"
+
+
+def day_table(steps: pd.DataFrame) -> pd.DataFrame:
+    """One row per stock of the day: each phase's outcome, how far it got and where it stopped.
+    A phase shows its last step; an `info` step never hides a decision or an error."""
+    rows: list[dict[str, Any]] = []
+    for (symbol, market), group in steps.groupby(["symbol", "market"], sort=False):
+        cells: dict[str, Any] = {}
+        for step in group.sort_values(["ts", "id"]).to_dict("records"):
+            column = COLUMN_OF[str(step["step"])]
+            known = cells.get(column)
+            if known is None or step["status"] != "info" or known["status"] == "info":
+                cells[column] = step
+        reached = max(COLUMNS.index(c) for c in cells)
+        last = cells[COLUMNS[reached]]
+        ids = [str(p) for p in group["proposal_id"] if p is not None and p == p]  # NaN != NaN
+        rows.append(
+            {
+                "symbol": symbol,
+                "market": market,
+                **{c: _cell(cells[c]) if c in cells else "" for c in COLUMNS},
+                "reached": COLUMNS[reached],
+                "stopped_at": COLUMNS[reached] if last["status"] in ("stopped", "error") else "",
+                "first": min(COLUMNS.index(c) for c in cells),
+                "proposal_id": ids[0] if ids else None,
+            }
+        )
+    columns = ["symbol", "market", *COLUMNS, "reached", "stopped_at", "first", "proposal_id"]
+    frame = pd.DataFrame(rows, columns=columns)
+    order = frame["reached"].map(COLUMNS.index)
+    return frame.assign(_order=-order).sort_values(["_order", "symbol"]).drop(columns="_order")
+
+
+def funnel(table: pd.DataFrame) -> pd.DataFrame:
+    """How many of the day's stocks got past each phase. A later step counts as past; a stock
+    that started later that day (e.g. only a fill) counts only from its first phase on. Only
+    screened stocks count as stocks: a news step alone (a held stock's news) doesn't."""
+    reached = table["reached"].map(COLUMNS.index)
+    rows = [{"phase": "stocks", "count": int((table["screen"] != "").sum())}]
+    for phase in PHASES:
+        i = COLUMNS.index(phase)
+        passed = table[phase].str.startswith((ICONS["passed"], ICONS["info"]))
+        past = (table["first"] <= i) & (passed | (reached > i))
+        rows.append({"phase": phase, "count": int(past.sum())})
+    return pd.DataFrame(rows, columns=["phase", "count"])
+
+
+ROW_FILTERS = (
+    "all stocks",
+    "past the screen",
+    "bought",
+    *(f"stopped at {p}" for p in PHASES),
+)
+
+
+def select_rows(table: pd.DataFrame, choice: str) -> pd.DataFrame:
+    if choice == "past the screen":
+        later = (table["screen"] == "") & (table["reached"].map(COLUMNS.index) > SCREEN)
+        return table[later | table["screen"].str.startswith(ICONS["passed"])]
+    if choice == "bought":
+        return table[table["fill"].str.startswith(ICONS["passed"])]
+    if choice.startswith("stopped at "):
+        return table[table["stopped_at"] == choice.removeprefix("stopped at ")]
+    return table
+
+
+# --- portfolio ---
+
+EXIT_WHY = {
+    "target": "target reached",
+    "stop": "stop hit",
+    "time": "time stop",
+    "manual": "/exit (you)",
+    "news": "news",
+}
+
+
+def exit_why(reason: str | None, entry: float, exit_price: float | None) -> str:
+    if reason == "stop" and exit_price is not None and exit_price >= entry:
+        return "stop hit after it was raised (breakeven or trailing)"
+    return EXIT_WHY.get(reason or "", reason or "-")
+
+
+def _day(ts: Any) -> date | None:
+    """Berlin date of a stored timestamp; None if there is none."""
+    if ts is None or pd.isna(ts):
+        return None
+    return pd.Timestamp(ts).tz_convert(BERLIN).date()
 
 
 def open_positions(
-    trades: Sequence[Trade], closes: dict[int, tuple[date, float]], usd_per_eur: float | None
+    positions: pd.DataFrame, usd_per_eur: float | None, time_stop_sessions: int, today: date
 ) -> pd.DataFrame:
-    """Open trades marked to the last stored close; P&L in EUR after the fees paid so far."""
-    rows: list[dict[str, object]] = []
-    for t in trades:
-        if t.exit_date is not None:
-            continue
-        last_date, close = closes.get(t.instrument_id, (None, None))
-        rate = usd_per_eur if t.market == "US" else 1.0
-        risk = t.entry_price - t.stop
+    """Held positions marked to the last stored close; P&L in EUR before fees."""
+    rows: list[dict[str, Any]] = []
+    for p in positions[positions["open_qty"] > 0].to_dict("records"):
+        cal = calendars.CALENDAR_BY_MARKET[p["market"]]
+        entered = _day(p["entered"])
+        entry = float(p["entry_price"])  # a held position always has its fill price
+        close = None if pd.isna(p["last_close"]) else float(p["last_close"])
+        risk = entry - float(p["initial_stop"])
+        rate = (usd_per_eur or math.nan) if p["currency"] == "USD" else 1.0
         rows.append(
             {
-                "book": t.book,
-                "symbol": t.yahoo_symbol,
-                "market": t.market,
-                "entry_date": t.entry_date,
-                "quantity": t.quantity,
-                "entry": t.entry_price,
-                "stop": t.stop,
-                "target": t.target,
-                "last_date": last_date,
-                "close": close,
-                "r_now": (close - t.entry_price) / risk if close is not None and risk > 0 else None,
-                "pnl_eur": (
-                    t.quantity * (close - t.entry_price) / rate - t.fees_eur
-                    if close is not None and rate
-                    else None
-                ),
-                "risk_eur": t.risk_eur,
+                "symbol": p["symbol"],
+                "market": p["market"],
+                "state": "selling" if p["state"] == "exiting" else "held",
+                "quantity": p["open_qty"],
+                "entry_price": entry,
+                "stop": p["stop"],
+                "stop_moved": "yes" if p["stop"] > p["initial_stop"] else "no",
+                "target": p["target"],
+                "last_close": close,
+                "r_now": (close - entry) / risk if close is not None and risk > 0 else None,
+                "pnl_eur": p["open_qty"] * (close - entry) / rate if close is not None else None,
+                "bought": entered,
+                "sessions_held": len(calendars.sessions(cal, entered, today)) - 1
+                if entered
+                else None,
+                "time_stop": calendars.session_offset(cal, entered, time_stop_sessions)
+                if entered
+                else None,
+                "strategy": p["strategy"],
+                "id": p["id"],
             }
         )
     columns = [
-        "book",
         "symbol",
         "market",
-        "entry_date",
+        "state",
         "quantity",
-        "entry",
+        "entry_price",
         "stop",
+        "stop_moved",
         "target",
-        "last_date",
-        "close",
+        "last_close",
         "r_now",
         "pnl_eur",
-        "risk_eur",
+        "bought",
+        "sessions_held",
+        "time_stop",
+        "strategy",
+        "id",
     ]
     return pd.DataFrame(rows, columns=columns)
 
 
-def closed_trades(trades: Sequence[Trade]) -> pd.DataFrame:
-    """Closed trades, latest exit first."""
-    closed = [t.model_dump() for t in trades if t.exit_date is not None]
-    frame = pd.DataFrame(closed, columns=list(Trade.model_fields))
-    return frame.sort_values(["exit_date", "entry_date"], ascending=False, ignore_index=True)
+def pending_entries(positions: pd.DataFrame) -> pd.DataFrame:
+    """Buy limits at IBKR that haven't filled yet."""
+    columns = ["symbol", "market", "state", "pending_qty", "limit", "stop", "target", "expires"]
+    waiting = positions[positions["pending_qty"] > 0]
+    return waiting[[*columns, "id"]].reset_index(drop=True)
+
+
+def sold_trades(sold: pd.DataFrame) -> pd.DataFrame:
+    """Closed trades with the reason for each sale in words."""
+    why = [
+        exit_why(r["exit_reason"], r["entry_price"], r["exit_price"])
+        for r in sold.to_dict("records")
+    ]
+    columns = [
+        "exit_date",
+        "symbol",
+        "market",
+        "why",
+        "entry_date",
+        "entry_price",
+        "exit_price",
+        "quantity",
+        "holding_sessions",
+        "r_multiple",
+        "pnl_net_eur",
+        "fees_eur",
+        "id",
+    ]
+    return sold.assign(why=why)[columns].reset_index(drop=True)
 
 
 def kpis(trades: Sequence[Trade]) -> pd.DataFrame:
@@ -131,12 +275,12 @@ def monthly_costs(calls: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["month", "cost_usd"], ascending=[False, False], ignore_index=True)
 
 
-# --- M9: risk and evaluation ---
+# --- risk ---
 
 
-def _budget(limits: Mapping[str, Any], sleeve: str) -> float:
+def _budget(limits: Mapping[str, Any]) -> float:
     capital = limits["capital"]
-    return float(capital.get("paper_budget_eur", {}).get(sleeve, capital["agent_budget_eur"]))
+    return float(capital.get("paper_budget_eur") or capital["agent_budget_eur"])
 
 
 def limit_usage(
@@ -146,53 +290,40 @@ def limit_usage(
     usd_per_eur: float | None,
     book: str = "agent_paper",
 ) -> pd.DataFrame:
-    """How close each sleeve of `book` is to its risk.yaml limits, as of the last close."""
-    rows: list[dict[str, object]] = []
-    mine = equity[equity["book"] == book]
+    """How close the account of `book` (both markets, one budget) is to its risk.yaml limits,
+    as of the last close."""
+    columns = ["limit", "value", "max", "used_pct"]
+    mine = equity[equity["book"] == book].sort_values("date")
     held = brackets[brackets["book"] == book]
+    if mine.empty and held.empty:
+        return pd.DataFrame(columns=columns)
+    if not mine.empty:  # older snapshots may carry per-market keys; the latest key is the account
+        mine = mine[mine["sleeve"] == mine["sleeve"].iloc[-1]]
+    budget = _budget(limits)
     loss, port = limits["loss_limits"], limits["portfolio"]
-    for sleeve in sorted(set(mine["sleeve"]) | set(held["market"])):
-        budget = _budget(limits, sleeve)
-        curve = mine[mine["sleeve"] == sleeve].sort_values("date")
-        values = [float(v) for v in curve["equity_eur"]]
-        days = list(curve["date"])
-        last = values[-1] if values else budget
-        before_week = [
-            v for d, v in zip(days, values, strict=True) if days and d < _monday(days[-1])
-        ]
-        drawdown = max([budget, *values]) - last
-        day_loss = max(0.0, (values[-2] if len(values) > 1 else budget) - last)
-        week_loss = max(0.0, (before_week[-1] if before_week else budget) - last)
-        sleeve_brackets = held[held["market"].isin(sleeve.split(","))]
-        rate = sleeve_brackets["currency"].map(
-            lambda c: (usd_per_eur or 1.0) if c == "USD" else 1.0
-        )
-        value = (
-            sleeve_brackets["open_qty"] * sleeve_brackets["entry_price"].fillna(0.0)
-            + sleeve_brackets["pending_qty"] * sleeve_brackets["entry"]
-        ) / rate
-        largest = float(value.groupby(sleeve_brackets["sector"]).sum().max()) if len(value) else 0.0
+    values = [float(v) for v in mine["equity_eur"]]
+    days = list(mine["date"])
+    last = values[-1] if values else budget
+    before_week = [v for d, v in zip(days, values, strict=True) if days and d < _monday(days[-1])]
+    drawdown = max([budget, *values]) - last
+    day_loss = max(0.0, (values[-2] if len(values) > 1 else budget) - last)
+    week_loss = max(0.0, (before_week[-1] if before_week else budget) - last)
+    rate = held["currency"].map(lambda c: (usd_per_eur or 1.0) if c == "USD" else 1.0)
+    value = (
+        held["open_qty"] * held["entry_price"].fillna(0.0) + held["pending_qty"] * held["entry"]
+    ) / rate
+    largest = float(value.groupby(held["sector"]).sum().max()) if len(value) else 0.0
+    rows = [
+        {"limit": name, "value": used, "max": cap, "used_pct": used / cap * 100}
         for name, used, cap in (
             ("Drawdown (EUR)", drawdown, float(loss["max_drawdown_pct"]) / 100 * budget),
             ("Loss on the last day (EUR)", day_loss, float(loss["daily_loss_pct"]) / 100 * budget),
             ("Loss this week (EUR)", week_loss, float(loss["weekly_loss_pct"]) / 100 * budget),
-            (
-                "Positions and entries",
-                float(len(sleeve_brackets)),
-                float(port["max_open_positions"]),
-            ),
+            ("Positions and entries", float(len(held)), float(port["max_open_positions"])),
             ("Largest sector (EUR)", largest, float(port["max_sector_pct"]) / 100 * budget),
-        ):
-            rows.append(
-                {
-                    "sleeve": sleeve,
-                    "limit": name,
-                    "value": used,
-                    "max": cap,
-                    "used_pct": used / cap * 100,
-                }
-            )
-    return pd.DataFrame(rows, columns=["sleeve", "limit", "value", "max", "used_pct"])
+        )
+    ]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _monday(day: date) -> date:
@@ -208,55 +339,6 @@ def correlation_matrix(closes: pd.DataFrame, names: Mapping[int, str]) -> pd.Dat
     labels = [names.get(int(c), str(c)) for c in matrix.columns]
     matrix.index, matrix.columns = labels, labels
     return matrix
-
-
-def outcomes(trades: Sequence[Trade], proposals: pd.DataFrame) -> list[weekly.Outcome]:
-    """Closed trades of the agent sample with the proposal's confidence and your label."""
-    by_key: dict[tuple[str, date], tuple[float | None, Any]] = {}
-    for row in proposals.to_dict("records"):
-        confidence = row["confidence"]
-        by_key[(row["symbol"], row["as_of"])] = (
-            None if confidence is None or confidence != confidence else float(confidence),
-            row["label"] if isinstance(row["label"], str) else None,
-        )
-    sample = weekly.agent_sample(
-        [t for t in trades if t.book == "agent_paper"],
-        [t for t in trades if t.book == "agent_shadow"],
-    )
-    out: list[weekly.Outcome] = []
-    for t in sample:
-        if t.pnl_net_eur is None:
-            continue
-        confidence, label = by_key.get((t.yahoo_symbol, t.signal_date), (None, None))
-        out.append(weekly.Outcome(confidence=confidence, label=label, pnl_eur=t.pnl_net_eur))
-    return out
-
-
-def gate(trades: Sequence[Trade], llm_eur_total: float, start: date, today: date) -> pd.DataFrame:
-    books = {
-        b: [t for t in trades if t.book == b]
-        for b in ("agent_paper", "agent_shadow", "baseline_sim")
-    }
-    w = weekly.WeeklyInput(
-        week_end=today,
-        start=start,
-        books=books,
-        outcomes=[],
-        llm_eur_week=0.0,
-        llm_eur_total=llm_eur_total,
-        benchmarks={},
-        drawdown_pct={},
-    )
-    checks = weekly.gate(w)
-    return pd.DataFrame(
-        [{"check": c.name, "met": c.passed, "detail": c.detail} for c in checks],
-        columns=["check", "met", "detail"],
-    )
-
-
-def calibration(items: Sequence[weekly.Outcome]) -> pd.DataFrame:
-    rows = weekly.calibration(items)
-    return pd.DataFrame(rows, columns=["confidence", "trades", "hit_rate_pct"])
 
 
 def _content(value: Any) -> str:

@@ -21,13 +21,14 @@ def test_repo_risk_config_matches_concept() -> None:
     assert risk.markets.live == ["US"]
 
 
-def test_paper_sleeves() -> None:
+def test_paper_budget_for_both_markets() -> None:
     risk = load_risk_config(ROOT / "config")
-    sleeves = [(ms, r.capital.agent_budget_eur) for ms, r in risk.sleeves(["US", "EU"], "paper")]
-    assert sleeves == [(["US"], 10000), (["EU"], 15000)]
-    assert [(ms, r.capital.agent_budget_eur) for ms, r in risk.sleeves(["US", "EU"], "live")] == [
-        (["US", "EU"], 1000)
-    ]
+    assert risk.for_mode("paper").capital.agent_budget_eur == 15000
+    assert risk.for_mode("live").capital.agent_budget_eur == 1000
+    no_paper = risk.model_copy(
+        update={"capital": risk.capital.model_copy(update={"paper_budget_eur": None})}
+    )
+    assert no_paper.for_mode("paper").capital.agent_budget_eur == 1000
 
 
 def test_unknown_keys_are_rejected() -> None:

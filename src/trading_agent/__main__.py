@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Literal
 import typer
 
 from trading_agent.data.quality import QualityIssue
-from trading_agent.domain.market import Market
 from trading_agent.settings import Settings
 
 if TYPE_CHECKING:
@@ -17,10 +16,9 @@ if TYPE_CHECKING:
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 MarketOption = typer.Option(None, help="US or EU; default both.")
-YearsOption = typer.Option(5, help="Trading period in years, ending at the last stored bar.")
 OutputOption = typer.Option(None, help="Also write the report to this file.")
 SymbolsArgument = typer.Argument(None, help="Yahoo symbols, e.g. AAPL SAP.DE; default top setups.")
-TopOption = typer.Option(None, help="Number of baseline setups; default from models.yaml.")
+TopOption = typer.Option(None, help="Number of screened setups; default from models.yaml.")
 CheckSymbolsArgument = typer.Argument(None, help="Yahoo symbols; default AAPL SAP.DE.")
 
 
@@ -146,74 +144,6 @@ def quality(
         raise typer.Exit(1)
 
 
-@app.command()
-def backtest(
-    years: int = YearsOption,
-    market: Literal["US", "EU"] | None = MarketOption,
-    output: Path | None = OutputOption,
-) -> None:
-    """Backtest the rule-based baseline on stored data and print the report."""
-    from datetime import timedelta
-
-    from trading_agent import backtest as bt
-    from trading_agent.data.universe import load_universe
-    from trading_agent.evaluation import report
-    from trading_agent.risk.config import load_risk_config
-    from trading_agent.settings import load_fees
-
-    settings = _settings()
-    cfg_dir = settings.config_dir
-    cfg, risk = bt.load_backtest_config(cfg_dir), load_risk_config(cfg_dir)
-    fees, universe = load_fees(cfg_dir), load_universe(cfg_dir)
-
-    data = _with_db(
-        settings, lambda s: bt.load_market_data(s, dict(universe.benchmarks), cfg.pullback)
-    )
-    if not data.instruments:
-        raise typer.BadParameter("no bars stored; run `trading-agent backfill` first")
-    end = max(max(x.rows) for x in data.instruments.values())
-    start = end - timedelta(days=round(365.25 * years))
-    markets: list[Market] = [market] if market else list(risk.markets.paper)
-    sections: list[str] = []
-    for sleeve_markets, sleeve_risk in risk.sleeves(markets, "paper"):
-        result = bt.run(data, cfg, sleeve_risk, fees, start=start, end=end, markets=sleeve_markets)
-        capital = float(sleeve_risk.capital.agent_budget_eur)
-        benchmarks = {
-            f"Buy and hold {universe.benchmarks[m]}": curve
-            for m in sleeve_markets
-            if m in universe.benchmarks
-            and (curve := bt.benchmark_equity(data, m, start, end, capital)) is not None
-        }
-        sections.append(
-            report.render(
-                title=f"Backtest: {bt.pullback.NAME} ({', '.join(sleeve_markets)})",
-                start=start,
-                end=end,
-                capital=capital,
-                trades=result.trades,
-                equity=result.equity,
-                invested=result.invested,
-                benchmarks=benchmarks,
-                signals=result.signals,
-                rejections=result.rejections,
-                notes=[
-                    "Survivorship bias: today's index members over the whole period, which "
-                    "flatters the result.",
-                    "Daily bars: if stop and target are both inside a bar the stop counts; on "
-                    "the entry bar only the stop is checked.",
-                    "Risk engine rules applied: sizing, positions, sector and correlation "
-                    "cluster caps, fee-to-risk, orders per day, settled cash, loss limits "
-                    "(measured at each close). Not modelled: FX conversion costs, dividends.",
-                    "Prices from Yahoo Finance; third-party fees are estimates (config/fees.yaml).",
-                ],
-            )
-        )
-    text = "\n".join(sections)
-    typer.echo(text)
-    if output:
-        output.write_text(text, encoding="utf-8")
-
-
 def _plan_line(item: "SymbolAnalysis") -> str:
     out = item.technical.output
     if out is None:
@@ -280,7 +210,7 @@ def propose(
     market: Literal["US", "EU"] | None = MarketOption,
 ) -> None:
     """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
-    from trading_agent import jobs, pipeline, telemetry
+    from trading_agent import jobs, orchestrator, pipeline, telemetry
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
@@ -288,10 +218,10 @@ def propose(
     async def _run(sessions: "Sessions") -> pipeline.ProposalRun:
         ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span(f"cli propose {market or 'all'}", tags=("cli",)):
-            return await pipeline.propose(ctx, market, symbols or None)
+            return await orchestrator.scan(ctx, market, symbols or None)
 
     result = _with_db(settings, _run)
-    typer.echo(pipeline.summary(result, market))
+    typer.echo(orchestrator.summary(result, market))
     for symbol, reason in result.skipped.items():
         typer.echo(f"  skipped {symbol}: {reason}")
 
@@ -314,62 +244,33 @@ def ibkr_check(
     typer.echo("\n".join(lines))
 
 
-@app.command(name="weekly-report")
-def weekly_report(
-    day: str | None = typer.Option(None, "--date", help="Week end, YYYY-MM-DD; default today."),
-    output: Path | None = OutputOption,
-) -> None:
-    """Weekly report now (KPIs, costs, calibration, go-live gate); stores it, sends the summary."""
-    from datetime import date
-
-    from trading_agent import jobs, reports
-    from trading_agent.data.universe import load_universe
-    from trading_agent.notify.telegram import LogNotifier
-
-    settings = _settings()
-    week_end = date.fromisoformat(day) if day else None
-
-    async def _run(sessions: "Sessions") -> str:
-        ctx = jobs.BookContext.load(
-            settings.config_dir, sessions, load_universe(settings.config_dir)
-        )
-        return await reports.weekly_report(ctx, LogNotifier(), week_end)
-
-    text = _with_db(settings, _run)
-    typer.echo(text)
-    if output:
-        output.write_text(text, encoding="utf-8")
-
-
 @app.command()
 def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) -> None:
-    """Run today's placement for MARKET now. Safe to repeat: proposals with a bracket are
-    rejected as already pending, and no orderRef is sent twice."""
-    from trading_agent import broker, jobs, scheduler, trading
+    """Run today's placement for MARKET now, at IBKR. Safe to repeat: proposals with a bracket
+    are rejected as already pending, and no orderRef is sent twice."""
+    from trading_agent import broker, jobs, orchestrator, scheduler
     from trading_agent.controls import ControlCenter
     from trading_agent.data.universe import load_universe
     from trading_agent.notify.telegram import LogNotifier
 
     settings = _settings()
 
-    async def _run(sessions: "Sessions") -> trading.Placement:
-        link: broker.BrokerLink | None = None
+    async def _run(sessions: "Sessions") -> orchestrator.Placement:
+        link = broker.BrokerLink(settings, LogNotifier())
         try:
             book = jobs.BookContext.load(
-                settings.config_dir, sessions, load_universe(settings.config_dir)
+                settings.config_dir,
+                sessions,
+                load_universe(settings.config_dir),
+                settings.app_mode,
             )
             center = ControlCenter(sessions, settings.app_mode)
-            if settings.ib_enabled:
-                link = broker.BrokerLink(settings, LogNotifier())
-                await link.connect()
-                center.gateway_mode = link.mode
-            ctx = await scheduler.trading_context(
-                settings, sessions, book, center, LogNotifier(), link
-            )
-            return await trading.place(ctx, market)
+            await link.connect()
+            center.gateway_mode = link.mode
+            ctx = scheduler.trading_context(settings, sessions, book, center, LogNotifier(), link)
+            return await orchestrator.place(ctx, market)
         finally:
-            if link is not None:
-                link.ib.disconnect()
+            link.ib.disconnect()
 
     result = _with_db(settings, _run)
     for p in result.placed:

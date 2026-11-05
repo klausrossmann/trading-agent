@@ -3,10 +3,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import date
-from typing import Any
+from typing import Any, get_args
+from uuid import UUID
 
 import pandas as pd
-from sqlalchemy import URL, func, select
+from sqlalchemy import URL, and_, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -16,20 +17,22 @@ from trading_agent.db.models import (
     BarDailyRow,
     BracketRow,
     EquityDailyRow,
+    FillRow,
     FxDailyRow,
     InstrumentRow,
     KillSwitchRow,
     LlmCallRow,
     MacroSeriesRow,
+    OrderRow,
     ProposalRow,
-    ReportRow,
     RiskDecisionRow,
+    StepRow,
     TradeRow,
-    UserLabelRow,
 )
-from trading_agent.domain.trading import Trade
+from trading_agent.domain.trading import Book, Trade
 
 TZ = "Europe/Berlin"
+OPEN_STATES = ("approved", "submitted", "working", "filled", "exiting")
 
 
 def read_only_engine(url: URL) -> AsyncEngine:
@@ -59,10 +62,14 @@ def _float(value: Any) -> float | None:
     return None if value is None else float(value)
 
 
+BOOKS = get_args(Book)  # older rows of other books (sim_archive, baseline_sim, ...) are skipped
+
+
 async def trades(s: AsyncSession) -> list[Trade]:
     stmt = (
         select(TradeRow, InstrumentRow)
         .join(InstrumentRow, InstrumentRow.id == TradeRow.instrument_id)
+        .where(TradeRow.book.in_(BOOKS))
         .order_by(TradeRow.entry_date, TradeRow.id)
     )
     return [
@@ -93,18 +100,6 @@ async def trades(s: AsyncSession) -> list[Trade]:
     ]
 
 
-async def open_trade_closes(s: AsyncSession) -> dict[int, tuple[date, float]]:
-    """Last stored close per instrument with an open trade."""
-    open_ids = select(TradeRow.instrument_id).where(TradeRow.exit_date.is_(None))
-    stmt = (
-        select(BarDailyRow.instrument_id, BarDailyRow.date, BarDailyRow.close)
-        .where(BarDailyRow.instrument_id.in_(open_ids))
-        .ext(distinct_on(BarDailyRow.instrument_id))
-        .order_by(BarDailyRow.instrument_id, BarDailyRow.date.desc())
-    )
-    return {i: (d, float(c)) for i, d, c in await s.execute(stmt)}
-
-
 async def usd_per_eur(s: AsyncSession) -> float | None:
     stmt = (
         select(FxDailyRow.rate)
@@ -113,6 +108,17 @@ async def usd_per_eur(s: AsyncSession) -> float | None:
         .limit(1)
     )
     return _float(await s.scalar(stmt))
+
+
+async def last_closes(s: AsyncSession, instrument_ids: list[int]) -> dict[int, tuple[date, float]]:
+    """Last stored close per instrument."""
+    stmt = (
+        select(BarDailyRow.instrument_id, BarDailyRow.date, BarDailyRow.close)
+        .where(BarDailyRow.instrument_id.in_(instrument_ids))
+        .ext(distinct_on(BarDailyRow.instrument_id))
+        .order_by(BarDailyRow.instrument_id, BarDailyRow.date.desc())
+    )
+    return {i: (d, float(c)) for i, d, c in await s.execute(stmt)}
 
 
 async def data_status(s: AsyncSession) -> pd.DataFrame:
@@ -151,49 +157,60 @@ async def data_status(s: AsyncSession) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["dataset", "last_date", "detail"])
 
 
-async def analyses(s: AsyncSession, limit: int = 500) -> pd.DataFrame:
-    stmt = (
-        select(AnalysisRow, InstrumentRow.yahoo_symbol)
-        .outerjoin(InstrumentRow, InstrumentRow.id == AnalysisRow.instrument_id)
-        .order_by(AnalysisRow.id.desc())
-        .limit(limit)
-    )
-    rows = [
-        {
-            "id": a.id,
-            "created_at": a.created_at,
-            "symbol": symbol,
-            "module": a.module,
-            "as_of": a.as_of,
-            "status": a.status,
-            "verdict": a.output.get("rating") or a.output.get("stance"),
-            "score": a.output.get("setup_quality", a.output.get("confidence")),
-            "model": a.model,
-            "prompt_version": a.prompt_version,
-            "cost_usd": float(a.cost_usd),
-            "issues": a.issues,
-            "output": a.output,
-            "trace_id": a.trace_id,
-        }
-        for a, symbol in await s.execute(stmt)
-    ]
-    columns = [
-        "id",
-        "created_at",
-        "symbol",
-        "module",
-        "as_of",
-        "status",
-        "verdict",
-        "score",
-        "model",
-        "prompt_version",
-        "cost_usd",
-        "issues",
-        "output",
-        "trace_id",
-    ]
-    return pd.DataFrame(rows, columns=columns)
+# --- step log: what happened to each stock ---
+
+STEP_COLUMNS = [
+    "id",
+    "ts",
+    "day",
+    "market",
+    "symbol",
+    "step",
+    "status",
+    "summary",
+    "input",
+    "output",
+    "error",
+    "analysis_id",
+    "proposal_id",
+    "order_ref",
+]
+
+
+async def step_days(s: AsyncSession) -> list[date]:
+    """Days with recorded steps, latest first."""
+    return list(await s.scalars(select(StepRow.day).distinct().order_by(StepRow.day.desc())))
+
+
+async def steps(
+    s: AsyncSession, day: date | None = None, proposal_id: UUID | None = None
+) -> pd.DataFrame:
+    """Steps of one day, or every step of one trade (proposal), oldest first."""
+    stmt = select(StepRow).order_by(StepRow.ts, StepRow.id)
+    if day is not None:
+        stmt = stmt.where(StepRow.day == day)
+    if proposal_id is not None:
+        stmt = stmt.where(StepRow.proposal_id == proposal_id)
+    rows = [{c: getattr(r, c) for c in STEP_COLUMNS} for r in await s.scalars(stmt)]
+    return pd.DataFrame(rows, columns=STEP_COLUMNS)
+
+
+async def analysis(s: AsyncSession, analysis_id: int) -> dict[str, Any] | None:
+    """One stored agent answer with its full input."""
+    a = await s.get(AnalysisRow, analysis_id)
+    if a is None:
+        return None
+    return {
+        "module": a.module,
+        "prompt_version": a.prompt_version,
+        "model": a.model,
+        "status": a.status,
+        "cost_usd": float(a.cost_usd),
+        "input": a.input,
+        "output": a.output,
+        "issues": a.issues,
+        "trace_id": a.trace_id,
+    }
 
 
 async def llm_calls(s: AsyncSession, analysis_id: int) -> list[dict[str, Any]]:
@@ -217,71 +234,142 @@ async def llm_calls(s: AsyncSession, analysis_id: int) -> list[dict[str, Any]]:
     ]
 
 
-async def proposals(s: AsyncSession, limit: int = 1000) -> pd.DataFrame:
-    """Agent proposals with your label, latest scan first."""
+# --- portfolio ---
+
+POSITION_COLUMNS = [
+    "id",
+    "book",
+    "symbol",
+    "market",
+    "currency",
+    "state",
+    "strategy",
+    "quantity",
+    "open_qty",
+    "pending_qty",
+    "limit",
+    "entry_price",
+    "initial_stop",
+    "stop",
+    "target",
+    "expires",
+    "entered",
+    "last_date",
+    "last_close",
+]
+
+
+async def positions(s: AsyncSession) -> pd.DataFrame:
+    """The agent's open positions and pending entries at IBKR, with the first entry fill and
+    the last stored close."""
+    entered = (
+        select(OrderRow.bracket_id, func.min(FillRow.ts).label("entered"))
+        .join(FillRow, FillRow.order_ref == OrderRow.order_ref)
+        .where(OrderRow.kind == "entry")
+        .group_by(OrderRow.bracket_id)
+        .subquery()
+    )
     stmt = (
-        select(ProposalRow, InstrumentRow.yahoo_symbol, InstrumentRow.market, UserLabelRow)
-        .join(InstrumentRow, InstrumentRow.id == ProposalRow.instrument_id)
-        .outerjoin(UserLabelRow, UserLabelRow.proposal_id == ProposalRow.id)
-        .order_by(
-            ProposalRow.as_of.desc(), ProposalRow.rank.nulls_last(), InstrumentRow.yahoo_symbol
-        )
-        .limit(limit)
+        select(BracketRow, InstrumentRow, ProposalRow.strategy, entered.c.entered)
+        .join(InstrumentRow, InstrumentRow.id == BracketRow.instrument_id)
+        .join(ProposalRow, ProposalRow.id == BracketRow.id)
+        .outerjoin(entered, entered.c.bracket_id == BracketRow.id)
+        .where(BracketRow.book.in_(BOOKS), BracketRow.state.in_(OPEN_STATES))
+        .order_by(BracketRow.created_at)
     )
-    rows: list[dict[str, Any]] = []
     found = (await s.execute(stmt)).all()
-    proposer_ids = {int(i) for p, *_ in found if (i := p.analyses.get("proposer")) is not None}
-    trace_rows = await s.execute(
-        select(AnalysisRow.id, AnalysisRow.trace_id).where(AnalysisRow.id.in_(proposer_ids))
-    )
-    traces: dict[int, str | None] = {i: t for i, t in trace_rows}
-    for p, symbol, market, label in found:
-        entry, stop, target = _float(p.entry), _float(p.stop), _float(p.target)
+    marks = await last_closes(s, [b.instrument_id for b, *_ in found])
+    rows: list[dict[str, Any]] = []
+    for b, i, strategy, first_fill in found:
+        last_date, last_close = marks.get(b.instrument_id, (None, None))
         rows.append(
             {
-                "as_of": p.as_of,
-                "symbol": symbol,
-                "market": market,
-                "status": p.status,
-                "rank": p.rank,
-                "confidence": _float(p.confidence),
-                "entry": entry,
-                "stop": stop,
-                "target": target,
-                "risk_reward": (target - entry) / (entry - stop)
-                if entry is not None and stop is not None and target is not None and entry > stop
-                else None,
-                "critic": p.critic_severity,
-                "label": label.label if label else None,
-                "reason": label.reason if label else None,
-                "thesis": p.thesis,
-                "invalidation": p.invalidation,
-                "critic_summary": p.critic_summary,
-                "payload": p.payload,
-                "trace_id": traces.get(p.analyses.get("proposer", -1)),
+                "id": str(b.id),
+                "book": b.book,
+                "symbol": i.yahoo_symbol,
+                "market": i.market,
+                "currency": i.currency,
+                "state": b.state,
+                "strategy": strategy,
+                "quantity": float(b.quantity),
+                "open_qty": float(b.filled_qty - b.exit_qty),
+                "pending_qty": float(b.quantity - b.filled_qty)
+                if b.state in ("approved", "submitted", "working")
+                else 0.0,
+                "limit": float(b.entry),
+                "entry_price": _float(b.entry_price),
+                "initial_stop": float(b.initial_stop),
+                "stop": float(b.stop),
+                "target": float(b.target),
+                "expires": b.expires,
+                "entered": first_fill,
+                "last_date": last_date,
+                "last_close": last_close,
             }
         )
-    columns = [
-        "as_of",
-        "symbol",
-        "market",
-        "status",
-        "rank",
-        "confidence",
-        "entry",
-        "stop",
-        "target",
-        "risk_reward",
-        "critic",
-        "label",
-        "reason",
-        "thesis",
-        "invalidation",
-        "critic_summary",
-        "payload",
-        "trace_id",
+    return pd.DataFrame(rows, columns=POSITION_COLUMNS)
+
+
+SOLD_COLUMNS = [
+    "id",
+    "book",
+    "symbol",
+    "market",
+    "strategy",
+    "entry_date",
+    "entry_price",
+    "quantity",
+    "initial_stop",
+    "target",
+    "exit_date",
+    "exit_price",
+    "exit_reason",
+    "holding_sessions",
+    "r_multiple",
+    "pnl_net_eur",
+    "fees_eur",
+]
+
+
+async def sold(s: AsyncSession) -> pd.DataFrame:
+    """Closed trades of the agent's books, latest exit first, with the proposal behind each."""
+    stmt = (
+        select(TradeRow, InstrumentRow.yahoo_symbol, InstrumentRow.market, ProposalRow.id)
+        .join(InstrumentRow, InstrumentRow.id == TradeRow.instrument_id)
+        .outerjoin(
+            ProposalRow,
+            and_(
+                ProposalRow.instrument_id == TradeRow.instrument_id,
+                ProposalRow.as_of == TradeRow.signal_date,
+                ProposalRow.source == "agent",
+            ),
+        )
+        .where(TradeRow.book.in_(BOOKS), TradeRow.exit_date.is_not(None))
+        .order_by(TradeRow.exit_date.desc(), TradeRow.id.desc())
+    )
+    rows = [
+        {
+            "id": str(proposal_id) if proposal_id else None,
+            "book": t.book,
+            "symbol": symbol,
+            "market": market,
+            "strategy": t.strategy,
+            "entry_date": t.entry_date,
+            "entry_price": float(t.entry_price),
+            "quantity": float(t.quantity),
+            "initial_stop": float(t.stop),
+            "target": float(t.target),
+            "exit_date": t.exit_date,
+            "exit_price": _float(t.exit_price),
+            "exit_reason": t.exit_reason,
+            "holding_sessions": t.holding_sessions,
+            "r_multiple": _float(t.r_multiple),
+            "pnl_net_eur": _float(t.pnl_net_eur),
+            "fees_eur": float(t.fees_eur),
+        }
+        for t, symbol, market, proposal_id in await s.execute(stmt)
     ]
-    return pd.DataFrame(rows, columns=columns)
+    return pd.DataFrame(rows, columns=SOLD_COLUMNS)
 
 
 async def llm_costs(s: AsyncSession) -> pd.DataFrame:
@@ -308,7 +396,7 @@ async def llm_costs(s: AsyncSession) -> pd.DataFrame:
     return frame
 
 
-# --- M9: risk, evaluation, reports ---
+# --- risk ---
 
 
 async def equity(s: AsyncSession) -> pd.DataFrame:
@@ -334,7 +422,7 @@ async def open_brackets(s: AsyncSession) -> pd.DataFrame:
     stmt = (
         select(BracketRow, InstrumentRow)
         .join(InstrumentRow, InstrumentRow.id == BracketRow.instrument_id)
-        .where(BracketRow.state.in_(["approved", "submitted", "working", "filled", "exiting"]))
+        .where(BracketRow.state.in_(OPEN_STATES))
         .order_by(BracketRow.created_at)
     )
     rows = [
@@ -400,12 +488,3 @@ async def rejections(s: AsyncSession, since: date) -> pd.DataFrame:
             {"as_of": as_of, "symbol": symbol, "check": failed["name"], "detail": failed["detail"]}
         )
     return pd.DataFrame(rows, columns=["as_of", "symbol", "check", "detail"])
-
-
-async def reports(s: AsyncSession, kind: str = "weekly") -> list[tuple[date, str]]:
-    stmt = (
-        select(ReportRow.period_end, ReportRow.body)
-        .where(ReportRow.kind == kind)
-        .order_by(ReportRow.period_end.desc())
-    )
-    return [(d, b) for d, b in await s.execute(stmt)]

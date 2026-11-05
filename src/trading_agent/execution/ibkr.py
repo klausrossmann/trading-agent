@@ -1,7 +1,4 @@
-"""IBKR broker adapter via IB Gateway: account and positions (M6), orders (M8).
-
-Orders need a connection without `readonly` and the gateway with READ_ONLY_API=no.
-"""
+"""IBKR broker adapter via IB Gateway: account, positions and orders."""
 
 from collections.abc import Sequence
 from datetime import UTC
@@ -69,6 +66,12 @@ def ib_order(spec: OrderSpec, order_id: int, parent_id: int, transmit: bool) -> 
     return order
 
 
+def _message(trade: Trade) -> str | None:
+    """IBKR's last error or warning for the order (rejections, e.g. fractional size)."""
+    errors = [e for e in trade.log if e.errorCode]
+    return f"{errors[-1].errorCode}: {errors[-1].message}" if errors else None
+
+
 def _view(trade: Trade) -> BrokerOrder:
     s = trade.orderStatus
     return BrokerOrder(
@@ -78,12 +81,18 @@ def _view(trade: Trade) -> BrokerOrder:
         avg_fill_price=to_decimal(s.avgFillPrice) if s.filled else None,
         broker_order_id=trade.order.orderId or None,
         perm_id=trade.order.permId or None,
+        message=_message(trade),
     )
 
 
 class IbkrBroker:
+    name = "IBKR"
+
     def __init__(self, ib: IB) -> None:
         self.ib = ib
+
+    def connected(self) -> bool:
+        return self.ib.isConnected()
 
     async def account(self) -> AccountSnapshot:
         values: dict[str, float | None] = {}
@@ -111,9 +120,10 @@ class IbkrBroker:
     # --- orders (M8) ---
 
     async def _trades(self) -> dict[str, Trade]:
-        """Our orders by order_ref: completed ones first, so open ones win."""
+        """Our orders by order_ref: completed ones first, so this session's (with their error
+        log) win."""
         trades = await self.ib.reqCompletedOrdersAsync(apiOnly=True)
-        return {t.order.orderRef: t for t in [*trades, *self.ib.openTrades()] if t.order.orderRef}
+        return {t.order.orderRef: t for t in [*trades, *self.ib.trades()] if t.order.orderRef}
 
     async def place(self, specs: Sequence[OrderSpec]) -> list[BrokerOrder]:
         """Skips any order_ref the broker knows from open or completed orders or executions."""

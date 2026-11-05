@@ -1,0 +1,45 @@
+{
+ "module": "news",
+ "about": "Synthetic: two fictional companies in one call, one catalyst and one non-event.",
+ "expect": {"actions": {"NOVA": ["buy"], "BRIX": ["none"]}},
+ "input": {
+  "as_of": "2026-10-08",
+  "stocks": [
+   {
+    "symbol": "NOVA",
+    "name": "Novaline Systems",
+    "market": "US",
+    "sector": "Technology",
+    "position": null,
+    "headlines": [
+     {
+      "ref": "NOVA:1",
+      "published": "2026-10-08T10:00:00Z",
+      "text": "<untrusted source=\"PRNewswire\">\nNovaline Systems wins multi-year networking contract with a major cloud provider. The agreement is the largest in the company's history and is expected to add meaningfully to revenue from next year, the company said.\n</untrusted>"
+     }
+    ],
+    "earlier": []
+   },
+   {
+    "symbol": "BRIX",
+    "name": "Brixton Foods",
+    "market": "US",
+    "sector": "Consumer Staples",
+    "position": null,
+    "headlines": [
+     {
+      "ref": "BRIX:1",
+      "published": "2026-10-08T08:00:00Z",
+      "text": "<untrusted source=\"BusinessWire\">\nBrixton Foods declares regular quarterly dividend. The dividend is unchanged from the previous quarter.\n</untrusted>"
+     },
+     {
+      "ref": "BRIX:2",
+      "published": "2026-10-08T06:00:00Z",
+      "text": "<untrusted source=\"MarketBeat\">\nBrixton Foods shares: what analysts are saying. A summary of existing analyst ratings.\n</untrusted>"
+     }
+    ],
+    "earlier": []
+   }
+  ]
+ }
+}

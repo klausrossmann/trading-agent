@@ -1,10 +1,14 @@
 # Local stack on the development machine (IMPLEMENTATION.md 16.2): `make dev-up`, `make dev-backfill`,
-# `make dev-down`. Offline fake LLM, no Telegram (log only), simulator broker, throwaway
-# secrets in .dev/, Postgres on the loopback for psql and `uv run trading-agent ...`.
+# `make dev-down`. Offline fake LLM, no Telegram (log only), no IB Gateway (placements are
+# recorded as "IBKR not connected"), throwaway secrets in .dev/, Postgres on the loopback for
+# psql and `uv run trading-agent ...`.
 # Never on the Zenbook: the fake model's proposals mean nothing.
 name: ta-dev
 
 services:
+  ib-gateway:
+    profiles: [never]  # no IBKR login on the development machine
+
   db:
     ports: ["127.0.0.1:${DEV_DB_PORT:-55433}:5432"]
     networks: [backend, frontend]  # the internal backend network can't publish ports
@@ -15,8 +19,6 @@ services:
       APP_MODE: paper
       LLM_FAKE: "true"
       LLM_DEV_OVERRIDES: "true"  # the critic's Anthropic model has no price, so it'd be skipped
-      IB_ENABLED: "false"
-      IB_ORDERS_ENABLED: "false"
       TZ: Europe/Berlin
       # Tracing only with Langfuse keys in .dev/secrets/trace_headers (empty by default)
       TRACE_ENVIRONMENT: dev

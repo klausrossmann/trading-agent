@@ -36,9 +36,11 @@ def test_proposer_waits_for_earnings() -> None:
 def test_other_schemas() -> None:
     assert answer({"event_in_window": True}, {"stance"})["stance"] == "wait_until_after"
     assert answer({}, {"objections"})["severity"] == "minor"
-    ranked = answer({"candidates": [{"symbol": "B"}, {"symbol": "A"}]}, {"ranking"})
-    assert [r["symbol"] for r in ranked["ranking"]] == ["B", "A"]
-    assert answer({"items": [{"ref": "n1"}]}, {"items"})["items"][0]["ref"] == "n1"
-    assert answer({}, {"verdict"})["verdict"] == "hold"
+    news = answer({"stocks": [{"symbol": "A", "headlines": [{"ref": "A:1"}]}]}, {"stocks"})[
+        "stocks"
+    ]
+    assert [(s["symbol"], s["action"], s["items"][0]["ref"]) for s in news] == [
+        ("A", "none", "A:1")
+    ]
     with pytest.raises(ValueError, match="unknown output schema"):
         answer({}, {"something"})

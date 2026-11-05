@@ -16,14 +16,13 @@ from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.domain.analysis import trace_url
 from trading_agent.domain.market import BERLIN
 from trading_agent.domain.proposals import Label, Proposal
-from trading_agent.domain.trading import Book
+from trading_agent.domain.trading import book_for_mode
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, Interaction, Notifier, Reply
 
 log = structlog.get_logger(__name__)
 
 LABELS: dict[str, Label] = {"a": "agree", "d": "disagree"}
-BOOKS: tuple[Book, ...] = ("agent_paper", "agent_shadow", "baseline_sim")
 
 
 async def latest(sessions: Sessions) -> tuple[date | None, list[Proposal], dict[UUID, Label]]:
@@ -129,36 +128,32 @@ def commands(sessions: Sessions, review: Review, trace_ui_url: str = "") -> dict
 async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
     sessions = book.sessions
     as_of, items, labels = await latest(sessions)
+    name = book_for_mode(book.mode)
+    budget = float(book.risk.for_mode(book.mode).capital.agent_budget_eur)
     async with sessions() as s:
-        books = {name: await trades_repo.book_trades(s, name) for name in BOOKS}
+        rows = await trades_repo.book_trades(s, name)
         # By id, active or not: a trade may outlive its instrument's universe membership.
-        instruments = await market_repo.instruments(
-            s, {r.instrument_id for rows in books.values() for r in rows}
-        )
+        instruments = await market_repo.instruments(s, {r.instrument_id for r in rows})
         decided = await book_repo.decisions(s, [p.id for p in items])
-    lines: list[messages.BookDay] = []
-    for name, rows in books.items():
-        lines.append(
-            messages.BookDay(
-                book=name,
-                entered=[
-                    instruments[r.instrument_id].yahoo_symbol for r in rows if r.entry_date == today
-                ],
-                closed=[
-                    messages.ClosedLine(
-                        symbol=instruments[r.instrument_id].yahoo_symbol,
-                        reason=r.exit_reason or "",
-                        pnl_eur=float(r.pnl_net_eur or 0),
-                        budget_eur=float(
-                            book.risk.budget_for(instruments[r.instrument_id].market, "paper")
-                        ),
-                    )
-                    for r in rows
-                    if r.exit_date == today
-                ],
-                open=sum(1 for r in rows if r.exit_date is None),
-            )
+    lines = [
+        messages.BookDay(
+            book=name,
+            entered=[
+                instruments[r.instrument_id].yahoo_symbol for r in rows if r.entry_date == today
+            ],
+            closed=[
+                messages.ClosedLine(
+                    symbol=instruments[r.instrument_id].yahoo_symbol,
+                    reason=r.exit_reason or "",
+                    pnl_eur=float(r.pnl_net_eur or 0),
+                    budget_eur=budget,
+                )
+                for r in rows
+                if r.exit_date == today
+            ],
+            open=sum(1 for r in rows if r.exit_date is None),
         )
+    ]
     start = datetime.combine(today, datetime.min.time(), BERLIN)
     symbols = {p.id: p.yahoo_symbol for p in items}
     return messages.Digest(
@@ -180,9 +175,8 @@ async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
 async def evening_digest(
     book: jobs.BookContext, notifier: Notifier, today: date | None = None
 ) -> str:
-    """After the US close: replay agent_shadow, then send the day's digest."""
+    """After the US close: the day's digest."""
     today = today or datetime.now(BERLIN).date()
-    await jobs.agent_book(book, today)
     text = messages.render_digest(await build_digest(book, today))
     await notifier.send(text)
     return text

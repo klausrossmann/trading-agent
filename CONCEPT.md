@@ -3,7 +3,12 @@
 > Status: Draft v0.2 (2026-10-03). Refined with the answers in section 17 and online research (Appendix A).
 > Scope: Personal, self-hosted agentic AI that analyses markets, keeps an overview of the portfolio, proactively suggests swing trades and (within hard limits) executes them autonomously.
 > Disclaimer: This is a technical concept, not financial or tax advice.
-> **As built (2026-10-05):** this document is the design rationale. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes what the code actually does, in plain language. Where the two differ, HOW-IT-WORKS.md is right.
+> **As built (2026-11-05):** this document is the design rationale. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes what the code actually does, in plain language. Where the two differ, HOW-IT-WORKS.md is right. The main differences after the simplification of November 2026 ([IMPLEMENTATION.md](IMPLEMENTATION.md) 19.4):
+> - **IBKR or nothing.** There is no simulator, no paper broker of our own, no backtest and no comparison books (`baseline_sim`, `agent_shadow`). Every order goes to the IBKR paper account; while the gateway is down nothing is placed.
+> - **No portfolio manager agent.** Code ranks the surviving proposals by confidence × R:R.
+> - **A News agent** (one LLM role instead of news triage plus position review) reads company news (Finnhub for US, Yahoo for EU): a confident `buy` puts a stock into the next scan (at most 1 news trade a day), a confident `exit` sells a held position at the market.
+> - **One orchestrator** (`orchestrator.py`) holds the trading day stage by stage, and a step log records what happened to each stock in each phase (dashboard → Day).
+> - The agent is started by hand (`make up`), never on boot.
 
 ---
 
@@ -161,7 +166,7 @@ flowchart TB
 | **Orchestrator** | Scheduler plus event bus that decides which workflow runs when | APScheduler to start with. Prefect or Temporal only if needed. |
 | **Proposer agent** | Combines module outputs into a `TradeProposal` | Uses tool calling, with read-only tools only |
 | **Critic agent** | Plays devil's advocate: looks for the strongest reason *not* to take the trade and checks for data gaps | Can be a different model or provider, which reduces correlated errors |
-| **Portfolio manager agent** | Weighs proposals against the current portfolio, the macro regime and the cash available, then prioritises | Also drafts reports and messages |
+| **Portfolio manager agent** | Weighs proposals against the current portfolio, the macro regime and the cash available, then prioritises | Also drafts reports and messages. **As built:** dropped in November 2026; code ranks by confidence × R:R and the risk engine enforces the portfolio limits. |
 | **Risk engine** | **Plain code, no LLM.** Validates and sizes every order and can reject it. Tracks drawdown. Runs the kill switch. | Config file, change-audited |
 | **Execution service** | The only component that holds broker credentials. Places bracket and limit orders, reconciles fills, and runs in paper or live mode. | Broker-agnostic adapter interface |
 | **Journal** | Stores every proposal, decision, rejection reason, order, fill, outcome and LLM cost | The basis for evaluation and the learning loop |
@@ -234,7 +239,7 @@ sequenceDiagram
 
 The risk engine adds the `quantity` field. The LLM never decides position size.
 
-**As built:** the analysis stage has two modules (technical, earnings); `patterns`, `news` and `macro` aren't part of the scan yet. Proposals carry level *names* that code resolves to prices. Open positions get a stop moved to breakeven at +1R and a time stop after 15 sessions, but no trailing stop. The daily re-evaluation runs only for positions with important news or a report ahead, and it advises you instead of exiting by itself ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) sections 5–7).
+**As built:** the analysis stage has two modules (technical, earnings); `patterns` and `macro` aren't separate modules (the proposer gets a code-computed macro snapshot). Candidates come from the pullback screen and from the News agent's buy signals. Proposals carry level *names* that code resolves to prices, and code ranks them by confidence × R:R. Open positions get a stop moved to breakeven at +1R, an optional ATR trailing stop and a time stop after 15 sessions. The News agent reads the news on held stocks every 30 minutes and exits at the market when it is confident enough (0.7); below that it advises you ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) sections 5–7).
 
 ---
 
@@ -371,7 +376,7 @@ class BrokerAdapter(Protocol):
     def get_fills(self, since: datetime) -> list[Fill]: ...
 ```
 
-Implementations: `PaperBroker` (internal simulator for tests and the shadow book in section 13) and `IBKRAdapter` (via `ib_async`, used for both the IBKR paper account and live).
+Implementations: `PaperBroker` (internal simulator for tests and the shadow book in section 13) and `IBKRAdapter` (via `ib_async`, used for both the IBKR paper account and live). **As built:** only the IBKR adapter is left; the simulator was removed in November 2026, and tests use a fake broker.
 
 ### 7.2 Options: recommendation
 
@@ -445,7 +450,7 @@ Times are CET/CEST. US markets open at 15:30.
 - Use an exchange calendar library (for example `exchange_calendars`) for holidays and half-days. The US and the EU switch daylight saving time on different dates, so the US open moves to 14:30 CET for one to three weeks in spring and autumn.
 - On the laptop, a job missed during sleep runs once after wake-up if it's still relevant (APScheduler `coalesce` and `misfire_grace_time`). Otherwise it's skipped and logged.
 
-**As built:** scans run 45 minutes before each open (EU 08:15, US 14:45 on a normal day), orders are placed 15 minutes after the open, and stops and time stops are handled after each close on daily bars. The weekly report runs on Saturday; the weekly macro report and the monthly review aren't built. The current timetable is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4.
+**As built:** news is read 30 minutes before each scan (buy signals) and every 30 minutes for held stocks (exits); scans run 45 minutes before each open (EU 08:15, US 14:45 on a normal day), orders are placed 15 minutes after the open, and stops and time stops are handled after each close on daily bars. There is no weekly report, weekly macro report or monthly review job. The current timetable is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4.
 
 ---
 
@@ -577,6 +582,8 @@ This is the most important and most often skipped part. The public evidence is s
 - **Minimum sample** before going live: at least 3 months and about 50 closed trades, counting shadow trades.
 - **Costs included**: expectancy is measured after modelled fees and after LLM costs.
 
+**As built (November 2026):** the rule-based baseline was backtested over 5 years and showed no edge after costs ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3–6.4), and the parallel books (`baseline_sim`, `agent_shadow`) made it unclear which orders really existed. Both were removed: the agent is judged on its own IBKR paper trades only (`agent_paper`), after fees and LLM costs, with buy and hold of the benchmark as context. Without the shadow book the sample grows more slowly (8 positions, up to 1 news trade a day). Calibration and your labels stay as described.
+
 ### 13.1 Daily review routine (1–2 hours)
 
 - **Morning (10–15 min)**: read the briefing, check open positions and how close each limit is.
@@ -702,6 +709,8 @@ gantt
 | **5** | Options: debit spreads on paper from Phase 3 on; live only with at least €5,000 and positive paper results | Per-strategy KPIs |
 
 The phases follow the requested end state of full autonomy. Each step only moves forward once the KPIs prove the previous one.
+
+**As built (November 2026):** Phase 2 runs without baselines and without the shadow book (section 13). Its exit criteria become: ≥ 3 months and ≥ 50 closed `agent_paper` trades, positive expectancy after fees and LLM costs, no risk-engine bugs, and a stable always-on host.
 
 ---
 

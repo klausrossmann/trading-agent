@@ -114,21 +114,21 @@ def answer(inp: dict[str, Any], fields: set[str]) -> dict[str, Any]:
             "confidence_delta": -0.05,
             "summary": "Fake critique.",
         }
-    if "ranking" in fields:
+    if "stocks" in fields:
         return {
-            "ranking": [{"symbol": c["symbol"], "note": "Fake."} for c in inp["candidates"]],
-            "rationale": "Fake: the input order.",
-        }
-    if "items" in fields:
-        return {
-            "items": [{"ref": h["ref"], "relevance": "low", "note": "Fake."} for h in inp["items"]]
-        }
-    if "verdict" in fields:
-        return {
-            "thesis_intact": True,
-            "verdict": "hold",
-            "reasons": "Fake: the thesis still holds.",
-            "confidence": 0.5,
+            "stocks": [
+                {
+                    "symbol": s["symbol"],
+                    "items": [
+                        {"ref": h["ref"], "relevance": "low", "note": "Fake."}
+                        for h in s["headlines"]
+                    ],
+                    "action": "none",
+                    "confidence": 0.5,
+                    "reason": "Fake: nothing that changes the picture.",
+                }
+                for s in inp["stocks"]
+            ]
         }
     raise ValueError(f"fake model: unknown output schema {sorted(fields)}")
 

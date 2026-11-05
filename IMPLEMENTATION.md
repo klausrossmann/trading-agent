@@ -1,6 +1,6 @@
 # Trading Agent – Implementation Concept
 
-> Status: v0.4 (2026-10-05). M0–M9 and the M10 preparation are built and tested, plus the follow-ups of 19.3 (blocked symbols out of the scan, blacklist, full risk rules in the simulated books, optional trailing stop and regime filter, macro context for the proposer, local dev stack). The stack runs on the Zenbook with the IBKR paper gateway connected (15.5 step 13, 2026-10-05); the remaining checks are listed in [RUNNING.md](RUNNING.md) section 6. Open questions answered in section 19.
+> Status: v0.5 (2026-11-05). M0–M9 and the M10 preparation are built and tested. In November 2026 the system was simplified (19.4): orders go to IBKR or nowhere (no simulator, no backtest, no comparison books), the portfolio manager agent was replaced by code ranking, news triage and position review became one News agent that triggers buys and exits, the trading day lives in `orchestrator.py`, and a step log records every stock's path (dashboard → Day). Sections that describe removed parts keep their text as a record and say so. Open questions answered in section 19.
 > Builds on [CONCEPT.md](CONCEPT.md) v0.2. CONCEPT.md explains *what* the system does and *why*. This document explains *how* it is built. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) describes the built system in plain language, including every setting.
 > Disclaimer: technical concept, not financial or tax advice.
 
@@ -113,29 +113,34 @@ trading-agent/
 ├── migrations/                  # alembic
 ├── scripts/                     # build_universe.py, backfill.py, one-offs
 ├── src/trading_agent/
-│   ├── __main__.py              # CLI (typer): run, backfill, scan, backtest, report, killswitch
+│   ├── __main__.py              # CLI (typer): run, backfill, quality, analyse, propose, place, ibkr-check, tax-report, reset, dashboard
 │   ├── settings.py              # pydantic-settings, loads .env + config/*.yaml
+│   ├── orchestrator.py          # the trading day: scan, place, monitor, end_of_day
+│   ├── news.py                  # news stages: buy signals before each scan, exits for held stocks
+│   ├── pipeline.py              # scan building blocks: agent inputs, proposals, ranking, steps
+│   ├── screen.py                # every stock's screen verdict (pullback rules, or basic rules for news)
+│   ├── trading.py               # risk decision, book accounting, IBKR sync, /positions /pnl /exit
+│   ├── executor.py              # brackets, orders, fills, stop moves, exits (writes the step log)
 │   ├── domain/                  # pure models, no I/O
 │   ├── db/                      # SQLAlchemy models, repositories
-│   ├── data/                    # providers + ingestion jobs
-│   ├── calc/                    # indicators, levels, stats, fees, sizing
-│   ├── strategies/              # rule-based baseline (candidate generator)
-│   ├── modules/                 # analysis modules (data → calc → LLM → schema)
-│   ├── llm/                     # model registry, budget guard, prompt loader, sanitizer, validators
-│   ├── agents/                  # proposer, critic, portfolio manager
+│   ├── data/                    # providers (Yahoo, IBKR, ECB, FRED, Finnhub/Yahoo news) + ingestion jobs
+│   ├── calc/                    # indicators, levels, stats, fees, sizing, stops
+│   ├── strategies/              # pullback rules (the screen), news thresholds
+│   ├── modules/                 # analysis modules: technical, earnings, news (the News agent)
+│   ├── llm/                     # model registry, budget guard, prompt loader, sanitizer, validators, fake model
+│   ├── agents/                  # proposer, critic
 │   ├── risk/                    # risk engine, kill switch, state
-│   ├── execution/               # BrokerAdapter, IBKR adapter, simulator, reconciliation, order FSM
+│   ├── execution/               # order specs, IBKR adapter, reconciliation, order FSM
 │   ├── portfolio/               # ledger, P&L in EUR, tax report
-│   ├── evaluation/              # books, shadow tracking, KPIs, weekly report
+│   ├── evaluation/              # KPIs
 │   ├── notify/                  # telegram bot, message templates
 │   ├── scheduler.py             # job wiring
 │   └── dashboard/               # streamlit pages
 └── tests/
-    ├── unit/                    # calc, risk, sizing, fees, FSM, validators
-    ├── contract/                # adapters against recorded responses
-    ├── integration/             # against the IBKR paper gateway (marker: ibkr, manual)
-    ├── evals/                   # LLM golden cases (marker: llm, weekly)
-    └── fixtures/                # recorded bars, chains, LLM outputs
+    ├── unit/                    # calc, risk, sizing, fees, FSM, validators, screen, news
+    ├── integration/             # against Postgres (marker: db); a fake IBKR in tests/fake_broker.py
+    ├── evals/                   # LLM golden cases (marker: llm, run by hand)
+    └── fixtures/                # recorded bars and series
 ```
 
 ### 3.2 Dependency rules (enforced with `import-linter` in CI)
@@ -232,14 +237,15 @@ The key idea: **the LLM chooses among named levels; code turns names into prices
 | `fx_daily` | EUR/USD for P&L and tax | PK (`date`, `quote`), `rate` (units per 1 EUR), `source` (ECB) |
 | `fundamentals` | Point-in-time facts | `instrument_id`, `period_end`, `filed_at`, `metric`, `value` |
 | `earnings_events` | Calendar and history | PK (`instrument_id`, `date`), `ts`, `timing` (`bmo`/`during`/`amc`/`unknown`), `eps_estimate`, `eps_actual` |
-| `news_items` | Raw news, triaged | `published_at`, `source`, `url`, `title`, `symbols[]`, `triage_score` |
+| `news` | Company news, sorted by the News agent | `id` (`<provider>:<id>`), `instrument_id`, `ts`, `headline`, `summary`, `source`, `url`, `relevance` (`none`/`low`/`high`), `note` |
 | `macro_series` | FRED/ECB series | `series_id`, `date`, `value` |
 | `analyses` | Module outputs | `module`, `prompt_version`, `model`, `instrument_id`, `as_of`, `input_hash`, `output jsonb`, `cost_usd`, `trace_id` |
-| `proposals` | All proposals | `payload jsonb`, `status`, `source` (`baseline` / `agent`) |
+| `proposals` | All proposals | `payload jsonb`, `status`, `source` (`agent`), `strategy` (`pullback_uptrend` or `news`) |
 | `risk_decisions` | Risk engine verdicts | `proposal_id`, `approved`, `checks jsonb`, `quantity`, `risk_eur` |
-| `orders` | Broker orders | `client_ref` (unique), `broker_order_id`, `parent_ref`, `kind` (`entry`/`stop`/`target`), `status`, `mode` (`paper`/`live`/`sim`) |
+| `orders` | Broker orders | `order_ref` (unique, `TA-<symbol>-<kind>-<id>`), `broker_order_id`, `perm_id`, `kind` (`entry`/`stop`/`target`/`exit`), `status`, `message` (IBKR's error text) |
 | `fills` | Executions | `order_id`, `ts`, `qty`, `price`, `commission`, `currency`, `fx_rate_eur` |
-| `trades` | Round trips | `book` (`baseline_sim`, `agent_paper`, `agent_shadow`, `agent_live`), entry/exit, `pnl_net_eur`, `r_multiple`, `holding_days` |
+| `trades` | Round trips | `book` (`agent_paper`, `agent_live`; rows from the removed simulator are archived as `sim_archive`, migration `0014`), entry/exit, `pnl_net_eur`, `r_multiple`, `holding_days` |
+| `steps` | The step log: what happened to each stock on each day, phase by phase (migration `0013`) | `day`, `market`, `symbol`, `step` (`news`, `screen`, `technical`, `earnings`, `proposer`, `critic`, `rank`, `risk`, `order`, `broker`, `fill`, `stop`, `exit`, `cancel`), `status` (`passed`/`stopped`/`error`/`info`), `summary`, `input`/`output` JSON, `error`, `analysis_id`, `proposal_id`, `order_ref` |
 | `llm_calls` | Cost and audit, one row per agent run attempt | `role`, `model`, `tokens_in/out`, `cost_usd`, `latency_ms`, `analysis_id`, `attempt`, `kind`, `messages jsonb`, `trace_id`, `span_id` (0011) |
 | `user_labels` | Your agree/disagree labels | `proposal_id`, `label`, `reason` |
 | `agent_state` | Runtime state | key/value: `mode`, `kill_switch`, `paused`, `llm_budget_used` |
@@ -294,6 +300,8 @@ Own implementations, pure functions over pandas Series (pyright strict), unit-te
 | `sizing.position_size(...)` | Formula from section 9.2 in the instrument currency; returns the binding limit, or quantity 0 with a reason. Property tests (`hypothesis`) check that no result breaks a limit and that it is the largest quantity that fits. |
 
 ### 6.2 Baseline strategy: "pullback in an uptrend"
+
+> **Since 2026-11 (19.4):** the rules below are only the scan's **screen** (`screen.py`, `strategies/pullback.py`). The simulated `baseline_sim` book, the backtest loop (`backtest.py`) and the simulator (`execution/sim.py`) were removed; 6.2–6.4 keep their text as the record of the backtests. Entry, stop and target come from the proposer's level choice, not from the baseline's formulas.
 
 This is both the **candidate generator** for the LLM pipeline and the **rule-based baseline** it must beat (CONCEPT.md section 13).
 
@@ -470,25 +478,28 @@ batch:
 
 ```mermaid
 sequenceDiagram
-    participant B as Baseline (candidates)
+    participant N as News agent
+    participant S as Screen (code)
     participant M as Modules
     participant P as Proposer
     participant C as Critic
-    participant PM as Portfolio manager
+    participant K as Rank (code)
     participant R as Risk engine
-    B->>M: top N candidates (N=10 standard, 5 lean)
-    M->>P: technical + earnings (+ macro regime, news)
-    P->>C: draft TradeProposal (refs, thesis, invalidation)
-    C->>P: CriticVerdict {objections, severity, confidence_delta}
-    P->>PM: proposals with severity < "blocking"
-    PM->>R: ranked list (fit with positions, sector, regime, cash)
+    N->>S: buy signals (before each scan)
+    S->>M: top N pullback setups (10, lean 5) + up to 3 news candidates
+    M->>P: technical + earnings (+ macro snapshot, news catalyst)
+    P->>C: plan (refs, thesis, invalidation)
+    C->>K: CriticVerdict {objections, severity, confidence_delta}
+    K->>R: proposals ranked by confidence × R:R
 ```
 
 | Agent | Input | Output | Model role |
 |---|---|---|---|
-| Proposer | Module outputs, level menu, open positions | `TradeProposal` or `NoTrade(reason)` | `proposer` |
+| Proposer | Module outputs, level menu, open positions, macro snapshot, news catalyst | `propose` with level refs, or `no_trade` with a reason | `proposer` |
 | Critic | Proposal + the same inputs | `CriticVerdict` (objections, `severity`: `none`/`minor`/`major`/`blocking`, `confidence_delta`) | `critic` (other vendor) |
-| Portfolio manager | Surviving proposals, portfolio, regime | Ranked list plus a short rationale | `proposer` |
+| News agent | New headlines per stock; for held stocks the position facts and thesis | Relevance per headline; `buy`, `exit` or `none` per stock, with a confidence | `triage` |
+
+The portfolio manager agent of the original design (ranking with a note per proposal) was removed in November 2026; code ranks by confidence × R:R (8.2).
 
 The agents have **no tools** except read-only data lookups (`get_bars`, `get_levels`, `get_news`) defined in `agents/tools.py`. Every prompt, response, tool call and cost is written to `analyses`, `llm_calls` and `audit_log`.
 
@@ -501,12 +512,25 @@ As built, the agents have no tools at all: the orchestrator injects every fact i
 | Agents | `agents/proposer.py`, `critic.py`, `portfolio.py`, `prompts/{proposer,critic,portfolio_manager}/v1.md` | They run through the same `LlmRunner` as the modules (cache, budget, pacing, validators, one corrective retry), stored in `analyses` under their own module name. No tools yet: every fact comes from the module outputs. |
 | Proposer | | In: the technical input (level menu, ATR, rules), the technical and earnings assessments, held symbols and, since prompt v2 (2026-10-05), a macro snapshot (`calc/macro.py`, `pipeline.macro_context`): the market benchmark's trend, distance to SMA200 and 20-session return, VIX now and 20 observations ago, the US 10-year yield, the 10y−2y spread and the high-yield spread now and 20 ago, all cut at `as_of`; FRED values older than 10 days or missing are null and don't count as data gaps. Out: `propose` with entry/stop/target refs (only menu names validate), or `no_trade` with a reason. Errors: level order, R:R, stop distance, missing refs or reason, `propose` despite `wait_until_after`. Ungrounded numbers cap the confidence at 0.5. |
 | Critic | | In: the same facts plus the plan with prices resolved by code (R:R, stop in ATR). Out: objections (`minor`/`major`/`blocking`), the overall severity (must equal the highest objection), `confidence_delta` (−0.5 to +0.1). Runs on Gemini through `dev_overrides` until an Anthropic key and price are added; if it fails, the proposal stays `proposed` and is marked "no critique". |
-| Portfolio manager | | Ranks the survivors (every candidate exactly once) with a note each; only called when there are at least two. If it fails, the ranking is confidence × R:R. |
+| Portfolio manager | | Ranks the survivors (every candidate exactly once) with a note each; only called when there are at least two. If it fails, the ranking is confidence × R:R. **Removed 2026-11 (8.2).** |
 | Pipeline | `pipeline.py`, CLI `trading-agent propose [SYMBOLS] [--market]` | Baseline candidates (without symbols the quality checks block, freshly computed from the stored bars, or that `instruments.blacklist` lists) → technical + earnings → proposer only for `buy`/`strong_buy` ratings of symbols not already held → critic for `propose` → ranking → `proposals`. Scheduled as `scan_eu` (Xetra open − 45 min) and `scan_us` (NYSE open − 45 min), each followed by a Telegram summary. |
 | Proposals | migration `0005`, `db/proposals.py` | One row per instrument and scan day (`status`: `proposed`, `blocked`, `no_trade`), with resolved prices, final confidence, rank, critique, the ids of all analyses involved and the full agent outputs. A re-run of the same day updates the row in place, so labels stay attached. |
-| Shadow book | `jobs.agent_book`, `backtest.run(external=...)` | `agent_shadow` replays every `proposed` trade from the first proposal through the simulator with the baseline book's rules (sizing, fee-to-risk, max positions, sector cap, earnings buffer, settled cash; rank decides when slots are short). Interim until the risk engine (M8). |
+| Shadow book | `jobs.agent_book`, `backtest.run(external=...)` | `agent_shadow` replays every `proposed` trade from the first proposal through the simulator with the baseline book's rules (sizing, fee-to-risk, max positions, sector cap, earnings buffer, settled cash; rank decides when slots are short). Interim until the risk engine (M8). **Removed 2026-11 (19.4).** |
 | Labels and digest | `journal.py` | `/proposals`, `/why SYMBOL`, `/review` (Agree/Disagree/Skip buttons, then an optional free-text reason) write `user_labels`. `evening_digest` (NYSE close + 65 min) replays `agent_shadow` and sends the day's proposals, labels to do, entries and exits of both books and the day's LLM spend. |
-| Dashboard | page **Proposals** | All proposals with status, plan, critique and your label; LLM text is shown as plain text. |
+| Dashboard | page **Proposals** | All proposals with status, plan, critique and your label; LLM text is shown as plain text. Replaced by the **Day** page in 2026-11 (13). |
+
+### 8.2 Implementation: the simplification (2026-11)
+
+| Part | Where | Notes |
+|---|---|---|
+| Orchestrator | `orchestrator.py` | The trading day stage by stage: `scan` (screen + news candidates → technical → earnings → proposer → critic → rank → `proposals`), `place` (risk engine → bracket at IBKR, or an error step and 🔌 if the gateway is down), `monitor` (IBKR sync), `end_of_day` (fills, breakeven, trailing and time stop, book, loss limits). `scheduler.py` decides when; `pipeline.py` and `trading.py` hold the building blocks. |
+| Ranking | `pipeline.rank`, `pipeline.score` | Code only: confidence × R:R, best first. The rank step's summary shows the numbers. |
+| Step log | migration `0013`, `domain/steps.py`, `db/steps.py` | Every phase of every stock writes a step: the screen's values, each agent's answer (with the `analysis_id` of its input and attempts), the risk engine's checks, the order as sent to IBKR with IBKR's reply and error text (`orders.message` from the trade log), fills, stop moves, exits and cancels. A re-run of a scan replaces that day's scan steps. |
+| News agent | `modules/news.py`, `prompts/news/v1.md` (role `triage`), `news.py` | Replaces news triage and position review. One call reads up to 8 stocks (`batch`), each with its newest new headlines (`max_headlines`, as `<untrusted>` text) and, for a held stock, the position facts, thesis, invalidation and earlier sorted news. Out per stock: relevance per headline, `action` (`buy` only for a stock not held and only with a `high` headline; `exit` only for a held stock; else `none`), confidence and reason. |
+| News buys | `news.scan_news`, jobs `news_eu`/`news_us` (open − 75 min); `orchestrator.scan`, `jobs.screen_stocks`, `screen.news_check` | Every stock of the market not held. A `buy` ≥ `buy_confidence` (0.6) is stored as a passed `news` step and sends 📰. The next scan takes signals of the last `signal_hours` (24): such a stock only needs the basic rules (fresh bars, price, liquidity, regime, earnings buffer), at most `max_candidates` (3) per scan by confidence; the pullback verdict wins if it passed too. The proposer and critic get the news as untrusted `catalyst` (proposer prompt v3); the proposal's `strategy` is `news`. `place` places at most `max_trades_per_day` (1) news trades a day across both markets; the others get a stopped risk step. |
+| News exits | `news.watch_positions`, job `news_positions` (every 30 min, 07–22 h, weekdays) | Held stocks with new headlines, or (once a day) a report within 3 sessions. An `exit` ≥ `exit_confidence` (0.7) sends a market sell through the executor (`exit_reason` `news`, 🚪); below it 🧐 advice with `/exit SYMBOL`; without a gateway connection an error step and 🔌. Every verdict on a held stock is a `news` step. |
+| News sources | `data/news.py` | `FinnhubNews` (US, `FINNHUB_API_KEY`, 1.1 s between requests for the free tier's 60 a minute) and `YahooNews` (EU, `yfinance` ≥ 1.8 `get_news`, latest headlines only, filtered to the look-back). A failing request is logged and skipped. |
+| Settings | `config/strategies.yaml` `news:`, `strategies/news.py` | `buy_confidence`, `exit_confidence`, `max_candidates`, `max_trades_per_day`, `signal_hours`, `lookback_days`, `max_headlines`, `batch` |
 
 ---
 
@@ -577,6 +601,8 @@ Next M8 steps: (3) `orders` and `fills` tables, order state machine, bracket ord
 The halt doesn't cancel orders yet, because none exist until step 3; that hook comes with execution. Since step 4 it cancels every unfilled entry (9.6).
 
 ### 9.6 Implementation, step 4: placement and the daily cycle (M8, 2026-10-04)
+
+> **Since 2026-11:** `place`, `monitor` and `end_of_day` live in `orchestrator.py`. There is no simulator broker any more: every order goes to IBKR, and while the gateway is disconnected `place` writes an error step per proposal and sends 🔌 instead of deciding. The paper budget is one account for both markets (`capital.paper_budget_eur`, equity key `US,EU`).
 
 `agent_paper` now trades every session, through the simulator broker until `IB_ORDERS_ENABLED=true` (19.2).
 
@@ -674,13 +700,9 @@ Live mode requires all three:
 
 Without all three, the agent refuses to place orders and alerts you.
 
-### 10.5 Simulator (`execution/sim.py`)
+### 10.5 Simulator (removed 2026-11)
 
-Used for `baseline_sim` and `agent_shadow`, and for tests:
-- Entry fills at the limit if the next bar's low is at or below the limit (or at the open if it gaps below).
-- Stops fill at the stop or at the open on a gap. Targets fill symmetrically.
-- Slippage: 0.05 % per side. Fees come from `fees.yaml`.
-- IBKR paper fills are also optimistic, so the same slippage is added when evaluating `agent_paper`.
+The simulator (`execution/sim.py`, `execution/sim_broker.py`) filled `baseline_sim`, `agent_shadow` and, until the gateway was enabled, `agent_paper` from daily bars. It was removed so that every order the agent reports exists at IBKR. Tests use `tests/fake_broker.py`, a fake IBKR with the same fill model.
 
 ### 10.6 Implementation, step 3: orders and the state machine (M8, 2026-10-04)
 
@@ -711,25 +733,26 @@ Jobs are defined relative to exchange sessions (`exchange_calendars`: `XNYS` for
 |---|---|---|---|
 | `heartbeat` | every 5 min | no | Ping the heartbeat URL |
 | `ingest_macro`, `ingest_earnings` | 07:00 / 07:15 weekdays | no | |
-| `ingest_news` | every 30 min, 07:00–22:30 weekdays | triage | Finnhub headlines for held US positions, Flash-Lite triage (M9) |
-| `scan_eu` | XETR open − 45 min (08:15) | yes | Agent pipeline on the previous EOD bars; 🧠 summary. Runs in live mode too, although live trades US only. |
+| `news_positions` | every 30 min, 07:00–22:30 weekdays | News agent | Held stocks: new headlines (or a report within 3 sessions, once a day); confident exits sell at the market (8.2) |
+| `news_eu` | XETR open − 75 min (07:45) | News agent | Every EU stock not held; buy signals for the scan (8.2) |
+| `scan_eu` | XETR open − 45 min (08:15) | yes | `orchestrator.scan` on the previous EOD bars plus news candidates; 🧠 summary. Runs in live mode too, although live trades US only. |
 | `briefing` | 08:30 weekdays with a session | no | Data-only 📰 briefing |
-| `place_eu` | XETR open + 15 min (09:15), 2 min grace | no | Risk engine → brackets (M8 step 4) |
-| `monitor` | every 10 min, 09:00–22:50 weekdays | no | Broker sync and alerts; IBKR mode only |
+| `place_eu` | XETR open + 15 min (09:15), 2 min grace | no | `orchestrator.place`: risk engine → brackets at IBKR |
+| `monitor` | every 10 min, 09:00–22:50 weekdays | no | IBKR sync and alerts |
+| `news_us` | XNYS open − 75 min (14:15) | News agent | As `news_eu`, for US stocks |
 | `scan_us` | XNYS open − 45 min (14:45) | yes | |
 | `place_us` | XNYS open + 15 min (15:45), 2 min grace | no | |
 | `ingest_eod_eu` | XETR close + 30 min (18:00) | no | EU bars, ECB FX, quality check |
-| `execution_eu` | XETR close + 35 min (18:05) | no | Fills, breakeven, time stops, `agent_paper` EU sleeve (9.6) |
-| `reevaluate_positions` | XNYS close − 60 min (21:00) | yes | Positions with `high` news or a report within 3 sessions; advice only, `/exit` is yours (M9) |
+| `execution_eu` | XETR close + 35 min (18:05) | no | `orchestrator.end_of_day`: fills, breakeven, time stops, book, loss limits |
 | `ingest_eod_us` | XNYS close + 30 min (22:30) | no | US bars, quality check |
-| `execution_us` | XNYS close + 35 min (22:35) | no | As `execution_eu`, for the US sleeve |
-| `reconcile` | XNYS close + 40 min (22:40) | no | Broker vs. book; only with `IB_ENABLED` |
-| `baseline_sim` | XNYS close + 60 min (23:00) | no | Replays the rule-based book |
-| `evening_digest` | XNYS close + 65 min (23:05) | no | Replays `agent_shadow`, then the 🌙 digest |
-| `weekly_report` | Saturday 10:00 | no | KPIs vs. baselines, costs, calibration, gate (M9) |
+| `execution_us` | XNYS close + 35 min (22:35) | no | As `execution_eu`, for US positions |
+| `reconcile` | XNYS close + 40 min (22:40) | no | IBKR positions vs. the book; any difference halts |
+| `evening_digest` | XNYS close + 65 min (23:05) | no | The 🌙 digest |
 | backup | 03:15, host crontab | no | `scripts/backup.sh` (15.4); not a scheduler job |
 
-The `reports` model role is configured but unused: briefing, digest and weekly report are rendered by code.
+Removed in 2026-11: `ingest_news` and `reevaluate_positions` (now `news_positions`), `baseline_sim` and `weekly_report`.
+
+The `reports` model role is configured but unused: briefing and digest are rendered by code.
 
 Misfire policy: `coalesce=True` and a `misfire_grace_time` per job (for example 30 min for scans, 2 min for order placement, so a late placement is skipped).
 
@@ -773,6 +796,8 @@ Since M4: ▶️/⏹ agent start and stop; ⚠️ ingestion failures and restate
 
 Since M7–M9: 🧠 scan results, 📤 placements and rejections, 🟢 bought, 🔴 sold (stop, target, time, manual), ⌛ entry expired or cancelled, ⏸/⛔/▶️ kill-switch changes, 🔌 gateway down for 10 min and back, 🔐 live confirmation needed, 📰 important news on a held position, 🧐 position review advises an exit, 🌙 evening digest, 📈 weekly report. Not built: a dedicated 🔐 alert when IBKR needs a 2FA re-login (a gateway that stays down shows up as 🔌), and a 💸 push at 80 % of the LLM budget (lean mode switches on silently; `/budget` shows the spend).
 
+Since 2026-11: 📰 also for a news buy signal, 🚪 news exit sent, 🧐 a less confident news exit (advice), 🔌 for orders, exits and end-of-day work skipped because IBKR wasn't connected. The 📈 weekly report is gone.
+
 ### 12.4 Privacy
 
 Bot chats are not end-to-end encrypted. Messages therefore never contain account numbers, credentials or personal data. Amounts are shown both in euros and as a percentage of the agent budget, for example `−€15.20 (−1.5 %)`. The setting `notify.amounts: both | percent | eur` (default `both`) can change that later.
@@ -781,7 +806,7 @@ Bot chats are not end-to-end encrypted. Messages therefore never contain account
 
 ## 13. Dashboard (Streamlit)
 
-Pages: **Overview** (equity curves of the three books plus a benchmark, drawdown) · **Positions** · **Proposals** (filterable, with risk checks and critic notes) · **Journal** (full trace per trade) · **Risk** (limit usage, correlation heatmap) · **Costs** (LLM spend per role and model, fees) · **Evaluation** (KPIs, calibration plot).
+Pages since 2026-11: **Day** (pick a day and a market: how many stocks remain after each phase; one row per stock, one column per phase from `news` to `exit`, each ✓ passed, ✗ stopped, ⚠ error; pick a stock to see every step with its input and output, each agent's input, answer and attempts, the risk engine's checks and the orders as sent to IBKR with IBKR's reply; data freshness) · **Portfolio** (open positions marked to the last close, pending entries, sold positions with the reason, realized P&L, KPIs) · **Costs** (LLM spend per month, role and model; fees) · **Risk** (kill switch, limit usage, correlation heatmap, rejections). The original page set below (Overview, Positions, Proposals, Journal, Analyses, Evaluation, Reports) was replaced.
 
 It uses the read-only DB role and has no write actions; control happens through Telegram or the CLI. It is published to your tailnet with `tailscale serve`, so it's reachable from your phone and other tailnet devices but not from the internet.
 
@@ -802,6 +827,8 @@ Since M9 three more pages: **Risk** (kill switch; per `agent_paper` sleeve the u
 ---
 
 ## 14. Evaluation
+
+> **Since 2026-11 (19.4):** only the agent's own books are kept: `agent_paper` (IBKR paper account) and later `agent_live`. `baseline_sim`, `agent_shadow`, the weekly report and the gate computed from them were removed; the record below stays as written. The agent is judged on its closed `agent_paper` trades after fees and LLM costs (dashboard **Portfolio** and **Costs**), with buy and hold of the benchmarks as context. Go-live gate: at least 3 months and 50 closed `agent_paper` trades, positive net expectancy after fees and LLM costs, no risk-engine bugs.
 
 | Book | How it trades | Purpose |
 |---|---|---|
@@ -824,8 +851,8 @@ Go-live gate (CONCEPT.md section 15, Phase 2): at least 3 months and 50 closed t
 | Gate | `weekly.gate` | Four checks: 91 days since the paper start, 50 closed trades in the agent sample, net expectancy after all LLM costs > 0, and above `baseline_sim`'s expectancy. |
 | Telegram | `trading.commands` | `/positions`: open positions with entry, stop, target, last close, R and unrealized P&L; pending entries with their limit and expiry. `/pnl`: per sleeve day, week, month and since start from the equity snapshots, with `baseline_sim`'s closed P&L for the same windows. |
 | Tax helper (M10 prep) | `portfolio/tax.py`, `reports.tax_report`, CLI `trading-agent tax-report YEAR [--book agent_live\|agent_paper] [--output]` | One row per sale: the sale at the ECB rate of its trade day against the average cost of the shares bought (their trade days' rates), fees on both sides. Gains, losses and net of the share pot (shares only offset shares), tax at 26.375 % before allowance and church tax. Stored as report `tax:<book>`. Dividends, withholding tax and FX results on the USD cash balance come from the IBKR Flex Query. Not tax advice. |
-| News | `data/news.py` (Finnhub company news, free tier: US only), migration `0010` `news`, job `ingest_news` | For held positions only: the last 3 days of headlines, stored once per id. `modules/news_triage.py` (role `triage`, Flash-Lite) rates each new item `none`/`low`/`high` for the position's thesis; headline and summary go in as `<untrusted>` blocks. A `high` item sends 📰 with the headline and the reason. Without `FINNHUB_API_KEY` the job only logs. |
-| Position review | `modules/position_review.py` (role `analysis`), `review.py`, job `reevaluate_positions` | Positions with a `high` item in the last 24 h or a report within 3 sessions. Facts by code: entry, stops, target, last close, R now, last 10 closes, SMA 20/50, ATR, next report; plus the triaged news of the last 5 days, the thesis and its invalidation. Output `hold`/`exit` with `thesis_intact` (must agree) and grounded reasons. An `exit` sends 🧐 with the reasons and `/exit SYMBOL`; nothing is sold without you (19.2 #14). `/exit` places a market sell for the next open via the executor. |
+| News | `data/news.py` (Finnhub company news, free tier: US only), migration `0010` `news`, job `ingest_news` | For held positions only: the last 3 days of headlines, stored once per id. `modules/news_triage.py` (role `triage`, Flash-Lite) rates each new item `none`/`low`/`high` for the position's thesis; headline and summary go in as `<untrusted>` blocks. A `high` item sends 📰 with the headline and the reason. Without `FINNHUB_API_KEY` the job only logs. **Replaced 2026-11 by the News agent (8.2).** |
+| Position review | `modules/position_review.py` (role `analysis`), `review.py`, job `reevaluate_positions` | Positions with a `high` item in the last 24 h or a report within 3 sessions. Facts by code: entry, stops, target, last close, R now, last 10 closes, SMA 20/50, ATR, next report; plus the triaged news of the last 5 days, the thesis and its invalidation. Output `hold`/`exit` with `thesis_intact` (must agree) and grounded reasons. An `exit` sends 🧐 with the reasons and `/exit SYMBOL`; nothing is sold without you (19.2 #14). `/exit` places a market sell for the next open via the executor. **Replaced 2026-11 by the News agent, which exits by itself above `exit_confidence` (8.2, 19.4).** |
 
 ---
 
@@ -845,7 +872,7 @@ Decision 2026-10-04: no reinstall (no USB stick needed). The notebook stays a no
 6. A 4 GB swap file (Ubuntu's `/swap.img` is usually 2 GB).
 7. Tailscale and `openssh-server` for SSH and the dashboard from tailnet devices; `ufw` denies all incoming traffic except on the Tailscale interface. Compose publishes ports only on `127.0.0.1`, so Docker's bypass of `ufw` doesn't matter.
 8. `unattended-upgrades` for security updates, with automatic reboot at 04:00 when an update needs it (outside all sessions and scans).
-9. The battery works as a small UPS, if it still holds a charge. After a power loss, Docker's `restart: unless-stopped` brings the stack back, and reconciliation repairs any missing stops.
+9. The battery works as a small UPS, if it still holds a charge. After a power loss, Docker brings back `db` and `dashboard`; the agent and the IB Gateway are started by hand (`make up`), and reconciliation then repairs any missing stops.
 10. Memory: the stack needs about 2 GB, 3.5 GB with the IB Gateway; a desktop and a browser fit next to it, swap covers peaks. The existing install has no full-disk encryption; the mini PC for the live phase gets a fresh, encrypted install (15.4).
 
 ### 15.2 Secrets
@@ -884,18 +911,18 @@ FRED_API_KEY=
 SEC_EDGAR_USER_AGENT=               # "Name email", required by SEC
 ```
 
-### 15.3 Compose (target state after M6; `compose.yaml` in the repo has all four services, `ib-gateway` behind the `ibkr` profile)
+### 15.3 Compose (state since 2026-11: all four services, `ib-gateway` without a profile, `READ_ONLY_API: "no"`, agent and gateway started by hand with `make up`)
 
 ```yaml
 services:
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
-    restart: unless-stopped
+    restart: "no"                     # started by hand with the agent
     environment:
       TWS_USERID: ${TWS_USERID}
       TWS_PASSWORD_FILE: /run/secrets/tws_password
       TRADING_MODE: paper
-      READ_ONLY_API: "yes"            # "no" from milestone M8
+      READ_ONLY_API: "no"             # the agent places orders
       TIME_ZONE: Europe/Berlin
       AUTO_RESTART_TIME: "11:45 PM"
       TWOFA_TIMEOUT_ACTION: restart
@@ -920,7 +947,7 @@ services:
   agent:
     build: .
     command: ["python", "-m", "trading_agent", "run"]
-    restart: unless-stopped
+    restart: "no"                     # started by hand, never on boot
     env_file: .env
     secrets: [{ source: agent_db_password, target: db_password }]
     depends_on: [db, ib-gateway]
@@ -962,6 +989,8 @@ secrets:
 - Moving to the mini PC: the same preparation as 15.1, copy `.env` and `secrets/`, restore the latest dump, `docker compose up -d`, then confirm reconciliation is clean before shutting down the Zenbook stack.
 
 ### 15.5 First start on the Zenbook (runbook, state after M7)
+
+> **Since 2026-11:** the settings `IB_ENABLED`, `IB_ORDERS_ENABLED`, `IB_READ_ONLY_API` and `COMPOSE_PROFILES=ibkr` no longer exist: the gateway always starts with the agent (`make up`) and orders always go to IBKR. In steps 13 and 17 skip those settings; step 15 (simulated orders) no longer applies, the first placements go straight to the IBKR paper account. Step 18 now means: set `FINNHUB_API_KEY` for US news (EU news needs no key) and watch for 📰 buy signals, 🚪 news exits and 🧐 advice; `docker compose logs agent | grep news` shows the runs. After an update from before 2026-11, `make migrate` applies `0013` (step log) and `0014` (archives simulator rows as `sim_archive`).
 
 Everything that has to happen on the Zenbook so far, in order. Send back the output marked 📋. [RUNNING.md](RUNNING.md) explains each step in plain language.
 
@@ -1006,7 +1035,7 @@ Everything that has to happen on the Zenbook so far, in order. Send back the out
     - `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent ibkr-check --order-test AAPL` 📋: placed `working`, after cancel `inactive`, and the price increments for AAPL and SAP.DE.
     - The next placements go to IBKR (📤 says `IBKR`). Once a bracket is working or filled, run the three chaos tests 📋:
       1. Gateway restart with open orders: `docker compose restart ib-gateway`. Expected: 🔌 alerts only if it stays down more than 10 min; after reconnect a clean reconciliation (no ⚠️, no halt), `/positions` unchanged, in TWS/the IBKR app each order exists once.
-      2. Reboot during a session: `sudo reboot`. Expected: the stack comes back by itself, ▶️ message, reconciliation clean, stops still at IBKR (they are GTC there), nothing duplicated.
+      2. Reboot during a session: `sudo reboot`. Expected: `db` and `dashboard` come back by themselves; after `make up`: ▶️ message, reconciliation clean, stops still at IBKR (they are GTC there), nothing duplicated.
       3. Replay the same proposals: `docker compose run --rm -e IB_CLIENT_ID=12 agent trading-agent place US` during the session, after the scheduled placement. Expected: every proposal that already has a bracket is rejected (`rate_limits: already held or pending`), and IBKR shows no second order for any `orderRef`.
     - Also check once: an entry that expires (`GTD`) shows ⌛ the day after, and the GTD time IBKR shows is the next session's close.
 
@@ -1030,7 +1059,7 @@ After a later `git pull`: `make build && make migrate && make up`.
 ### 16.2 Tooling and checks
 
 - **On the development machine**: `uv sync`, `make lint`, `make test` (unit and contract tests with recorded fixtures), and `make test-db` (DB tests against a throwaway Postgres container). No keys and no broker access are needed.
-- **Local stack** (`compose.dev.yaml`, project `ta-dev`): `make dev-up` creates throwaway secrets in `.dev/`, builds, migrates and starts db, agent and dashboard (http://127.0.0.1:8502, Postgres on 127.0.0.1:55433); `make dev-backfill` loads Yahoo/ECB/earnings history; `make dev-down` removes containers, volume and secrets. The agent runs with `LLM_FAKE=true` (`llm/fake.py`: deterministic, rule-following answers for every output schema, no API calls), no Telegram (messages go to the log) and the simulator broker. Useful for the scheduler, dashboard and backtests on real data; the fake proposals mean nothing.
+- **Local stack** (`compose.dev.yaml`, project `ta-dev`): `make dev-up` creates throwaway secrets in `.dev/`, builds, migrates and starts db, agent and dashboard (http://127.0.0.1:8502, Postgres on 127.0.0.1:55433); `make dev-backfill` loads Yahoo/ECB/earnings history; `make dev-down` removes containers, volume and secrets. The agent runs with `LLM_FAKE=true` (`llm/fake.py`: deterministic, rule-following answers for every output schema, no API calls) and no Telegram (messages go to the log). There is no IB Gateway in the dev stack, so nothing is placed (each proposal gets a "not connected" error step). Useful for the scheduler, the scan and the dashboard on real data; the fake proposals mean nothing.
 - **On the Zenbook**: integration tests against the IBKR paper gateway (`pytest -m ibkr`), and evals against the real models (`uv run pytest -m llm tests/evals`, reads `GEMINI_API_KEY` from `.env`; section 15.5).
 - **CI (GitHub Actions)**: `ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest -m "not ibkr and not llm"` (DB tests run against a Postgres service container) and a `docker build`. No secrets in CI. DB tests only run when `DB_NAME` ends in `_test`, because they drop tables.
 - **pre-commit**: ruff, end-of-file fixers, and a secret scanner (for example `gitleaks`).
@@ -1073,12 +1102,13 @@ flowchart LR
 | M8 | Risk and execution | Full risk engine, bracket orders, FSM, idempotency, stop management, kill switch, interlock; `READ_ONLY_API=no` | Chaos tests pass: restarting the gateway with open orders, rebooting the laptop during a session, and replaying the same proposal all leave no duplicates and no unprotected positions |
 | M9 | Paper operations | Daily routine (CONCEPT.md 13.1), weekly report, prompt and rule iterations (versioned) | The go-live gate in section 14 is met |
 | M10 | Mini PC and go-live | Migration (15.4), tax report (EUR conversion, Anlage KAP categories), go-live checklist | Checklist in section 18 complete |
+| S | Simplification (2026-11, 19.4) | Step log and readable order refs; IBKR only (simulator, backtest, comparison books and weekly report removed); dashboard Day/Portfolio; `orchestrator.py` and code ranking; News agent for buys and exits (Finnhub US, Yahoo EU) | Done in the repo; the IBKR paper checks of [RUNNING.md](RUNNING.md) follow on the Zenbook |
 
 ---
 
 ## 18. Go-live checklist (Phase 3)
 
-- [ ] Go-live gate met and the weekly reports archived
+- [ ] Go-live gate met (section 14: 3 months, 50 closed `agent_paper` trades, positive net expectancy after fees and LLM costs)
 - [ ] Mini PC running for at least 2 weeks without incident
 - [ ] IBKR live account funded with €1,000; EUR→USD converted in one block; W-8BEN filed
 - [ ] `risk.yaml` live values reviewed (US only, lean mode on)
@@ -1137,3 +1167,19 @@ flowchart LR
 | 4 | Macro data | Optional deterministic regime gate (off) plus a macro snapshot for the proposer (prompt v2) | 6.2, 8.1 |
 | 5 | Trailing stop | ATR chandelier after breakeven, target kept, off by default | 6.2, 6.4 |
 | 6 | Local stack | `compose.dev.yaml` with the offline fake model | 16.2 |
+
+### 19.4 Decisions of 2026-11 (simplification)
+
+Why: it was unclear which orders really existed at IBKR and which only in a simulated book, and what happened to each stock on a given day.
+
+| # | Question | Decision | Consequence |
+|---|---|---|---|
+| 1 | Simulator, dry run, comparison books | IBKR or nothing: no simulator, no dry run, no `baseline_sim`/`agent_shadow`, no backtest CLI, no weekly report | Removed code and jobs; migration `0014` archives simulator rows as `sim_archive`; while the gateway is down nothing is placed and the step log and 🔌 say so |
+| 2 | Transparency per stock and day | A step log (`steps`) written by every stage, and IBKR's reply and error text per order | Dashboard **Day**; order refs `TA-<symbol>-<kind>-<id>` are searchable in the IBKR app |
+| 3 | Where the flow is | One `orchestrator.py` with the day's stages | `pipeline.py` and `trading.py` keep the building blocks |
+| 4 | Multi-agent setup, framework | Keep separate agents (technical, earnings, proposer, critic); no LangChain/LangGraph, PydanticAI stays | MAS-DESIGN.md |
+| 5 | Portfolio manager | Dropped; code ranks by confidence × R:R | One LLM call less per scan |
+| 6 | Critic | Kept | |
+| 7 | News | One News agent replaces triage and review; news triggers buys (via the next scan, basic rules, at most 1 news trade a day) and exits (market sell at confidence ≥ 0.7, advice below) | Supersedes 19.2 #14; Finnhub for US, Yahoo for EU (`yfinance` ≥ 1.8) |
+| 8 | Markets | US and EU in paper, one paper budget (EUR 15,000) | Supersedes the sleeves of 19.1 |
+| 9 | Start | The agent and the gateway start by hand (`make up`), never on boot | `restart: "no"` in `compose.yaml` |

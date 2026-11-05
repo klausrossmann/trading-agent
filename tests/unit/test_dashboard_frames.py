@@ -1,5 +1,6 @@
 import math
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -8,7 +9,7 @@ from trading_agent.dashboard import frames
 from trading_agent.domain.trading import Trade
 
 BASE = Trade(
-    book="baseline_sim",
+    book="agent_paper",
     strategy="pullback_uptrend",
     instrument_id=1,
     yahoo_symbol="AAA",
@@ -40,26 +41,234 @@ def _closed(pnl: float, exit_day: int, **kw: object) -> Trade:
     )
 
 
-def test_open_positions_converts_usd_and_subtracts_fees() -> None:
-    eu = BASE.model_copy(update={"instrument_id": 2, "yahoo_symbol": "SAP.DE", "market": "EU"})
-    frame = frames.open_positions(
-        [BASE, eu, _closed(5, 9)],
-        {1: (date(2026, 10, 7), 104.0), 2: (date(2026, 10, 7), 90.0)},
-        1.25,
+T0 = datetime(2026, 10, 7, 6, 15, tzinfo=UTC)
+
+
+def step(
+    symbol: str, name: str, status: str, summary: str, minute: int, **kw: object
+) -> dict[str, Any]:
+    return {
+        "id": minute,
+        "ts": T0 + timedelta(minutes=minute),
+        "day": T0.date(),
+        "market": kw.pop("market", "US"),
+        "symbol": symbol,
+        "step": name,
+        "status": status,
+        "summary": summary,
+        "input": None,
+        "output": None,
+        "error": None,
+        "analysis_id": None,
+        "proposal_id": kw.pop("proposal_id", None),
+        "order_ref": None,
+    }
+
+
+def day_steps() -> pd.DataFrame:
+    pid = "9b0c6f0e-0000-4000-8000-000000000001"
+    bought = [
+        step("AAA", n, "passed", f"{n} ok", i, proposal_id=pid)
+        for i, n in enumerate(frames.PHASES[:-1])
+    ]
+    return pd.DataFrame(
+        [
+            *bought,
+            step("AAA", "broker", "info", "entry order pending -> working", 20, proposal_id=pid),
+            step("AAA", "fill", "passed", "bought 3 at 100", 30, proposal_id=pid),
+            step("BBB", "screen", "stopped", "RSI 61.0, needs 40-55", 1),
+            step("CCC", "screen", "passed", "rank 2", 1),
+            step("CCC", "technical", "stopped", "rating neutral, needs buy", 2),
+            step("DDD", "screen", "passed", "rank 3", 1),
+            step("DDD", "technical", "passed", "rating buy", 2),
+            step("DDD", "earnings", "error", "earnings failed, proposer runs without it", 3),
+            step("DDD", "proposer", "stopped", "no trade: weak volume", 4),
+            step("EEE", "exit", "passed", "sold 2 at 108 (target)", 40, market="EU"),
+        ]
     )
-    us_row, eu_row = frame.to_dict("records")
-    assert len(frame) == 2
-    assert us_row["r_now"] == pytest.approx(0.8)
-    assert us_row["pnl_eur"] == pytest.approx(3 * 4 / 1.25 - 1.8)
-    assert eu_row["r_now"] == pytest.approx(-2.0)
-    assert eu_row["pnl_eur"] == pytest.approx(3 * -10 - 1.8)
 
 
-def test_open_positions_without_close_or_rate() -> None:
-    (row,) = frames.open_positions([BASE], {}, None).to_dict("records")
-    assert row["close"] is None
-    assert row["r_now"] is None
-    assert row["pnl_eur"] is None
+def test_day_table_one_row_per_stock() -> None:
+    table = frames.day_table(day_steps()).set_index("symbol")
+    assert list(table.index) == ["EEE", "AAA", "DDD", "CCC", "BBB"]  # furthest first
+    aaa = table.loc["AAA"].to_dict()
+    assert (aaa["reached"], aaa["stopped_at"]) == ("fill", "")
+    assert aaa["order"] == "✓ order ok"  # the broker's info doesn't hide the order
+    assert aaa["fill"] == "✓ bought 3 at 100"
+    assert aaa["proposal_id"] == "9b0c6f0e-0000-4000-8000-000000000001"
+    assert table.loc["BBB", "screen"] == "✗ RSI 61.0, needs 40-55"
+    assert (table.loc["DDD", "earnings"], table.loc["DDD", "stopped_at"]) == (
+        "⚠ earnings failed, proposer runs without it",
+        "proposer",
+    )
+    assert (table.loc["EEE", "reached"], table.loc["EEE", "screen"]) == ("exit", "")
+
+
+def test_funnel_and_filters() -> None:
+    table = frames.day_table(day_steps())
+    counts = dict(frames.funnel(table).itertuples(index=False))
+    assert counts == {
+        "stocks": 4,  # EEE only sold today; it wasn't screened
+        "screen": 3,
+        "technical": 2,
+        "earnings": 2,  # an earnings error doesn't stop a stock
+        "proposer": 1,
+        "critic": 1,
+        "rank": 1,
+        "risk": 1,
+        "order": 1,
+        "fill": 1,
+    }
+    pick = frames.select_rows
+    assert list(pick(table, "past the screen")["symbol"]) == ["EEE", "AAA", "DDD", "CCC"]
+    assert list(pick(table, "bought")["symbol"]) == ["AAA"]
+    assert list(pick(table, "stopped at screen")["symbol"]) == ["BBB"]
+    assert list(pick(table, "stopped at proposer")["symbol"]) == ["DDD"]
+    assert len(pick(table, "all stocks")) == 5
+
+
+def test_news_steps_have_their_own_column() -> None:
+    steps = pd.concat(
+        [
+            day_steps(),
+            pd.DataFrame(
+                [
+                    step("FFF", "news", "info", "hold, confidence 0.40: no change", 50),
+                    step("GGG", "news", "passed", "buy, confidence 0.80: raised outlook", 0),
+                    step("GGG", "screen", "passed", "news candidate 1", 1),
+                ]
+            ),
+        ]
+    )
+    table = frames.day_table(steps).set_index("symbol")
+    assert table.loc["FFF", "news"] == "· hold, confidence 0.40: no change"
+    assert str(table.loc["GGG", "news"]).startswith("✓ buy")
+    counts = dict(frames.funnel(table.reset_index()).itertuples(index=False))
+    assert (counts["stocks"], counts["screen"]) == (5, 4)  # FFF only had news: not screened
+    past = set(frames.select_rows(table.reset_index(), "past the screen")["symbol"])
+    assert "GGG" in past
+    assert "FFF" not in past
+
+
+def test_long_cells_are_cut() -> None:
+    long = pd.DataFrame([step("AAA", "screen", "stopped", "x" * 200, 1)])
+    cell = frames.day_table(long)["screen"].iloc[0]
+    assert len(cell) == frames.CELL_CHARS
+    assert cell.endswith("…")
+
+
+def positions() -> pd.DataFrame:
+    common = {"book": "agent_paper", "strategy": "pullback_uptrend", "quantity": 3.0}
+    return pd.DataFrame(
+        [
+            common
+            | {
+                "id": "a",
+                "symbol": "AAA",
+                "market": "US",
+                "currency": "USD",
+                "state": "filled",
+                "open_qty": 3.0,
+                "pending_qty": 0.0,
+                "limit": 100.0,
+                "entry_price": 100.0,
+                "initial_stop": 96.0,
+                "stop": 100.0,
+                "target": 108.0,
+                "expires": T0,
+                "entered": datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+                "last_date": date(2026, 10, 7),
+                "last_close": 105.0,
+            },
+            common
+            | {
+                "id": "b",
+                "symbol": "SAP.DE",
+                "market": "EU",
+                "currency": "EUR",
+                "state": "exiting",
+                "open_qty": 2.0,
+                "pending_qty": 0.0,
+                "limit": 200.0,
+                "entry_price": 200.0,
+                "initial_stop": 190.0,
+                "stop": 190.0,
+                "target": 220.0,
+                "expires": T0,
+                "entered": datetime(2026, 10, 6, 8, 0, tzinfo=UTC),
+                "last_date": None,
+                "last_close": None,
+            },
+            common
+            | {
+                "id": "c",
+                "symbol": "BBB",
+                "market": "US",
+                "currency": "USD",
+                "state": "working",
+                "open_qty": 0.0,
+                "pending_qty": 3.0,
+                "limit": 50.0,
+                "entry_price": None,
+                "initial_stop": 48.0,
+                "stop": 48.0,
+                "target": 54.0,
+                "expires": T0,
+                "entered": None,
+                "last_date": None,
+                "last_close": None,
+            },
+        ]
+    )
+
+
+def test_open_positions_and_pending_entries() -> None:
+    held = frames.open_positions(positions(), 1.25, 15, date(2026, 10, 7)).set_index("symbol")
+    aaa = held.loc["AAA"].to_dict()
+    assert (aaa["state"], aaa["stop_moved"], aaa["bought"]) == ("held", "yes", date(2026, 10, 5))
+    assert aaa["r_now"] == pytest.approx(1.25)
+    assert aaa["pnl_eur"] == pytest.approx(3 * 5 / 1.25)
+    assert aaa["sessions_held"] == 2
+    assert aaa["time_stop"] == date(2026, 10, 26)  # 15 NYSE sessions after 5 Oct
+    sap = held.loc["SAP.DE"].to_dict()
+    assert (sap["state"], sap["stop_moved"]) == ("selling", "no")
+    assert sap["last_close"] is None or math.isnan(sap["last_close"])
+    (pending,) = frames.pending_entries(positions()).to_dict("records")
+    assert (pending["symbol"], pending["pending_qty"], pending["limit"]) == ("BBB", 3.0, 50.0)
+
+
+def test_sold_trades_say_why() -> None:
+    sold = pd.DataFrame(
+        [
+            {"exit_reason": reason, "entry_price": 100.0, "exit_price": price}
+            for reason, price in (("target", 108.0), ("stop", 96.0), ("stop", 100.2), ("x", 1.0))
+        ]
+    )
+    full = sold.assign(
+        **{
+            c: None
+            for c in (
+                "exit_date",
+                "symbol",
+                "market",
+                "entry_date",
+                "quantity",
+                "holding_sessions",
+                "r_multiple",
+                "pnl_net_eur",
+                "fees_eur",
+                "id",
+            )
+        }
+    )
+    assert list(frames.sold_trades(full)["why"]) == [
+        "target reached",
+        "stop hit",
+        "stop hit after it was raised (breakeven or trailing)",
+        "x",
+    ]
+    assert frames.exit_why("time", 100, 99) == "time stop"
+    assert frames.exit_why(None, 100, None) == "-"
 
 
 def test_kpis_per_book_and_market() -> None:
@@ -85,16 +294,10 @@ def test_realized_pnl_curve_is_cumulative_per_series() -> None:
     curve = frames.realized_pnl_curve(
         [BASE, _closed(10, 8), _closed(-4, 8), _closed(3, 12), _closed(2, 9, market="EU")]
     )
-    assert list(curve.columns) == ["baseline_sim EU", "baseline_sim US"]
-    assert curve["baseline_sim US"].tolist() == [6, 6, 9]
-    assert curve["baseline_sim EU"].tolist() == [0, 2, 2]
+    assert list(curve.columns) == ["agent_paper EU", "agent_paper US"]
+    assert curve["agent_paper US"].tolist() == [6, 6, 9]
+    assert curve["agent_paper EU"].tolist() == [0, 2, 2]
     assert frames.realized_pnl_curve([BASE]).empty
-
-
-def test_closed_trades_latest_first() -> None:
-    frame = frames.closed_trades([BASE, _closed(1, 8), _closed(2, 12)])
-    assert frame["pnl_net_eur"].tolist() == [2, 1]
-    assert frames.closed_trades([BASE]).empty
 
 
 def test_monthly_costs() -> None:
@@ -120,19 +323,25 @@ def test_monthly_costs() -> None:
 
 
 LIMITS = {
-    "capital": {"agent_budget_eur": 1000, "paper_budget_eur": {"EU": 5000}},
+    "capital": {"agent_budget_eur": 1000, "paper_budget_eur": 5000},
     "loss_limits": {"daily_loss_pct": 3, "weekly_loss_pct": 6, "max_drawdown_pct": 15},
     "portfolio": {"max_open_positions": 4, "max_sector_pct": 60},
 }
 
 
-def test_limit_usage() -> None:
+def test_limit_usage_of_the_one_account() -> None:
     equity = pd.DataFrame(
         {
-            "book": ["agent_paper"] * 3 + ["agent_live"],
-            "sleeve": ["US"] * 3 + ["US"],
-            "date": [date(2026, 10, 2), date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 7)],
-            "equity_eur": [1020.0, 1010.0, 990.0, 1.0],
+            "book": ["agent_paper"] * 4 + ["agent_live"],
+            "sleeve": ["US"] + ["US,EU"] * 3 + ["US"],
+            "date": [
+                date(2026, 9, 30),
+                date(2026, 10, 2),
+                date(2026, 10, 6),
+                date(2026, 10, 7),
+                date(2026, 10, 7),
+            ],
+            "equity_eur": [9999.0, 5020.0, 5010.0, 4990.0, 1.0],
         }
     )
     brackets = pd.DataFrame(
@@ -150,17 +359,15 @@ def test_limit_usage() -> None:
             "entry_price": [110.0, None, 40.0],
         }
     )
-    out = frames.limit_usage(equity, brackets, LIMITS, usd_per_eur=1.1)
-    us = out[out["sleeve"] == "US"].set_index("limit")
-    assert us.loc["Drawdown (EUR)", "value"] == 30  # peak 1020
-    assert us.loc["Drawdown (EUR)", "used_pct"] == pytest.approx(20)
-    assert us.loc["Loss on the last day (EUR)", "value"] == 20
-    assert us.loc["Loss this week (EUR)", "value"] == 30  # vs Friday 2 Oct
-    assert us.loc["Positions and entries", "value"] == 2
-    assert us.loc["Largest sector (EUR)", "value"] == pytest.approx((220 + 150) / 1.1)
-    eu = out[out["sleeve"] == "EU"].set_index("limit")
-    assert eu.loc["Drawdown (EUR)", "max"] == 750  # 15 % of the EUR 5,000 sleeve
-    assert eu.loc["Largest sector (EUR)", "value"] == 400
+    out = frames.limit_usage(equity, brackets, LIMITS, usd_per_eur=1.1).set_index("limit")
+    assert out.loc["Drawdown (EUR)", "value"] == 30  # peak 5020; the old per-market key is ignored
+    assert out.loc["Drawdown (EUR)", "max"] == 750  # 15 % of the EUR 5,000 paper budget
+    assert out.loc["Drawdown (EUR)", "used_pct"] == pytest.approx(4)
+    assert out.loc["Loss on the last day (EUR)", "value"] == 20
+    assert out.loc["Loss this week (EUR)", "value"] == 30  # vs Friday 2 Oct
+    assert out.loc["Positions and entries", "value"] == 3  # US and EU together
+    assert out.loc["Largest sector (EUR)", "value"] == 400  # Energy beats Tech (370 USD)
+    assert frames.limit_usage(equity.iloc[0:0], brackets.iloc[0:0], LIMITS, None).empty
 
 
 def test_correlation_matrix() -> None:
@@ -169,27 +376,3 @@ def test_correlation_matrix() -> None:
     assert list(m.columns) == ["A", "B"]
     assert m.loc["A", "B"] == pytest.approx(1.0)
     assert frames.correlation_matrix(closes[[1]], {1: "A"}).empty
-
-
-def test_outcomes_gate_and_calibration() -> None:
-    paper = _closed(5, 8).model_copy(update={"book": "agent_paper", "yahoo_symbol": "AAA"})
-    shadow = _closed(-2, 9).model_copy(
-        update={"book": "agent_shadow", "yahoo_symbol": "BBB", "instrument_id": 2}
-    )
-    proposals = pd.DataFrame(
-        {
-            "symbol": ["AAA", "BBB"],
-            "as_of": [paper.signal_date, shadow.signal_date],
-            "confidence": [0.75, float("nan")],
-            "label": ["agree", None],
-        }
-    )
-    items = frames.outcomes([paper, shadow, BASE], proposals)
-    assert [(o.confidence, o.label, o.pnl_eur) for o in items] == [
-        (0.75, "agree", 5),
-        (None, None, -2),
-    ]
-    assert frames.calibration(items).values.tolist() == [["0.7-0.8", 1, 100.0]]
-    gate = frames.gate([paper, shadow], 1.0, date(2026, 10, 1), date(2026, 10, 20))
-    assert gate["met"].tolist() == [False, False, True, False]  # no baseline trades yet
-    assert gate["detail"].tolist()[2] == "EUR 1.00 per trade"

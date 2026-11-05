@@ -23,7 +23,7 @@ from trading_agent.domain.orders import (
 _BRACKET = tuple(Bracket.model_fields)
 _SPEC = ("kind", "action", "order_type", "quantity", "limit_price", "stop_price", "tif")
 _SPEC_MORE = ("good_till", "parent_ref", "oca_group")
-_STATUS = ("status", "filled", "avg_fill_price", "broker_order_id", "perm_id")
+_STATUS = ("status", "filled", "avg_fill_price", "broker_order_id", "perm_id", "message")
 
 
 def _bracket(row: BracketRow) -> Bracket:

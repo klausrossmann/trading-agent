@@ -14,23 +14,19 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, pipeline, reports, review, telemetry, trading
+from trading_agent import broker, jobs, journal, news, orchestrator, telemetry, trading
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import describe_error
-from trading_agent.data.news import FinnhubNews
+from trading_agent.data.news import FinnhubNews, NewsSource, YahooNews
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
-from trading_agent.db import orders as orders_repo
 from trading_agent.db.session import create_engine, session_factory
 from trading_agent.domain.trading import book_for_mode
-from trading_agent.execution.orders import OrderBroker
-from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
 from trading_agent.llm.prompts import load_prompt
-from trading_agent.modules import news_triage, position_review
-from trading_agent.modules.news_triage import NewsTriageModule
-from trading_agent.modules.position_review import PositionReviewModule
+from trading_agent.modules import news as news_module
+from trading_agent.modules.news import NewsAgent
 from trading_agent.notify import heartbeat, messages
 from trading_agent.notify.telegram import (
     Command,
@@ -143,7 +139,7 @@ def job_functions(
     center: ControlCenter | None = None,
     trade: trading.TradingContext | None = None,
     expected: broker.Expected | None = None,
-    review_ctx: review.ReviewContext | None = None,
+    news_ctx: news.NewsContext | None = None,
 ) -> dict[str, JobFn]:
     halt = center.halt if center else None
     fns: dict[str, JobFn] = {
@@ -151,30 +147,29 @@ def job_functions(
         "ingest_earnings": partial(jobs.earnings, data),
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
-        "baseline_sim": partial(jobs.baseline_book, book),
         "evening_digest": partial(journal.evening_digest, book, notifier),
         "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
         "scan_eu": telemetry.traced(
-            "scan_eu", partial(pipeline.scheduled_scan, analysis, notifier, "EU")
+            "scan_eu", partial(orchestrator.scheduled_scan, analysis, notifier, "EU")
         ),
         "scan_us": telemetry.traced(
-            "scan_us", partial(pipeline.scheduled_scan, analysis, notifier, "US")
+            "scan_us", partial(orchestrator.scheduled_scan, analysis, notifier, "US")
         ),
         "reconcile": partial(broker.reconcile_positions, link, notifier, expected, halt),
-        "weekly_report": partial(reports.weekly_report, book, notifier),
     }
     if trade is not None:
         fns |= {
-            "place_eu": partial(trading.place, trade, "EU"),
-            "place_us": partial(trading.place, trade, "US"),
-            "execution_eu": partial(trading.end_of_day, trade, "EU"),
-            "execution_us": partial(trading.end_of_day, trade, "US"),
-            "monitor": partial(trading.monitor, trade),
+            "place_eu": partial(orchestrator.place, trade, "EU"),
+            "place_us": partial(orchestrator.place, trade, "US"),
+            "execution_eu": partial(orchestrator.end_of_day, trade, "EU"),
+            "execution_us": partial(orchestrator.end_of_day, trade, "US"),
+            "monitor": partial(orchestrator.monitor, trade),
         }
-    if review_ctx is not None:
+    if news_ctx is not None:
         fns |= {
-            "ingest_news": partial(review.ingest_news, review_ctx),
-            "reevaluate_positions": partial(review.reevaluate_positions, review_ctx),
+            "news_positions": partial(news.watch_positions, news_ctx),
+            "news_eu": telemetry.traced("news_eu", partial(news.scan_news, news_ctx, "EU")),
+            "news_us": telemetry.traced("news_us", partial(news.scan_news, news_ctx, "US")),
         }
     return fns
 
@@ -190,56 +185,50 @@ def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
     return Interaction(on_button, review.on_text)
 
 
-def review_context(
+def news_context(
     settings: Settings,
     trade: trading.TradingContext,
     analysis: jobs.AnalysisContext,
     http: httpx.AsyncClient,
-) -> review.ReviewContext:
+) -> news.NewsContext:
     key = settings.finnhub_api_key
-    return review.ReviewContext(
+    sources: list[NewsSource] = [YahooNews()]
+    if key is not None and key.get_secret_value():
+        sources.append(FinnhubNews(http, key))
+    else:
+        log.warning("news.no_finnhub_key", effect="no news for US stocks")
+    return news.NewsContext(
         trade=trade,
         runner=analysis.runner,
-        triage=NewsTriageModule(
-            load_prompt(settings.prompts_dir, news_triage.NAME, news_triage.PROMPT_VERSION)
+        agent=NewsAgent(
+            load_prompt(settings.prompts_dir, news_module.NAME, news_module.PROMPT_VERSION)
         ),
-        review=PositionReviewModule(
-            load_prompt(settings.prompts_dir, position_review.NAME, position_review.PROMPT_VERSION)
-        ),
-        news=FinnhubNews(http, key) if key is not None and key.get_secret_value() else None,
+        sources=sources,
+        params=analysis.news,
     )
 
 
-async def trading_context(
+def trading_context(
     settings: Settings,
     sessions: jobs.Sessions,
     book: jobs.BookContext,
     center: ControlCenter,
     notifier: Notifier,
-    link: broker.BrokerLink | None,
+    link: broker.BrokerLink,
 ) -> trading.TradingContext:
-    """Orders go to IBKR only with IB_ORDERS_ENABLED; otherwise to the simulator, rebuilt
-    from the stored orders."""
-    sim: SimBroker | None = None
-    if settings.ib_orders_enabled and link is not None:
-        order_broker: OrderBroker = link.broker
-    else:
-        sim = SimBroker(slippage_pct=book.cfg.slippage_pct)
-        async with sessions() as s:
-            sim.restore(await orders_repo.orders(s))
-        order_broker = sim
+    """Every order goes to IBKR through `link`; there is no other broker."""
     mode = settings.app_mode
     return trading.TradingContext(
         sessions=sessions,
-        executor=Executor(sessions, order_broker, book_for_mode(mode)),
+        executor=Executor(sessions, link.broker, book_for_mode(mode)),
         center=center,
         risk=book.risk,
         fees=book.fees,
-        rules=book.cfg.pullback,
+        rules=book.pullback,
         mode=mode,
         notifier=notifier,
-        sim=sim,
-        market_info=link.market_info if link is not None else None,
+        market_info=link.market_info,
+        news=book.news,
     )
 
 
@@ -319,16 +308,14 @@ async def serve(
             trace_ui_url=settings.trace_ui_url,
             dashboard_ui_url=settings.dashboard_ui_url,
         )
-        book = jobs.BookContext.load(settings.config_dir, sessions, universe)
+        book = jobs.BookContext.load(settings.config_dir, sessions, universe, settings.app_mode)
         analysis = jobs.AnalysisContext.build(settings, sessions, universe)
         review = journal.Review(sessions)
-        link: broker.BrokerLink | None = None
         center = ControlCenter(sessions, settings.app_mode)
-        if settings.ib_enabled:
-            link = broker.BrokerLink(settings, LogNotifier())
-            center.gateway_mode = link.mode
-            state.gateway = link.status
-        trade = await trading_context(settings, sessions, book, center, LogNotifier(), link)
+        link = broker.BrokerLink(settings, LogNotifier())
+        center.gateway_mode = link.mode
+        state.gateway = link.status
+        trade = trading_context(settings, sessions, book, center, LogNotifier(), link)
         notifier = build_notifier(
             settings.telegram_bot_token,
             settings.telegram_owner_chat_id,
@@ -338,9 +325,7 @@ async def serve(
             | trading.commands(trade),
             interaction(review, center),
         )
-        center.notifier = trade.notifier = notifier
-        if link is not None:
-            link.notifier = notifier
+        center.notifier = trade.notifier = link.notifier = notifier
         live = center.start_live_interlock()
 
         async def kill_switch_line() -> str:
@@ -349,23 +334,19 @@ async def serve(
         state.kill_switch, state.interlock = kill_switch_line, center.interlock_line
         if isinstance(notifier, TelegramBot):
             notifier.start()
-        link_task: asyncio.Task[None] | None = None
-        expected = (
-            partial(trading.expected_positions, trade) if settings.ib_orders_enabled else None
-        )
+        expected = partial(trading.expected_positions, trade)
         center.on_halt = partial(trading.cancel_entries, trade, "halted")
-        if link is not None:
-            link.on_connect = partial(
-                broker.on_connect,
-                sessions=sessions,
-                notifier=notifier,
-                expected=expected,
-                halt=center.halt,
-            )
-            link_task = asyncio.create_task(link.run(stop))
+        link.on_connect = partial(
+            broker.on_connect,
+            sessions=sessions,
+            notifier=notifier,
+            expected=expected,
+            halt=center.halt,
+        )
+        link_task = asyncio.create_task(link.run(stop))
         async with httpx.AsyncClient() as http:
             ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
-            ctx.ibkr = link.prices if link else None
+            ctx.ibkr = link.prices
             scheduler = build_scheduler(
                 schedule,
                 settings,
@@ -379,7 +360,7 @@ async def serve(
                     center,
                     trade,
                     expected,
-                    review_context(settings, trade, analysis, http),
+                    news_context(settings, trade, analysis, http),
                 ),
                 state,
             )
@@ -405,8 +386,7 @@ async def serve(
                 scheduler.shutdown(wait=False)
                 await notifier.send("⏹ Agent stopping")
                 await asyncio.gather(*pending_alerts, return_exceptions=True)
-                if link_task is not None:
-                    await link_task
+                await link_task
                 if isinstance(notifier, TelegramBot):
                     await notifier.stop()
         await audit.record(sessions, actor="agent", event="agent.stopped")

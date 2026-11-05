@@ -37,7 +37,6 @@ JOBS: dict[str, JobFn] = {
         "ingest_earnings",
         "ingest_eod_eu",
         "ingest_eod_us",
-        "baseline_sim",
         "evening_digest",
         "briefing",
         "scan_eu",
@@ -48,9 +47,9 @@ JOBS: dict[str, JobFn] = {
         "execution_eu",
         "execution_us",
         "monitor",
-        "weekly_report",
-        "ingest_news",
-        "reevaluate_positions",
+        "news_positions",
+        "news_eu",
+        "news_us",
     )
 }
 

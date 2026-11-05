@@ -1,4 +1,5 @@
-"""Agent pipeline end to end against a real database, with a scripted model per agent."""
+"""The orchestrator's scan end to end against a real database, with a scripted model per
+agent."""
 
 import json
 from datetime import UTC, date, datetime
@@ -17,14 +18,17 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from trading_agent import jobs, pipeline
+from trading_agent import jobs, orchestrator, pipeline
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
 from trading_agent.db import proposals as proposals_repo
+from trading_agent.db import steps as steps_repo
 from trading_agent.db.analyses import DbAnalysisStore
+from trading_agent.db.models import AnalysisRow
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
+from trading_agent.domain.steps import Step
 from trading_agent.llm.fake import fake_model
 from trading_agent.llm.runner import LlmRunner
 from trading_agent.settings import Settings
@@ -113,14 +117,14 @@ class Agents:
             kind = "proposer"
             args = {
                 "decision": "propose",
-                "confidence": 0.4,
+                "confidence": 0.5 if inp["symbol"] == "BBB" else 0.4,
                 "thesis": f"{inp['symbol']} pulls back in an uptrend.",
                 "invalidation": "A close below atr_stop_2x.",
                 "no_trade_reason": None,
                 "data_gaps": gaps,
                 **PLAN,
             }
-        elif "objections" in fields:
+        else:
             kind = "critic"
             blocking = inp["facts"]["symbol"] in self.block
             severity = "blocking" if blocking else "minor"
@@ -129,13 +133,6 @@ class Agents:
                 "severity": severity,
                 "confidence_delta": -0.05,
                 "summary": "Acceptable." if not blocking else "Don't.",
-            }
-        else:
-            kind = "portfolio_manager"
-            symbols = sorted(c["symbol"] for c in inp["candidates"])
-            args = {
-                "ranking": [{"symbol": s, "note": "Fits."} for s in reversed(symbols)],
-                "rationale": "Diversified.",
             }
         self.calls.append(kind)
         return ModelResponse(parts=[ToolCallPart(tool.name, args)])
@@ -176,13 +173,13 @@ async def _context(
 
 async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Settings) -> None:
     script = Agents(block={"CCC"})
-    ctx, universe = await _context(sessions, settings, script)
-    run = await pipeline.propose(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
+    ctx, _ = await _context(sessions, settings, script)
+    run = await orchestrator.scan(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
 
     assert run.as_of == date(2026, 10, 5)
     assert run.skipped == {}
     assert script.calls.count("critic") == 3
-    assert script.calls[-1] == "portfolio_manager"
+    assert script.calls[-1] == "critic"  # ranking is code, no LLM call
     by_symbol = {p.yahoo_symbol: p for p in run.proposals}
     assert {s: (p.status, p.rank) for s, p in by_symbol.items()} == {
         "BBB": ("proposed", 1),
@@ -195,14 +192,26 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
     assert aaa.stop is not None
     assert aaa.entry is not None
     assert aaa.stop < aaa.entry
-    assert set(aaa.analyses) == {
+    assert set(aaa.analyses) == {"technical", "earnings", "proposer", "critic"}
+
+    async with sessions() as s:
+        steps = await steps_repo.steps(s, day=date(2026, 10, 6))
+    by = {(x.symbol, x.step): x for x in steps}
+    assert [x.step for x in steps if x.symbol == "AAA"] == [
         "technical",
         "earnings",
         "proposer",
         "critic",
-        "portfolio_manager",
-    }
-    assert aaa.payload["portfolio_manager"]["note"] == "Fits."
+        "rank",
+    ]
+    assert all(x.proposal_id == aaa.id for x in steps if x.symbol == "AAA")
+    assert by[("AAA", "technical")].analysis_id == aaa.analyses["technical"]
+    assert by[("AAA", "technical")].summary == "rating buy, setup quality 0.60"
+    assert by[("AAA", "earnings")].summary == "no_event_in_window, event risk low"
+    assert by[("AAA", "proposer")].summary.startswith("buy at close ")
+    assert by[("AAA", "critic")].summary == "minor, confidence -0.05: Acceptable."
+    assert by[("AAA", "rank")].summary.startswith("rank 2: confidence 0.35 x R:R 2.0")
+    assert (by[("CCC", "critic")].status, ("CCC", "rank") in by) == ("stopped", False)
 
     async with sessions() as s:
         stored = await proposals_repo.proposals(s, start=date(2026, 10, 5))
@@ -217,7 +226,7 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
 
     # Same day again: cached analyses, no new LLM calls, same rows and labels.
     calls = len(script.calls)
-    again = await pipeline.propose(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
+    again = await orchestrator.scan(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
     assert len(script.calls) == calls
     assert again.cost_usd == 0
     assert {p.id for p in again.proposals} == {p.id for p in run.proposals}
@@ -226,13 +235,12 @@ async def test_pipeline_stores_ranked_proposals(sessions: Sessions, settings: Se
         latest = await proposals_repo.latest_for_symbol(s, "aaa")
     assert latest is not None
     assert latest.id == aaa.id
+    async with sessions() as s:
+        assert len(await steps_repo.steps(s, day=date(2026, 10, 6))) == len(steps)
 
-    text = pipeline.summary(again, "US")
+    text = orchestrator.summary(again, "US")
     assert text.splitlines()[1].startswith("1. BBB ")
     assert "Blocked by the critic: CCC" in text
-
-    book = jobs.BookContext.load(ROOT / "config", sessions, universe)
-    assert await jobs.agent_book(book, today=date(2026, 10, 6)) == []  # placed the next session
 
 
 async def test_offline_fake_model_and_macro_context(sessions: Sessions, settings: Settings) -> None:
@@ -240,7 +248,7 @@ async def test_offline_fake_model_and_macro_context(sessions: Sessions, settings
     ctx.runner = LlmRunner(
         ctx.models, DbAnalysisStore(sessions), lambda _: fake_model(), dev_overrides=True
     )
-    run = await pipeline.propose(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
+    run = await orchestrator.scan(ctx, symbols=["AAA", "BBB", "CCC"], today=date(2026, 10, 6))
     assert run.skipped == {}
     assert {p.status for p in run.proposals} == {"proposed"}
     assert all(p.risk_reward is not None and p.risk_reward >= 2 for p in run.proposals)
@@ -249,3 +257,39 @@ async def test_offline_fake_model_and_macro_context(sessions: Sessions, settings
     assert macro.benchmark == "SPY"
     assert macro.benchmark_trend["daily"] == "up"
     assert macro.vix is None  # no FRED data stored
+
+
+async def test_a_news_buy_signal_joins_the_scan(sessions: Sessions, settings: Settings) -> None:
+    """No stock passes the pullback rules (a straight uptrend has no pullback), but CCC has a
+    buy signal from the News agent: it is analysed with the basic rules and its catalyst."""
+    script = Agents(block=set())
+    ctx, _ = await _context(sessions, settings, script)
+    async with sessions() as s:
+        ids = {i.yahoo_symbol: k for k, i in (await repo.active_instruments(s)).items()}
+    signal = Step(
+        day=date(2026, 10, 5),
+        market="US",
+        instrument_id=ids["CCC"],
+        symbol="CCC",
+        step="news",
+        status="passed",
+        summary="buy, confidence 0.80: Raised outlook.",
+        input={"headlines": ["CCC raises its outlook"]},
+        output={"action": "buy", "confidence": 0.8, "reason": "Raised outlook."},
+    )
+    async with sessions.begin() as s:
+        await steps_repo.add_steps(s, [signal])
+
+    run = await orchestrator.scan(ctx, "US", today=date(2026, 10, 6), now=NOW)
+    [p] = run.proposals
+    assert (p.yahoo_symbol, p.strategy, p.status) == ("CCC", "news", "proposed")
+    async with sessions() as s:
+        steps = await steps_repo.steps(s, day=date(2026, 10, 6))
+    screened = {x.symbol: x for x in steps if x.step == "screen"}
+    assert screened["CCC"].summary == "news candidate 1: price, liquidity and report date ok"
+    assert screened["AAA"].status == "stopped"
+    async with sessions() as s:
+        analysis = await s.get(AnalysisRow, p.analyses["proposer"])
+    assert analysis is not None
+    assert analysis.input["candidate_source"] == "news"
+    assert "CCC raises its outlook" in analysis.input["catalyst"]

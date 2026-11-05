@@ -28,13 +28,11 @@ D = Decimal
 CONFIG = Path(__file__).resolve().parents[3] / "config"
 FEES = load_fees(CONFIG)
 REPO = load_risk_config(CONFIG)
-# The rules below are tested against fixed-size limits (confidence has no effect) in a EUR 1,000
-# US and a EUR 5,000 EU sleeve; the confidence scaling has its own tests with the repo's values.
+# The rules below are tested against fixed-size limits (confidence has no effect) with a
+# EUR 1,000 budget for US and EUR 5,000 for EU proposals; the confidence scaling has its own
+# tests with the repo's values.
 FIXED = REPO.model_copy(
     update={
-        "capital": REPO.capital.model_copy(
-            update={"paper_budget_eur": {"US": D(1000), "EU": D(5000)}}
-        ),
         "per_trade": REPO.per_trade.model_copy(
             update={
                 "min_risk_pct": D("1.5"),
@@ -48,7 +46,15 @@ FIXED = REPO.model_copy(
         "execution": REPO.execution.model_copy(update={"max_orders_per_day": 6}),
     }
 )
-SLEEVES: dict[Market, RiskConfig] = {ms[0]: cfg for ms, cfg in FIXED.sleeves(["US", "EU"], "paper")}
+
+
+def budget(cfg: RiskConfig, eur: int) -> RiskConfig:
+    return cfg.model_copy(
+        update={"capital": cfg.capital.model_copy(update={"agent_budget_eur": D(eur)})}
+    )
+
+
+SLEEVES: dict[Market, RiskConfig] = {"US": budget(FIXED, 1000), "EU": budget(FIXED, 5000)}
 OPEN = datetime(2026, 10, 5, 13, 30, tzinfo=UTC)  # NYSE 09:30 New York
 CLOSE = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
 NOW = OPEN + timedelta(minutes=30)
@@ -166,7 +172,7 @@ def test_eu_uses_its_own_sleeve() -> None:
 def test_the_more_confident_the_bigger_the_position(
     confidence: float | None, quantity: Decimal, detail: str
 ) -> None:
-    us = {ms[0]: cfg for ms, cfg in REPO.sleeves(["US", "EU"], "paper")}["US"]
+    us = budget(REPO, 10000)
     d = evaluate(
         PROPOSAL.model_copy(update={"confidence": confidence}),
         LEVELS,

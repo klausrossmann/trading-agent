@@ -65,30 +65,11 @@ class EarningsLine:
 
 
 @dataclass(frozen=True)
-class PositionLine:
-    symbol: str
-    entry_date: date
-    r_now: float
-    pnl_eur: float
-
-
-@dataclass(frozen=True)
-class SleeveLine:
-    label: str  # e.g. "US"
-    budget_eur: float
-    closed_trades: int
-    closed_pnl_eur: float
-    open: Sequence[PositionLine] = ()
-
-
-@dataclass(frozen=True)
 class Briefing:
     day: date
     markets: Sequence[MarketLine]
     eur_usd: float | None
     earnings: Sequence[EarningsLine]
-    book: Sequence[SleeveLine] | None  # None: baseline book not started yet
-    book_start: date
     setups: Sequence[str]
     last_bars: Mapping[str, date | None]
     blocked: Sequence[str] | None = None  # None: no quality check since start
@@ -110,22 +91,7 @@ def render_briefing(b: Briefing) -> str:
     else:
         lines.append("  none in the universe")
 
-    lines += ["", "Baseline book:"]
-    if b.book is None:
-        lines.append(f"  starts {b.book_start}")
-    else:
-        for s in b.book:
-            lines.append(
-                f"  {s.label}: {len(s.open)} open, {s.closed_trades} closed, "
-                f"P&L {money(s.closed_pnl_eur, s.budget_eur)}"
-            )
-            for p in s.open:
-                lines.append(
-                    f"    {p.symbol} since {day_label(p.entry_date)}: {p.r_now:+.2f} R, "
-                    f"{money(p.pnl_eur, s.budget_eur)}"
-                )
-
-    lines += ["", "Baseline setups at the last close:"]
+    lines += ["", "Screen: setups at the last close:"]
     lines.append(f"  {', '.join(b.setups)}" if b.setups else "  none")
 
     bars = ", ".join(f"{m} {d:%d %b}" if d else f"{m} -" for m, d in b.last_bars.items())
@@ -283,8 +249,6 @@ def render_why(p: Proposal, label: tuple[str, str | None] | None = None) -> str:
         lines += [f"  - {o['severity']}: {o['point']}" for o in critic.get("objections", [])]
     elif "unavailable" in critic:
         lines.append(f"Critic: unavailable ({critic['unavailable']})")
-    if pm := p.payload.get("portfolio_manager"):
-        lines.append(f"Ranking: {pm['note']}")
     if label:
         reason = f" ({label[1]})" if label[1] else ""
         lines.append(f"Your label: {label[0]}{reason}")
@@ -391,6 +355,12 @@ def gateway_up_alert(minutes: int) -> str:
     return f"🔌 IB Gateway connected again after {minutes} min"
 
 
+def not_connected_alert(what: str, symbols: Sequence[str]) -> str:
+    """Something that needs IBKR was skipped; nothing went to a simulator instead."""
+    names = f": {', '.join(symbols)}" if symbols else ""
+    return f"🔌 {what} skipped, IBKR not connected{names}"
+
+
 def reconcile_alert(unknown: Sequence[str], missing: Sequence[str], qty: Sequence[str]) -> str:
     lines = ["⚠️ Reconciliation: broker and book differ"]
     if unknown:
@@ -482,10 +452,25 @@ def news_alert(symbol: str, headline: str, note: str) -> str:
     return f"📰 {symbol}, important news: {headline}\nWhy: {note}"
 
 
-def review_alert(symbol: str, confidence: float, reasons: str) -> str:
+def news_buy_alert(symbol: str, market: str, confidence: float, reason: str) -> str:
     return (
-        f"🧐 Review {symbol}: the thesis no longer holds (confidence {confidence:.2f}).\n"
-        f"{reasons}\nTo sell at the next open: /exit {symbol}. Otherwise nothing happens."
+        f"📰 {symbol}: buy signal from the news (confidence {confidence:.2f}).\n{reason}\n"
+        f"It joins the next {market} scan; the agents and the risk engine still decide."
+    )
+
+
+def news_exit_alert(symbol: str, confidence: float, reason: str) -> str:
+    return (
+        f"🚪 News exit {symbol} (confidence {confidence:.2f}): market sell sent to IBKR, "
+        f"filled at the next open if the market is closed.\n{reason}"
+    )
+
+
+def news_exit_advice(symbol: str, confidence: float, reason: str, threshold: float) -> str:
+    return (
+        f"🧐 News on {symbol}: the thesis may no longer hold (confidence {confidence:.2f}, "
+        f"below {threshold:.2f} for an automatic exit).\n{reason}\n"
+        f"To sell at the market: /exit {symbol}. Otherwise nothing happens."
     )
 
 
@@ -530,28 +515,20 @@ def render_positions(book: str, held: Sequence[HeldLine], pending: Sequence[Pend
 
 @dataclass(frozen=True)
 class PnlLine:
-    sleeve: str
+    account: str  # the markets, e.g. "US,EU"
     budget_eur: float
     as_of: date | None  # last equity snapshot
     day: float
     week: float
     month: float
     total: float
-    baseline: tuple[float, float, float]  # baseline_sim closed P&L: week, month, since start
 
 
-def render_pnl(book: str, lines: Sequence[PnlLine]) -> str:
-    out = [f"💶 P&L {book} (equity at the last close)"]
-    for p in lines:
-        b = p.budget_eur
-        as_of = f", {day_label(p.as_of)}" if p.as_of else ", no close yet"
-        out.append(
-            f"{p.sleeve} (budget €{b:,.0f}{as_of}): day {money(p.day, b)} · week "
-            f"{money(p.week, b)} · month {money(p.month, b)} · since start {money(p.total, b)}"
-        )
-        w, m, t = p.baseline
-        out.append(
-            f"  baseline_sim, closed trades: week {money(w, b)} · month {money(m, b)} · "
-            f"since start {money(t, b)}"
-        )
-    return "\n".join(out)
+def render_pnl(book: str, p: PnlLine) -> str:
+    b = p.budget_eur
+    as_of = f", {day_label(p.as_of)}" if p.as_of else ", no close yet"
+    return (
+        f"💶 P&L {book} (equity at the last close)\n"
+        f"{p.account} (budget €{b:,.0f}{as_of}): day {money(p.day, b)} · week "
+        f"{money(p.week, b)} · month {money(p.month, b)} · since start {money(p.total, b)}"
+    )

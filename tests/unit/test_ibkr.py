@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from eventkit import Event
 from ib_async import IB, Contract, Stock
 from pydantic import SecretStr
 
@@ -47,6 +48,7 @@ class FakeIB:
         self.position_list: list[Any] = []
         self.accounts: list[str] = []
         self.data_type: int | None = None
+        self.errorEvent = Event("errorEvent")
 
     def isConnected(self) -> bool:
         return self.connected

@@ -17,7 +17,7 @@
 6. [When does it buy?](#6-when-does-it-buy)
 7. [When does it sell?](#7-when-does-it-sell)
 8. [The multi-agent system](#8-the-multi-agent-system)
-9. [Does it work? The three books and the go-live gate](#9-does-it-work-the-three-books-and-the-go-live-gate)
+9. [Does it work?](#9-does-it-work)
 10. [Safety nets](#10-safety-nets)
 11. [Your part: Telegram, dashboard, daily routine](#11-your-part-telegram-dashboard-daily-routine)
 12. [Settings you can change](#12-settings-you-can-change)
@@ -29,7 +29,7 @@
 
 - The system is a **robot swing trader** for one personal account. It buys stocks it expects to rise over the next few days to three weeks, then sells them again. It never bets on falling prices (no short selling), never borrows money, and doesn't trade options.
 - It watches about **140 large, liquid stocks**: the S&P 100 (US) and the DAX 40 (Germany).
-- **Plain code** finds candidates with a fixed rule: "a stock in an uptrend that has dipped a little". **AI models** (LLMs) then study each candidate, argue about it, and propose a trade or pass.
+- **Plain code** finds candidates with a fixed rule: "a stock in an uptrend that has dipped a little". A **News agent** adds stocks with a strong positive news catalyst. **AI models** (LLMs) then study each candidate, argue about it, and propose a trade or pass. The News agent also watches held stocks and sells one when the news breaks the reason it was bought.
 - **Plain code has the final say.** A risk engine checks every proposal against hard limits and decides how many shares to buy. The AI can't place orders, choose the size, or invent prices.
 - Every trade is placed with its exit already attached: a **stop** that sells if the price falls to a set level, and a **target** that sells if the price rises to a set level. They sit at the broker, so they still work if the computer is off.
 - It runs on **paper** (simulated money) first. Real money (€1,000, US stocks only) comes only once the paper results beat a simple rule-based strategy after all costs, over at least 3 months and 50 trades.
@@ -60,12 +60,11 @@
 | **Relative strength** | How a stock did over the last 3 months compared with its market (SPY for US, the DAX ETF for Germany). |
 | **Earnings report** | A company's quarterly results. The price can jump 5–10 % overnight on them, which can skip right past a stop. The system avoids buying shortly before one. |
 | **Drawdown** | How far the account has fallen from its highest value. |
-| **Paper trading** | Trading with simulated money, using real prices. |
-| **Slippage** | Getting a slightly worse price than planned. The simulator assumes 0.05 % per buy and per sell. |
+| **Paper trading** | Trading with simulated money at IBKR (the paper account), using real prices. |
+| **Slippage** | Getting a slightly worse price than planned. |
 | **Settlement** | Money from a sale arrives one business day later in the US (T+1), two in Germany (T+2). Until then it can't buy anything. |
 | **Win rate, expectancy, profit factor** | Share of winning trades; average result per trade (in R or €); total gains ÷ total losses. A profit factor above 1 means it made money. |
-| **Book** | A separate record of trades, as if each were its own account. The system keeps several books so they can be compared (section 9). |
-| **Sleeve** | A slice of the budget. In paper mode, US and Germany each get their own simulated account: €1,000 for US and €5,000 for Germany, because German minimum fees are too high for €1,000. |
+| **Book** | The record of the agent's trades at IBKR: `agent_paper` (paper account) or `agent_live` (real money). |
 | **LLM** | Large language model, the AI behind chatbots. Here Google Gemini (and later Anthropic Claude) are used through their APIs. |
 
 ---
@@ -78,32 +77,33 @@ flowchart TB
         D1[Daily prices<br/>Yahoo, later IBKR]
         D2[Earnings dates]
         D3[EUR/USD rate, macro]
-        D4[News on held stocks]
+        D4[Company news<br/>Finnhub US, Yahoo EU]
     end
     subgraph Screen["2 · Screen (code)"]
         S1[Pullback rule picks<br/>the top 10 setups per market]
+        S2[News agent's buy signals,<br/>basic rules only]
     end
     subgraph AI["3 · AI analysis and debate (LLMs)"]
         A1[Technical analyst]
         A2[Earnings analyst]
         A3[Proposer]
         A4[Critic]
-        A5[Portfolio manager]
     end
     subgraph Guard["4 · Final decision (code)"]
+        RK[Rank by<br/>confidence × R:R]
         R[Risk engine<br/>limits, position size]
     end
     subgraph Exec["5 · Orders (code)"]
-        X[Executor<br/>simulator or IBKR]
+        X[Executor<br/>IBKR]
     end
     subgraph After["6 · After the buy"]
         M[Stop, target, breakeven,<br/>time stop]
-        N["News triage and<br/>position review (advice)"]
+        N["News agent: exit<br/>(sells above 0.7)"]
     end
     You((You<br/>Telegram + dashboard))
 
     Data --> Screen --> A1 & A2
-    A1 & A2 --> A3 --> A4 --> A5 --> R --> X --> M
+    A1 & A2 --> A3 --> A4 --> RK --> R --> X --> M
     D4 --> N
     N -. advice .-> You
     You -- /pause /stop /exit --> R
@@ -117,11 +117,12 @@ What runs where:
 |---|---|---|
 | Data collection, quality checks | Code | No |
 | Screening for candidates | Code (fixed rules) | No |
-| Analysis, proposal, critique, ranking | LLMs, checked by code after every answer | Yes |
+| Analysis, proposal, critique | LLMs, checked by code after every answer | Yes |
+| Ranking the proposals | Code (confidence × R:R) | No |
 | Risk checks and position size | Code | **Never** |
 | Orders, stops, exits | Code, talking to the broker | **Never** |
-| News sorting, position review | LLMs | Yes, but only advice to you |
-| Briefing, digest, weekly report | Code | No |
+| News: importance, buy signals, exits | LLM (News agent); code applies the thresholds | Yes |
+| Briefing, digest | Code | No |
 
 The whole system is one Python program (the `agent` container) plus a database, a read-only dashboard and, once the IBKR login exists, the IB Gateway that talks to Interactive Brokers. It runs on the Zenbook at home.
 
@@ -136,27 +137,26 @@ All times are Berlin time on a normal trading day. The jobs follow the exchange 
 | every 5 min | Heartbeat ping to an outside service, which alerts you if the pings stop | |
 | 07:00 | Macro data (US rates, inflation, VIX, ECB rate) | |
 | 07:15 | Earnings calendar refresh | |
-| 07:00–22:30, every 30 min | Latest news for stocks the agent holds, sorted by importance | ✓ |
-| 08:15 | **EU scan**: screen German stocks on yesterday's prices, analyse, propose, rank; 🧠 summary in Telegram | ✓ |
-| 08:30 | 📰 **Morning briefing**: markets, EUR/USD, earnings in the next 3 days, the rule-based book, data status | |
+| 07:00–22:30, every 30 min | **News on held stocks**: the News agent reads new headlines (and, once a day, any stock with a report within 3 sessions); a confident `exit` sells at the market | ✓ |
+| 07:45 | **EU news**: headlines of every German stock not held; a confident `buy` puts the stock into the EU scan | ✓ |
+| 08:15 | **EU scan**: screen German stocks on yesterday's prices (plus news candidates), analyse, propose, rank; 🧠 summary in Telegram | ✓ |
+| 08:30 | 📰 **Morning briefing**: markets, EUR/USD, earnings in the next 3 days, the screen's setups, data status | |
 | 09:00 | Xetra opens | |
 | 09:15 | **EU placement**: risk engine checks today's EU proposals; approved ones are sent as bracket orders; 📤 summary | |
-| 09:00–22:50, every 10 min | Monitor: sync with IBKR, report fills (only once orders go to IBKR) | |
+| 09:00–22:50, every 10 min | Monitor: sync with IBKR, report fills | |
+| 14:15 | **US news** (as at 07:45, for US stocks) | ✓ |
 | 14:45 | **US scan** (as at 08:15, for US stocks) | ✓ |
 | 15:30 | NYSE opens | |
 | 15:45 | **US placement** (as at 09:15) | |
 | 17:30 | Xetra closes | |
 | 18:00 | EU closing prices, ECB exchange rate, data quality check | |
 | 18:05 | **EU end of day**: fills, stop to breakeven, time stops, EU book update; 🟢 🔴 ⌛ alerts | |
-| 21:00 | **Position review**: held stocks with important news or a report coming up get a second look; 🧐 if the AI thinks the reason for the trade is gone | ✓ |
 | 22:00 | NYSE closes | |
 | 22:30 | US closing prices, quality check | |
 | 22:35 | **US end of day** (as at 18:05, for US positions) | |
-| 22:40 | Reconciliation: does the broker hold what the agent thinks it holds? (once IBKR is connected) | |
-| 23:00 | Rule-based book replayed with today's prices | |
+| 22:40 | Reconciliation: does IBKR hold what the agent thinks it holds? Any difference halts | |
 | 23:05 | 🌙 **Evening digest**: today's proposals, placements and rejections, fills, labels to do, AI spend | |
 | 03:15 | Database backup (host cron job, once set up) | |
-| Saturday 10:00 | 📈 **Weekly report**: results of all books, costs, calibration, go-live gate | |
 
 Why scan before the open and place 15 minutes after it? The scan uses the last complete daily bars, which exist once the previous session has closed. Placing after the open avoids the jumpy first minutes, and a placement that runs more than 2 minutes late is skipped rather than run at a random time.
 
@@ -189,6 +189,8 @@ The "pullback in an uptrend" rule checks every stock on the latest daily bar. Al
 An optional **market filter** (off by default, see 12.5) skips the whole market while its index ETF trades below its 200-day average or the VIX is above a limit.
 
 The stocks that pass are ranked by **relative strength** (the strongest over 3 months first). The **top 10 per market** go to the AI (5 in lean mode, see 12.4). Of those, stocks the agent already holds get no proposal.
+
+**News candidates.** 30 minutes before the scan, the News agent reads the new headlines of every stock in the market that the agent doesn't hold. A `buy` with confidence 0.6 or more (a clear, company-specific positive catalyst such as raised guidance) puts the stock into the scan, even if the pullback rule doesn't pass. Such a stock only needs the basic rules: fresh prices, price above 5, enough traded value, no report within 3 sessions, and the market filter. At most 3 news candidates per scan, most confident first. They go through the same analysts, proposer and critic, who also see the news (`catalyst`), and their proposals are marked `news`. Of these, **at most 1 is placed a day** (both markets together).
 
 ### Step 4: Analyse (two AI analysts)
 
@@ -224,9 +226,9 @@ Each objection is `minor`, `major` or `blocking`. The critic also adjusts the co
 
 Until an Anthropic key is set up, the critic runs on Gemini too (`LLM_DEV_OVERRIDES=true`).
 
-### Step 7: Rank (the portfolio manager)
+### Step 7: Rank (code)
 
-If two or more proposals survive, the portfolio manager puts them in order: quality first (confidence, R:R, the critic's objections), then fit (prefer sectors and markets not held yet), then diversity among the top picks. It can't drop a proposal, only rank it. If it fails, code ranks by confidence × R:R.
+The proposals that survive are put in order by **confidence × R:R**: the chance to reach the target times the reward per unit of risk. A proposal with confidence 0.5 and R:R 2.5 (score 1.25) comes before one with 0.6 and 2.0 (1.2). The rank step of each stock shows the numbers.
 
 The proposals are stored and summed up in Telegram (🧠). This is the end of the AI part.
 
@@ -266,7 +268,7 @@ An approved trade becomes a **bracket order**:
 
 Prices are rounded to the exchange's price steps, always in the safe direction: entry down, stop and target up. You get a 📤 summary of what was placed and what was rejected, and why.
 
-Today the orders go to a **simulator**. It fills them from the day's prices at the close: the entry fills if the day's low reached the limit. Once the IBKR paper login works (`IB_ORDERS_ENABLED=true`), the same orders go to the IBKR paper account.
+Every order goes to **IBKR**, to the account the gateway is logged in to (the paper account first). There is no simulator: if the gateway isn't connected at 09:15 or 15:45, nothing is placed, each proposal gets the step "not placed: IBKR not connected", and you get a 🔌 message. Each order carries a reference like `TA-AAPL-entry-1a2b3c4d` that you can search for in TWS, Client Portal and your statements; IBKR's answer, including any error message (for example a rejected fractional size), is stored with the order.
 
 ### Step 10: Manage the position
 
@@ -309,7 +311,7 @@ Because a win (+2R) is twice the size of a loss (−1R), the system makes money 
 The system buys a stock only if **all** of the following are true:
 
 1. It's in the universe (S&P 100 or DAX 40), it has a price bar for the latest session, and the agent doesn't hold it yet.
-2. The rule-based screen found a pullback in an uptrend on the last daily bar, and it ranked in the top 10 of its market.
+2. The rule-based screen found a pullback in an uptrend on the last daily bar, and it ranked in the top 10 of its market. **Or** the News agent gave it a buy signal (confidence 0.6 or more) in the last 24 hours, it passed the basic rules, and it ranked in the top 3 news candidates.
 3. The technical analyst rated it `buy` or `strong_buy` with a valid plan.
 4. The earnings analyst didn't say "wait until after the report".
 5. The proposer proposed it.
@@ -317,7 +319,7 @@ The system buys a stock only if **all** of the following are true:
 7. The risk engine approved it the next morning, 15 minutes after the open (all 9 checks).
 8. During that session or the next one, the price dipped to the entry limit.
 
-If several proposals pass, they are placed in the portfolio manager's order until the limits are reached (8 positions, 8 orders a day, sector and cash limits).
+If several proposals pass, they are placed in rank order (confidence × R:R) until the limits are reached (8 positions, 8 orders a day, sector and cash limits). Proposals from news candidates are limited to 1 placed a day.
 
 ---
 
@@ -331,12 +333,13 @@ If several proposals pass, they are placed in the portfolio manager's order unti
 | **Trailing stop** (optional, off) | With `trail_atr` set (12.5): after breakeven, every evening the stop moves up to the highest close since the entry minus that many ATRs. The target stays. | 🔴 stop |
 | **Time stop** | After 15 sessions without hitting the stop or the target, it sells with a market order at the next open. Capital isn't tied up in a trade that isn't working. | 🔴 time |
 | **You say so** | `/exit SYMBOL` in Telegram sells the whole position with a market order at the next open | 🔴 |
+| **News exit** | The News agent says the news breaks the reason for the trade, with confidence 0.7 or more. A market order sells right away (at the next open if the market is closed). | 🚪 then 🔴 news |
 
 What does **not** sell automatically:
 
 - **Kill switch** (`/stop` or a loss limit): no new entries, and all unfilled entries are cancelled. Open positions **keep** their stops and targets, so they are still protected and can still reach the target.
-- **Position review** (🧐): if the AI thinks the reason for a trade no longer holds, for example after a profit warning, it tells you why and suggests `/exit SYMBOL`. The decision is yours.
-- **Earnings ahead**: the system doesn't buy within 3 sessions of a report, but it doesn't sell before one either. A report within 3 sessions triggers a position review, which may advise you to exit.
+- **A less certain news exit** (🧐): below 0.7 the News agent only tells you why and suggests `/exit SYMBOL`. The decision is yours.
+- **Earnings ahead**: the system doesn't buy within 3 sessions of a report, and doesn't sell before one by rule. A report within 3 sessions makes the News agent look at the position once a day, which may lead to a news exit.
 
 ```mermaid
 stateDiagram-v2
@@ -366,13 +369,11 @@ The project is also a showcase for a **multi-agent system (MAS)**: several indep
 | Earnings analyst | LLM | Next report, last 8 reports and price reactions | Earnings stance | `analysis`: Gemini 3.8 Flash |
 | Proposer | LLM | Both analyses, the menu, rules, holdings, market snapshot | Propose or pass; plan, thesis, confidence | `proposer`: Gemini 3.8 Flash |
 | Critic | LLM, other vendor | The same facts plus the plan in prices | Objections, severity, confidence change | `critic`: Claude Sonnet 5.5 (Gemini until an Anthropic key exists) |
-| Portfolio manager | LLM | Surviving proposals, holdings, free slots | Order of the proposals | `proposer`: Gemini 3.8 Flash |
 | Risk engine | Code | Proposal, account, market facts, limits | Approve or reject; number of shares | none |
 | Executor | Code | Approved orders, broker state | Places, syncs, moves stops, exits | none |
-| News triage | LLM | Headlines on held stocks (as untrusted text) | `none` / `low` / `high` importance | `triage`: Gemini 3.1 Flash-Lite |
-| Position reviewer | LLM | Position facts, recent news, the original thesis | `hold` or `exit` **advice** | `analysis`: Gemini 3.8 Flash |
+| News agent | LLM | New headlines (as untrusted text); for held stocks also the position facts and the original thesis | Importance per headline; `buy` (not held), `exit` (held) or `none`, with a confidence | `triage`: Gemini 3.1 Flash-Lite |
 
-The AI roles don't chat freely with each other. Each runs once per stock in a fixed order, and gets the previous roles' answers as input. The order is fixed by code (`pipeline.py`).
+The AI roles don't chat freely with each other. Each runs once per stock in a fixed order, and gets the previous roles' answers as input. The order is fixed by code: `orchestrator.py` holds the whole day stage by stage (scan, place, monitor, end of day).
 
 ### 8.2 Who's the boss?
 
@@ -383,16 +384,15 @@ flowchart TB
     You["<b>You</b><br/>settings, /pause, /stop, /exit, /reset"]
     KS["<b>Kill switch</b><br/>active · paused · halted"]
     RE["<b>Risk engine</b> (code)<br/>only stage that can approve; sets the size"]
-    PM["Portfolio manager (AI)<br/>ranks only, no veto"]
     CR["Critic (AI)<br/>can veto: blocking"]
     PR["Proposer (AI)<br/>can pass: no_trade"]
     AN["Technical + earnings analysts (AI)<br/>can stop it: rating, wait_until_after"]
     SC["Screen (code)<br/>decides who gets looked at"]
 
-    You --> KS --> RE --> PM --> CR --> PR --> AN --> SC
+    You --> KS --> RE --> CR --> PR --> AN --> SC
 ```
 
-Read it from the bottom up: a trade needs a "yes" at every level, and any level below the portfolio manager can stop it. The levels above can only narrow things further.
+Read it from the bottom up: a trade needs a "yes" at every level, and any level below the risk engine can stop it. The levels above can only narrow things further.
 
 | Level | Can stop a trade? | Can force a trade? |
 |---|---|---|
@@ -400,7 +400,6 @@ Read it from the bottom up: a trade needs a "yes" at every level, and any level 
 | Analysts | Yes: a rating below `buy`, or "wait until after the report" | No |
 | Proposer | Yes: `no_trade` | No |
 | Critic | Yes: `blocking` | No |
-| Portfolio manager | No, it can only rank. A low rank can still mean no slot is left. | No |
 | Risk engine | Yes: any of 9 checks | It approves, but only what the AI proposed, and only within the limits |
 | Kill switch | Yes: paused or halted means no new entries | No |
 | You | Yes: `/pause`, `/stop`, settings | No: there is no manual buy command. `/exit` is the only manual order. |
@@ -411,7 +410,7 @@ Why it is built this way:
 - **The AI never invents prices.** It picks names from a menu of prices that code computed from real data. Code turns the names back into prices.
 - **The AI never decides the size.** The number of shares comes only from the risk engine's formula.
 - **Two vendors.** The critic should come from a different company than the proposer, so the two are less likely to make the same mistake.
-- **News is treated as data, never as instructions.** A manipulated article saying "buy XYZ now" can't make the system do anything. News only reaches the advisory roles, and its text is wrapped and labelled as untrusted.
+- **News is treated as data, never as instructions.** Its text is wrapped and labelled as untrusted. A manipulated article saying "buy XYZ now" can at most put XYZ in front of the analysts, the proposer, the critic and the risk engine, all of which must agree, and only 1 news trade a day is placed. A news exit can only sell what is held.
 
 ### 8.3 What happens when something fails
 
@@ -419,35 +418,18 @@ Why it is built this way:
 |---|---|
 | The technical analyst's or the proposer's answer fails the checks twice | That stock is skipped today |
 | The critic fails | The proposal stays, marked "no critique" |
-| The portfolio manager fails | Code ranks by confidence × R:R |
-| The AI budget is used up (100 %) | No more AI calls this month, so no new agent trades. The rule-based book keeps running. |
+| The AI budget is used up (100 %) | No more AI calls this month, so no new trades. |
 | Prices for a stock look wrong | ⚠️ alert; the stock is blocked and left out of the scan until the problem is 20 sessions old |
-| The agent or the computer is down | Stops and targets are already at the broker (once on IBKR). Missed jobs run once when it's back, if they're still useful; a late order placement is skipped. |
+| The agent or the computer is down | Stops and targets are already at IBKR. Missed jobs run once when it's back, if they're still useful; a late order placement is skipped. |
+| The IB Gateway isn't connected | Nothing is placed, no stop is moved and no exit is sent; each skipped step is logged and you get a 🔌 message. Stops and targets already at IBKR keep working. |
 
 ---
 
-## 9. Does it work? The three books and the go-live gate
+## 9. Does it work?
 
-Nobody knows yet whether the AI adds value. Public studies of AI trading agents are sobering, and the rule-based strategy alone showed **no edge** in a 5-year backtest: roughly break-even before costs, slightly negative after fees, far behind simply holding the index ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3). So the system measures itself against simpler alternatives.
+Nobody knows yet whether the AI adds value. Public studies of AI trading agents are sobering, and the rule-based strategy alone showed **no edge** in a 5-year backtest: roughly break-even before costs, slightly negative after fees, far behind simply holding the index ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3).
 
-| Book | What it is | Purpose |
-|---|---|---|
-| `baseline_sim` | The rule-based screen trading on its own: no AI, same limits and fees (including the correlation cap and the loss limits; a drawdown halt stops it for good), simulated | The bar the AI must beat |
-| `agent_paper` | The full pipeline with the risk engine; simulator now, IBKR paper account later | The real thing |
-| `agent_shadow` | Every proposal the risk engine would approve if the account were empty, each simulated on its own | More trades for statistics. With only 4 slots, the real book alone would take far too long. |
-| Benchmarks | Buy and hold SPY (US) and the DAX ETF (Germany) | Context: was it worth the effort at all? |
-| `agent_live` | Later: real money | |
-
-**Go-live gate** (checked in every weekly report, all four must pass):
-
-1. At least 91 days of paper trading
-2. At least 50 closed trades (`agent_paper` plus `agent_shadow`)
-3. Positive average result per trade **after fees and after AI costs**
-4. Better average result than `baseline_sim`
-
-If the AI doesn't beat the rules, it shouldn't pick trades; it would then only write briefings.
-
-The weekly report also checks **calibration**: do proposals with 40 % confidence win about 40 % of the time? And it compares your agree/disagree labels (`/review`) with the outcomes.
+The answer comes from the real trades only: `agent_paper` holds every order the agent sent to the IBKR paper account and every fill IBKR reported. The dashboard shows its results after fees and AI costs, and your agree/disagree labels (`/review`) next to the outcomes. `agent_live` is the same for real money, later.
 
 ---
 
@@ -484,7 +466,7 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 | `/why SYMBOL` | Thesis, critique and plan for one proposal |
 | `/review` | Steps through the latest proposals with Agree / Disagree / Skip buttons; reply with a reason if you like. Labels are only used for evaluation and never change a trade. |
 | `/positions` | Open positions (entry, stop, target, last close, R, P&L) and pending entries |
-| `/pnl` | Results for the day, week, month and since the start, with the rule-based book for comparison |
+| `/pnl` | Results for the day, week, month and since the start |
 | `/exit SYMBOL` | Sell that position at the next open (market order) |
 | `/pause [reason]` | No new entries until `/resume` |
 | `/resume` | Allow new entries again |
@@ -499,14 +481,14 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 |---|---|
 | ▶️ ⏹ | The agent started or is stopping |
 | 🧠 | Scan result: ranked proposals, blocked ones and passes, AI cost |
-| 📰 | Morning briefing; or important news on a held stock |
+| 📰 | Morning briefing; important news on a held stock; or a buy signal from the news |
 | 📤 | Placement: what was ordered and what the risk engine rejected, and why |
 | 🟢 | A buy filled |
-| 🔴 | A position was sold (target, stop, time stop or `/exit`) |
+| 🔴 | A position was sold (target, stop, time stop, news or `/exit`) |
+| 🚪 | News exit: the market sell order was sent |
 | ⌛ | An entry expired or was cancelled |
-| 🧐 | Position review: the AI thinks the reason for a trade is gone, with `/exit SYMBOL` |
+| 🧐 | The News agent thinks the reason for a trade may be gone, but isn't sure enough to sell; with `/exit SYMBOL` |
 | 🌙 | Evening digest |
-| 📈 | Weekly report with the go-live gate |
 | 📊 | Answer to `/positions` |
 | ⏸ ⛔ ▶️ | Kill switch paused, halted, or entries allowed again (also after a loss limit) |
 | ⚠️ | Data problem, failed or missed job, reconciliation mismatch |
@@ -517,13 +499,13 @@ The weekly report also checks **calibration**: do proposals with 40 % confidence
 
 What each page shows and where to find what: [RUNNING.md](RUNNING.md) sections 1 and 2.
 
-Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Overview** (positions, P&L, AI spend, results per book, data freshness), **Positions**, **Proposals** (with plan, critique and your label), **Journal** (closed trades), **Analyses** (every AI answer in full, every attempt with its prompts and answers, and a link to the run's trace in Langfuse), **Costs** (AI and broker fees), **Risk** (limit usage, correlation heatmap, rejections), **Evaluation** (go-live gate, calibration, label accuracy) and **Reports** (weekly reports).
+Open it on your phone (or any device in your tailnet) through Tailscale. Pages: **Day** (pick a day: how many stocks got past each phase, one row per stock with each phase's outcome, and for any stock every step with its inputs and outputs: indicator values, each agent's input, answer and prompts, the risk engine's checks, the orders sent to IBKR and IBKR's replies and errors, fills, stop moves and the sale), **Portfolio** (what is held at IBKR, buy orders waiting, what was sold, when and why, and any trade's whole timeline), **Costs** (AI and broker fees) and **Risk** (limit usage, correlation heatmap, rejections).
 
 ### 11.4 Daily routine (about 1 hour)
 
 - **Morning, 10 minutes**: read the briefing and the 🧠 EU proposals. Anything you strongly disagree with? `/pause` stops the placement at 09:15.
 - **Evening, 30–60 minutes**: read the digest. `/review` the day's proposals: agree or disagree, with a short reason. Check any 🧐 advice and decide on `/exit`.
-- **Saturday, 1 hour**: read the weekly report. Which lessons should change a prompt or a rule? Changes are versioned and need a reason.
+- **Saturday, 1 hour**: look at the week's results on the dashboard. Which lessons should change a prompt or a rule? Changes are versioned and need a reason.
 
 ---
 
@@ -541,11 +523,7 @@ Open it on your phone (or any device in your tailnet) through Tailscale. Pages: 
 | Setting | Current | What it does |
 |---|---|---|
 | `APP_MODE` | `paper` | `paper` or `live`. Live also needs a live IBKR login and `/confirm_live`. In live mode only `markets.live` is traded, with the real `agent_budget_eur`. |
-| `IB_ENABLED` | `false` | `true`: connect to the IB Gateway (read-only at first), use IBKR contract data and quotes, reconcile positions |
-| `IB_ORDERS_ENABLED` | `false` | `true`: orders go to IBKR instead of the simulator. Needs `IB_ENABLED=true` and `IB_READ_ONLY_API=no`. Switch only when no `agent_paper` positions are open. |
-| `IB_READ_ONLY_API` | `yes` | The gateway's own lock: `yes` refuses all orders |
-| `COMPOSE_PROFILES` | empty | `ibkr`: also start the IB Gateway container |
-| `TWS_USERID`, `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID` | | IBKR login name and connection. Port 4004 is paper, 4003 live. |
+| `TWS_USERID`, `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID` | | IBKR login name and connection. Port 4004 is paper, 4003 live. There is no switch for the broker: every order goes to IBKR, and nothing is placed while the gateway is disconnected. |
 | `LLM_DEV_OVERRIDES` | `true` | `true`: the critic runs on Gemini (`dev_overrides` in `models.yaml`). `false` once an Anthropic key exists. |
 | `LLM_FAKE` | `false` | `true` only in the local test stack (`make dev-up`): every AI role gets canned, rule-following answers and no API is called. Never on the Zenbook. |
 | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | | AI provider keys. Without a key, that provider's roles can't run. |
@@ -555,7 +533,7 @@ Open it on your phone (or any device in your tailnet) through Tailscale. Pages: 
 | `TRACE_UI_URL` | your project | Langfuse project address for the "Open trace" links (dashboard, `/why`) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID` | | Your bot and your chat. Without the chat id, every message is ignored. |
 | `FRED_API_KEY` | | US macro data; skipped without it |
-| `FINNHUB_API_KEY` | | News for held US positions; without it, no news triage and fewer position reviews |
+| `FINNHUB_API_KEY` | | News for US stocks; without it, no news buys or news exits for US stocks (EU news comes from Yahoo, no key) |
 | `SEC_EDGAR_USER_AGENT` | | Required by the SEC for filings data (not used yet) |
 | `HEARTBEAT_URL`, `BACKUP_HEARTBEAT_URL` | | Outside health checks for the agent and the backup |
 | `BACKUP_AGE_RECIPIENT` | | Public key for the encrypted weekly backup copy |
@@ -563,7 +541,7 @@ Open it on your phone (or any device in your tailnet) through Tailscale. Pages: 
 
 ### 12.3 `config/risk.yaml`: the hard limits
 
-The risk engine reads this file. "Budget" means the sleeve's budget: in paper mode €1,000 for US and €5,000 for Germany; in live mode `agent_budget_eur`.
+The risk engine reads this file. "Budget" means one budget for US and Germany together: in paper mode `paper_budget_eur` (€15,000), in live mode `agent_budget_eur`.
 
 **Capital**
 
@@ -601,7 +579,7 @@ The risk engine reads this file. "Budget" means the sleeve's budget: in paper mo
 |---|---|---|
 | `loss_limits.daily_loss_pct` | 3 | Down €30 from one close to the next: paused through the next trading day |
 | `loss_limits.weekly_loss_pct` | 6 | Down €60 this week: paused until Monday |
-| `loss_limits.max_drawdown_pct` | 15 | Down €150 from the highest account value: halted until you reset. In paper, a halt in any sleeve halts everything. |
+| `loss_limits.max_drawdown_pct` | 15 | Down €150 from the highest account value: halted until you reset. |
 
 **Markets, instruments, execution**
 
@@ -621,9 +599,9 @@ The universe itself comes from `universe.yaml` (12.7), the AI budget from `model
 
 | Setting | Current | What it does |
 |---|---|---|
-| `roles.triage` | Gemini 3.1 Flash-Lite | News sorting (cheap and fast) |
-| `roles.analysis` | Gemini 3.8 Flash | Technical and earnings analysts, position review |
-| `roles.proposer` | Gemini 3.8 Flash | Proposer and portfolio manager |
+| `roles.triage` | Gemini 3.1 Flash-Lite | News agent (cheap and fast; it reads many headlines) |
+| `roles.analysis` | Gemini 3.8 Flash | Technical and earnings analysts |
+| `roles.proposer` | Gemini 3.8 Flash | Proposer |
 | `roles.critic` | Claude Sonnet 5.5 | Critic; needs `ANTHROPIC_API_KEY` and a price below |
 | `dev_overrides.critic` | Gemini 3.8 Flash | Used instead while `LLM_DEV_OVERRIDES=true` |
 | `prices` | per model | Price per million tokens, used to estimate costs. **A model without a price is never called.** |
@@ -635,7 +613,7 @@ The universe itself comes from `universe.yaml` (12.7), the AI budget from `model
 
 ### 12.5 `config/strategies.yaml`: the screen and trade management
 
-These rules pick the candidates for the AI **and** run the rule-based book. The trade-management settings (`entry_valid_sessions`, `breakeven_r`, `time_stop_sessions`, `trail_atr`) also manage every `agent_paper` position.
+These rules pick the candidates for the AI. The trade-management settings (`entry_valid_sessions`, `breakeven_r`, `time_stop_sessions`, `trail_atr`) manage every position.
 
 | Setting | Current | What it does |
 |---|---|---|
@@ -645,17 +623,25 @@ These rules pick the candidates for the AI **and** run the rule-based book. The 
 | `rsi_range` | [40, 55] | RSI window |
 | `earnings_buffer_sessions` | 3 | No report this close |
 | `rs_window` | 63 | Ranking: 3-month return against the market |
-| `entry_offset_pct`, `swing_lookback`, `swing_window`, `stop_swing_atr`, `stop_atr`, `target_r` | 0.2, 5, 60, 0.5, 2.0, 2.0 | The rule-based book's own entry, stop and target (entry = close + 0.2 %; stop = lower of last swing low − 0.5 ATR and entry − 2 ATR; target = 2R). The AI picks its own levels instead. |
-| `entry_valid_sessions` | 2 | How long a buy limit stays open (also for the agent) |
+| `entry_valid_sessions` | 2 | How long a buy limit stays open |
 | `breakeven_r` | 1.0 | Move the stop to the entry price at +1R (also for the agent) |
 | `time_stop_sessions` | 15 | Sell after this many sessions (also for the agent) |
 | `trail_atr` | off (`null`) | E.g. 2.0: after breakeven, trail the stop 2 ATR under the highest close since the entry (also for the agent) |
-| `regime_sma` | off (`null`) | E.g. 200: no new entries in a market while its index ETF closes below this moving average (screen, rule-based book and therefore the AI's candidates) |
+| `regime_sma` | off (`null`) | E.g. 200: no new entries in a market while its index ETF closes below this moving average (screen, and therefore the AI's candidates) |
 | `regime_max_vix` | off (`null`) | E.g. 30: no new entries while the VIX closes above this (needs `FRED_API_KEY`; applies to both markets) |
-| `slippage_pct` | 0.05 | Simulated price disadvantage per buy and per sell |
-| `baseline_book.start` | 2026-10-05 | First day of the rule-based book |
 
-The baseline is deliberately **not tuned** on past data; it's the fixed bar the AI has to beat. Changing it changes the comparison, so do it rarely and note why. The three optional rules are off for that reason; compare them first with `trading-agent backtest` (a copy of `config/` with the change, `CONFIG_DIR=...`). On 5 years of data none of them made the baseline profitable ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.4).
+The three optional rules are off. On 5 years of data none of them made the rule-based strategy profitable ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.4).
+
+The `news:` section sets what code does with the News agent's answers:
+
+| Setting | Current | What it does |
+|---|---|---|
+| `buy_confidence` | 0.6 | A buy signal this sure puts the stock into the market's next scan |
+| `exit_confidence` | 0.7 | An exit this sure sells the position at the market; below it you get advice (🧐) |
+| `max_candidates` | 3 | News candidates per scan and market |
+| `max_trades_per_day` | 1 | News-triggered entries placed per day, both markets together |
+| `signal_hours` | 24 | Older buy signals are ignored |
+| `lookback_days`, `max_headlines`, `batch` | 2, 5, 8 | Days of news per request, new headlines read per stock, stocks per News agent call |
 
 ### 12.6 `config/schedule.yaml`: when jobs run
 
@@ -671,7 +657,7 @@ Each job runs either at a clock time (`cron`, Berlin time) or relative to an exc
 
 ### 12.8 `prompts/`
 
-The instructions for each AI role, one file per version (`prompts/proposer/v2.md`). A change becomes a new version, so the weekly report can compare results before and after. Every stored AI answer records the prompt version and model it used.
+The instructions for each AI role, one file per version (`prompts/proposer/v2.md`). A change becomes a new version, so results before and after can be compared. Every stored AI answer records the prompt version and model it used.
 
 ---
 
@@ -680,9 +666,9 @@ The instructions for each AI role, one file per version (`prompts/proposer/v2.md
 - **No short selling, no margin, no options.** Only buying shares with cash.
 - **No intraday trading.** Decisions use daily bars; stops and targets at the broker react during the day, but breakeven and time stops are set in the evening.
 - **No trailing stop by default** beyond the one move to breakeven (`trail_atr` can switch one on).
-- **No automatic sale on bad news or before earnings.** The position review advises; you decide with `/exit`.
+- **No automatic sale before earnings by rule.** The News agent looks at such positions and may exit on news.
 - **Macro data only informs the proposer** (and the optional market filter). Company fundamentals (revenue, valuation) aren't used.
-- **News covers held US stocks only** (Finnhub's free tier).
+- **News is headlines only**, a few times a day: Finnhub for US stocks (free tier), Yahoo for EU stocks (unofficial, latest headlines only).
 - **The 1 % entry check uses a delayed price** (15–20 minutes old) while the IBKR gateway is connected, and the last close without it. Real-time prices would need a paid market-data subscription.
 - **Paper fills are simulated from daily bars** until the IBKR paper login is set up (runbook in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5).
 - **No proven edge.** The whole point of the paper phase is to find out whether there is one.

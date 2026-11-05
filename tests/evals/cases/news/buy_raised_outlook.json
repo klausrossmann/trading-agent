@@ -1,0 +1,30 @@
+{
+ "module": "news",
+ "about": "Synthetic: a fictional company and invented headlines.",
+ "expect": {"actions": {"NOVA": ["buy"]}},
+ "input": {
+  "as_of": "2026-10-08",
+  "stocks": [
+   {
+    "symbol": "NOVA",
+    "name": "Novaline Systems",
+    "market": "US",
+    "sector": "Technology",
+    "position": null,
+    "headlines": [
+     {
+      "ref": "NOVA:1",
+      "published": "2026-10-08T10:00:00Z",
+      "text": "<untrusted source=\"BusinessWire\">\nNovaline Systems raises full-year revenue outlook after record third quarter. The company now expects revenue growth in the mid-teens, up from high single digits, citing strong demand for its data-centre networking products and a growing order backlog.\n</untrusted>"
+     },
+     {
+      "ref": "NOVA:2",
+      "published": "2026-10-08T07:00:00Z",
+      "text": "<untrusted source=\"BusinessWire\">\nNovaline Systems to host analyst day in November. The company will present its long-term strategy.\n</untrusted>"
+     }
+    ],
+    "earlier": []
+   }
+  ]
+ }
+}

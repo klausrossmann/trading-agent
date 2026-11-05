@@ -16,7 +16,7 @@ from trading_agent.modules.earnings import EarningsAssessment
 from trading_agent.modules.technical import Level, PlanRules, TechnicalAssessment
 
 NAME = "proposer"
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 FABRICATION_CAP = 0.5
 TEXT_FIELDS = ("thesis", "invalidation", "no_trade_reason")
 
@@ -39,7 +39,7 @@ class ProposerInput(BaseModel):
     sector: str | None
     as_of: date
     close: float
-    candidate_source: str  # the rule-based screen that picked the symbol
+    candidate_source: str  # what picked the symbol: the pullback screen or a news signal
     atr14: float | None
     levels: list[Level]
     rules: PlanRules
@@ -50,6 +50,7 @@ class ProposerInput(BaseModel):
     holdings: list[Holding]
     unknown: list[str]
     macro: MacroSnapshot | None = None  # since prompt v2
+    catalyst: str | None = None  # the News agent's buy signal, untrusted (since prompt v3)
 
 
 class ProposerOutput(BaseModel):

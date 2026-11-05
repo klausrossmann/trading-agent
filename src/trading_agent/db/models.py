@@ -312,6 +312,7 @@ class OrderRow(Base):
     avg_fill_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     broker_order_id: Mapped[int | None] = mapped_column(Integer)
     perm_id: Mapped[int | None] = mapped_column(BigInteger)
+    message: Mapped[str | None] = mapped_column(Text)  # the broker's last error or warning
 
 
 class FillRow(Base):
@@ -379,3 +380,27 @@ class NewsRow(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     relevance: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+
+
+class StepRow(Base):
+    """One phase of one stock on one day (domain/steps.py)."""
+
+    __tablename__ = "steps"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    day: Mapped[dt.date] = mapped_column(Date, index=True)
+    market: Mapped[str] = mapped_column(Text)
+    instrument_id: Mapped[int | None] = mapped_column(
+        ForeignKey("instruments.id", ondelete="CASCADE")
+    )
+    symbol: Mapped[str] = mapped_column(Text)
+    step: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    input: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    analysis_id: Mapped[int | None] = mapped_column(ForeignKey("analyses.id", ondelete="SET NULL"))
+    proposal_id: Mapped[UUID | None] = mapped_column(index=True)
+    order_ref: Mapped[str | None] = mapped_column(Text)

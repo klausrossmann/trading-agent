@@ -5,7 +5,7 @@ Every LLM call is logged with its full conversation, and every scan can be follo
 ## What it does
 
 - **Every call is stored for good** in Postgres (`llm_calls`): one row per attempt with the full messages (instructions, prompt, every model answer including rejected ones, retry prompts), tokens, cost, latency, error and the trace ID. Failed runs and rate-limit retries are included. The record is written even when tracing is off.
-- **Every run is one trace** in Langfuse: a scheduled scan (`scan_eu`, `scan_us`) or a CLI run (`analyse`, `propose`) shows each analysis per stock (`technical AAPL`, `proposer AAPL`, …), each attempt (`invoke_agent`) and each model request (`chat …`), with input, output, tokens and timings. News triage and position reviews appear as their own small traces. Cache hits link to the trace that produced the answer.
+- **Every run is one trace** in Langfuse: a scheduled scan (`scan_eu`, `scan_us`), a news run before a scan (`news_eu`, `news_us`, one `news <market> <batch>` span per News agent call) or a CLI run (`analyse`, `propose`) shows each analysis per stock (`technical AAPL`, `proposer AAPL`, …), each attempt (`invoke_agent`) and each model request (`chat …`), with input, output, tokens and timings. News runs on held stocks (every 30 minutes) appear as their own small traces. Cache hits link to the trace that produced the answer.
 - **Grouping:** environment = `paper` / `live` (`dev`, `evals` for tests), session = trading day (Berlin).
 - **Logs:** every log line written during a run carries its `trace_id`.
 - **Tracing never blocks trading.** Spans are sent in the background. If Langfuse is down, they're dropped and the database record is still complete.
@@ -15,8 +15,8 @@ Every LLM call is logged with its full conversation, and every scan can be follo
 | What | Where |
 |---|---|
 | Traces | [cloud.langfuse.com](https://cloud.langfuse.com) (EU region) → project `trading-agent` → **Tracing → Traces**. Filter by environment `paper`; **Sessions** shows one trading day. History: 30 days (free Hobby plan). |
-| One analysis with all its LLM calls | Dashboard → **Analyses** → Details → *LLM calls* (each attempt's prompts and answers, kept indefinitely) and **Open trace** |
-| The trace behind a proposal | Dashboard → **Proposals** → Details → **Open trace**; Telegram `/why SYMBOL` (last line `Trace: …`) |
+| One analysis with all its LLM calls | Dashboard → **Day** → pick the stock → open the agent's step (input, output, each attempt's prompts and answers, kept indefinitely) and **Open trace** |
+| The trace behind a proposal | Dashboard → **Day** → the stock's proposer step → **Open trace**; Telegram `/why SYMBOL` (last line `Trace: …`) |
 | Is tracing on? | Telegram `/status` → `LLM tracing: on (cloud.langfuse.com, paper)`; the `agent.started` log line |
 | The log lines of one run | `docker compose logs agent --since 24h \| grep <trace_id>` |
 

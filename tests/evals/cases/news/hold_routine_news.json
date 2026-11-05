@@ -1,0 +1,43 @@
+{
+ "module": "news",
+ "about": "Synthetic: a fictional company and invented headlines.",
+ "expect": {"actions": {"HALV.DE": ["none"]}},
+ "input": {
+  "as_of": "2026-10-08",
+  "stocks": [
+   {
+    "symbol": "HALV.DE",
+    "name": "Halvorsen AG",
+    "market": "EU",
+    "sector": "Industrials",
+    "position": {
+     "as_of": "2026-10-07",
+     "entry_date": "2026-09-30",
+     "sessions_held": 5,
+     "entry_price": 84.2,
+     "initial_stop": 80.6,
+     "stop": 80.6,
+     "target": 91.4,
+     "last_close": 85.1,
+     "r_now": 0.25,
+     "closes_last_10": [83.0, 83.4, 82.9, 84.0, 84.6, 84.2, 84.9, 85.3, 84.8, 85.1],
+     "sma20": 83.9,
+     "sma50": 82.7,
+     "atr14": 1.8,
+     "next_report": "2026-10-29",
+     "sessions_to_report": 15,
+     "thesis": "Pullback to the 50-day average in an uptrend carried by rising industrial orders; the dip came on light volume.",
+     "invalidation": "A close below atr_stop_2x, or a sign that order growth is reversing."
+    },
+    "headlines": [
+     {
+      "ref": "HALV.DE:1",
+      "published": "2026-10-08T10:00:00Z",
+      "text": "<untrusted source=\"dpa-AFX\">\nHalvorsen AG to present at capital markets conference. The chief financial officer will speak at an industry conference next week.\n</untrusted>"
+     }
+    ],
+    "earlier": []
+   }
+  ]
+ }
+}

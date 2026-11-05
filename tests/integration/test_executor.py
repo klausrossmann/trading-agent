@@ -1,10 +1,12 @@
 """Executor end to end with the simulator broker: brackets, orders and fills in the DB."""
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from fake_broker import Bar, SimBroker
 from sqlalchemy import func, select, text
 
 from trading_agent.data import ingest
@@ -13,14 +15,13 @@ from trading_agent.data.universe import Universe
 from trading_agent.db import market as market_repo
 from trading_agent.db import orders as repo
 from trading_agent.db import proposals as proposals_repo
+from trading_agent.db import steps as steps_repo
 from trading_agent.db.models import AuditLog, FillRow, OrderRow
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.orders import BracketRequest, BrokerOrder, OrderSpec
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import RiskDecision
 from trading_agent.execution.fsm import InvalidTransition
-from trading_agent.execution.sim import Bar
-from trading_agent.execution.sim_broker import SimBroker
 from trading_agent.executor import Executor
 
 pytestmark = pytest.mark.db
@@ -31,6 +32,7 @@ DAY1 = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
 DAY2 = DAY1 + timedelta(days=1)
 DAY3 = DAY1 + timedelta(days=2)
 DECISION = RiskDecision(approved=True, checks=(), quantity=D(3))
+REJECTED = "10243: Fractional-sized order cannot be placed"
 
 
 class Clock:
@@ -147,7 +149,78 @@ async def test_bracket_lifecycle_with_a_time_exit(sessions: Sessions) -> None:
         "bracket.exit_requested",
         "bracket.closed",
     ]
-    assert [f.order_ref.split(":")[1] for f in fills] == ["entry", "exit"]
+    assert [f.order_ref.split("-")[2] for f in fills] == ["entry", "exit"]
+
+    async with sessions() as s:
+        steps = await steps_repo.steps(s, symbol="AAA")
+    assert [(x.step, x.status) for x in steps] == [
+        ("order", "passed"),
+        ("broker", "info"),
+        ("fill", "passed"),
+        ("stop", "info"),
+        ("exit", "info"),
+        ("broker", "info"),
+        ("broker", "info"),
+        ("broker", "info"),
+        ("exit", "passed"),
+    ]
+    assert all(x.proposal_id == bid for x in steps)
+    order = steps[0]
+    assert order.summary == (
+        "sent to simulator: entry BUY 3 LMT 100; target SELL 3 LMT 108; stop SELL 3 STP 96"
+    )
+    assert order.input is not None
+    assert order.output is not None
+    assert [o["order_ref"] for o in order.output["orders"]] == [
+        o["order_ref"] for o in order.input["orders"]
+    ]
+    assert steps[1].summary == "entry order working -> filled"
+    assert steps[2].summary == "bought 3 at 100.05"
+    assert [f["exec_id"] for f in (steps[2].output or {})["fills"]] == [fills[0].exec_id]
+    assert steps[3].summary == "stop moved 96 -> 100 at simulator"
+    assert steps[4].summary == "exit (time) sent to simulator: exit SELL 3 MKT"
+    assert steps[-1].summary == "sold 3 at 102.9485 (time)"
+
+
+async def test_order_errors_are_recorded(sessions: Sessions) -> None:
+    inst, (down_id, rejected_id) = await _seed(sessions, 2)
+
+    class Down(SimBroker):
+        async def place(self, specs: Sequence[OrderSpec]) -> list[BrokerOrder]:
+            raise ConnectionError("Not connected")
+
+    class Rejects(SimBroker):
+        async def place(self, specs: Sequence[OrderSpec]) -> list[BrokerOrder]:
+            return [
+                o.model_copy(update={"status": "inactive", "message": REJECTED})
+                if o.order_ref.split("-")[2] == "entry"
+                else o
+                for o in await super().place(specs)
+            ]
+
+    clock = Clock()
+    with pytest.raises(ConnectionError):
+        await Executor(sessions, Down(), "agent_paper", clock).submit(
+            _request(inst, down_id), DECISION
+        )
+    await Executor(sessions, Rejects(), "agent_paper", clock).submit(
+        _request(inst, rejected_id), DECISION
+    )
+    async with sessions() as s:
+        steps = {x.proposal_id: x for x in await steps_repo.steps(s, day=date(2026, 10, 5))}
+        message = await s.scalar(select(OrderRow.message).where(OrderRow.message.is_not(None)))
+    down, rejected = steps[down_id], steps[rejected_id]
+    assert (down.step, down.status, down.error) == (
+        "order",
+        "error",
+        "ConnectionError: Not connected",
+    )
+    assert down.summary.startswith("not sent to simulator: entry BUY 3 LMT 100")
+    assert (rejected.status, rejected.error) == (
+        "error",
+        f"TA-AAA-entry-{rejected_id.hex[:8]}: {REJECTED}",
+    )
+    assert message == REJECTED
 
 
 async def test_cancelled_expired_and_restored(sessions: Sessions) -> None:
@@ -189,7 +262,7 @@ async def test_invalid_broker_state_leaves_the_stored_orders(sessions: Sessions)
         async def orders(self) -> list[BrokerOrder]:
             return [
                 o.model_copy(update={"filled": 5, "avg_fill_price": D(100), "status": "filled"})
-                if o.order_ref.endswith(":entry")
+                if o.order_ref.split("-")[2] == "entry"
                 else o
                 for o in await super().orders()
             ]

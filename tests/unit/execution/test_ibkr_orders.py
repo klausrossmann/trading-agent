@@ -6,7 +6,17 @@ from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
 
-from ib_async import IB, CommissionReport, Contract, Execution, Fill, Order, OrderStatus, Trade
+from ib_async import (
+    IB,
+    CommissionReport,
+    Contract,
+    Execution,
+    Fill,
+    Order,
+    OrderStatus,
+    Trade,
+    TradeLogEntry,
+)
 
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.orders import BracketRequest
@@ -52,6 +62,12 @@ class FakeIB:
         return self._next
 
     def openTrades(self) -> list[Trade]:
+        return self.open
+
+    def isConnected(self) -> bool:
+        return bool(self.client)
+
+    def trades(self) -> list[Trade]:
         return self.open
 
     async def reqCompletedOrdersAsync(self, apiOnly: bool) -> list[Trade]:
@@ -109,6 +125,7 @@ def test_ib_order_fields() -> None:
 async def test_bracket_is_sent_once_with_the_stop_transmitting() -> None:
     fake = FakeIB()
     broker = _broker(fake)
+    assert (broker.name, broker.connected()) == ("IBKR", True)
     out = await broker.place(bracket_specs(REQ))
     assert [o.status for o in out] == ["working"] * 3
     orders = [o for _, o in fake.placed]
@@ -173,7 +190,7 @@ async def test_cancel_modify_orders_and_fills() -> None:
 
     fake.open[0].orderStatus = OrderStatus(status="Cancelled")
     fake.open.append(Trade(order=Order(orderRef=""), orderStatus=OrderStatus(status="Submitted")))
-    statuses = {o.order_ref.split(":")[1]: o.status for o in await broker.orders()}
+    statuses = {o.order_ref.split("-")[2]: o.status for o in await broker.orders()}
     assert statuses == {"entry": "inactive", "target": "working", "stop": "working"}
 
     t = datetime(2026, 10, 6, 14, 0, tzinfo=UTC)
@@ -197,3 +214,23 @@ async def test_cancel_modify_orders_and_fills() -> None:
         ("e1", 3, D("100.04"), D(1)),
         ("e2", 1, D(100), None),
     ]
+
+
+async def test_rejection_message_from_the_trade_log() -> None:
+    fake = FakeIB()
+    broker = _broker(fake)
+    await broker.place(bracket_specs(REQ))
+    entry = fake.open[0]
+    t = datetime(2026, 10, 6, 14, 0, tzinfo=UTC)
+    entry.log += [
+        TradeLogEntry(t, "PendingSubmit"),
+        TradeLogEntry(t, "Cancelled", "Fractional-sized order cannot be placed", 10243),
+    ]
+    entry.orderStatus = OrderStatus(status="Cancelled")
+    by_ref = {o.order_ref: o for o in await broker.orders()}
+    rejected = by_ref[entry.order.orderRef]
+    assert (rejected.status, rejected.message) == (
+        "inactive",
+        "10243: Fractional-sized order cannot be placed",
+    )
+    assert by_ref[fake.open[1].order.orderRef].message is None

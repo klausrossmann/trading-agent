@@ -29,11 +29,11 @@
 
 The system is a **hybrid, hierarchical multi-agent system with central orchestration**. Several agents each do one job, and together they reach a decision none of them makes alone: whether to buy a stock, at which prices, and in which order.
 
-- **Seven LLM agents** bring judgement: analysing a setup, proposing a trade, criticising it, ranking, sorting news and reviewing positions.
+- **Five LLM agents** bring judgement: analysing a setup, proposing a trade, criticising it, and reading the news (buy signals for the scan, exits for held stocks).
 - **Five deterministic agents** bring exactness: screening, risk checks and sizing, order execution, reconciliation and timing.
 - **One human agent**, you, holds the final authority.
 
-The guiding principle: **LLM agents decide what to think, deterministic agents decide what to do.** No LLM answer can turn into an order unless a deterministic agent checks and approves it.
+The guiding principle: **LLM agents decide what to think, deterministic agents decide what to do.** No LLM answer can turn into a buy order unless a deterministic agent checks and approves it. One exception by design: a News agent `exit` that code finds confident enough (0.7) sells a held position at the market. It can only close what is held, never open or enlarge a position.
 
 ```mermaid
 flowchart TB
@@ -46,28 +46,27 @@ flowchart TB
         E[Earnings analyst]
         P[Proposer]
         C[Critic<br/>other vendor]
-        M[Portfolio manager]
-        N[News triage]
-        R[Position reviewer]
+        N[News agent]
     end
     subgraph Det2["Deterministic"]
         RE[Risk engine]
         X[Executor]
         REC[Reconciler]
     end
-    O{{Orchestrator}}
+    O{{Orchestrator<br/>ranks by confidence x R:R}}
     DB[(Shared memory<br/>PostgreSQL)]
     H((You))
 
     SCH --> O
-    O <--> SC & T & E & P & C & M
+    O <--> SC & T & E & P & C
     O --> DB
     DB --> RE --> X
     X <--> DB
     REC <--> DB
     DB <--> N
-    DB --> R
-    R -. advice .-> H
+    N -. buy signals .-> SC
+    N -- exit above 0.7 --> X
+    N -. advice below 0.7 .-> H
     H -- commands --> RE
     H -- /exit --> X
 ```
@@ -84,12 +83,10 @@ flowchart TB
 | Earnings analyst | LLM | `EarningsInput` | `EarningsAssessment` | `analysis` |
 | Proposer | LLM | `ProposerInput` | `ProposerOutput` | `proposer` |
 | Critic | LLM | `CriticInput` | `CriticVerdict` | `critic` (other vendor) |
-| Portfolio manager | LLM | `PortfolioInput` | `Ranking` | `proposer` |
 | Risk engine | Deterministic | `Proposal`, portfolio and market state, limits | `RiskDecision` | – |
 | Executor | Deterministic | `BracketRequest`, broker state | Orders, fills, stop moves, exits | – |
 | Reconciler | Deterministic | Broker positions, agent book | Halt on any mismatch | – |
-| News triage | LLM | `TriageInput` | `TriageOutput` | `triage` |
-| Position reviewer | LLM | `ReviewInput` | `ReviewOutput` | `analysis` |
+| News agent | LLM | `NewsInput` (several stocks per call) | `NewsOutput` | `triage` |
 | You | Human | Telegram messages, dashboard | Commands, labels, settings | – |
 
 Models per role are set in `config/models.yaml` (currently Gemini 3.8 Flash, Gemini 3.1 Flash-Lite for triage, and Claude Sonnet 5.5 for the critic once an Anthropic key exists).
@@ -100,7 +97,7 @@ Models per role are set in `config/models.yaml` (currently Gemini 3.8 Flash, Gem
 
 | Kind | Agents | Strength | Weakness covered by the others |
 |---|---|---|---|
-| **LLM agents** (7) | Technical analyst, earnings analyst, proposer, critic, portfolio manager, news triage, position reviewer | Judgement: weighing mixed signals, explaining a decision in words | Can invent facts and miscalculate, and they're non-deterministic |
+| **LLM agents** (5) | Technical analyst, earnings analyst, proposer, critic, News agent | Judgement: weighing mixed signals, explaining a decision in words | Can invent facts and miscalculate, and they're non-deterministic |
 | **Deterministic agents** (5) | Screen, risk engine, executor, reconciler, scheduler | Exact, repeatable, testable, cheap | Can't weigh soft evidence |
 | **Human agent** (1) | You | Final authority, common sense, accountability | Limited time (about 1 hour a day) |
 
@@ -108,9 +105,9 @@ How the system fits the usual MAS dimensions:
 
 | Dimension | This system | Why |
 |---|---|---|
-| Topology | **Orchestrator–worker**. One orchestrator (`pipeline.py`, started by the scheduler) calls each agent and routes its answer onwards. | A fixed, auditable path from data to order |
+| Topology | **Orchestrator–worker**. One orchestrator (`orchestrator.py`, started by the scheduler) calls each agent and routes its answer onwards. | A fixed, auditable path from data to order |
 | Authority | **Hierarchical with a veto chain**. Lower agents can only stop a trade; only the risk engine approves, and you can override everything ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) 8.2). | Safety: no single AI answer can cause an order |
-| Interaction patterns | **Pipeline** (analysts → proposer), **generator–critic** (proposer vs. critic, one round), **aggregator** (portfolio manager), **monitor–advisor** (triage → reviewer → you) | Each pattern does one job: specialise, challenge, prioritise, watch |
+| Interaction patterns | **Pipeline** (analysts → proposer), **generator–critic** (proposer vs. critic, one round), **monitor–actor** (News agent → code threshold → executor, or advice to you) | Each pattern does one job: specialise, challenge, watch |
 | Agent state | **Stateless agents, shared stateful memory**. No agent keeps anything between runs; everything lives in the database (section 6). | Restarts lose nothing, and every run can be replayed |
 | Heterogeneity | Different roles, prompts, output schemas, models, and vendors (Gemini vs. Claude for the critic) | Different models make different mistakes, so a critic from another vendor catches more |
 | Environment | The market, seen only through daily data that code prepared; the broker, which only deterministic agents touch | Agents perceive facts but can't act on the world directly |
@@ -163,7 +160,6 @@ sequenceDiagram
     participant E as Earnings analyst
     participant P as Proposer
     participant C as Critic
-    participant M as Portfolio manager
     participant DB as Shared memory (DB)
     O->>T: TechnicalInput (indicators, level menu, rules)
     T-->>O: TechnicalAssessment (rating, refs, reasoning)
@@ -176,8 +172,7 @@ sequenceDiagram
     O->>C: CriticInput (same facts + plan in prices)
     C-->>O: CriticVerdict (objections, severity, confidence delta)
     Note over O: merge: blocking → blocked, else adjust confidence
-    O->>M: PortfolioInput (survivors, holdings, free slots, budget mode)
-    M-->>O: Ranking (order + one note each)
+    Note over O: rank the survivors by confidence × R:R
     O->>DB: proposals (one row per stock, with all agent outputs)
 ```
 
@@ -187,16 +182,15 @@ sequenceDiagram
 | `EarningsInput` | code → earnings analyst | Next report, last 8 reports with surprise and price reaction | History is cut at the scan date, so no future data leaks in |
 | `ProposerInput` | technical + earnings → proposer | Both assessments, the menu, rules, holdings, unknown fields, `MacroSnapshot` (since prompt v2) | Holdings come from the agent's own book; the macro snapshot (benchmark trend, VIX, rates, credit spreads) is computed by code from shared memory and cut at the scan date |
 | `CriticInput` | proposer → critic | The proposer's facts plus `PlanView` | **Translation**: level names become prices, R:R and stop-in-ATR are computed, so the critic judges numbers rather than names |
-| `PortfolioInput` | proposer + critic → portfolio manager | One `Candidate` per survivor: confidence, R:R, thesis, critic severity and summary; free slots; budget mode | **Filtering**: only the summary of the debate, not the full analyses |
 | `Proposal` | orchestrator → risk engine (via DB) | Refs, prices, confidence, rank, status | The risk engine ignores the text and checks numbers only |
 | `RiskDecision`, `BracketRequest` | risk engine → executor | Every check result, quantity, prices, expiry | The only path to an order |
-| `TriageInput` / `TriageOutput` | news → triage → DB | Headlines as `<untrusted>` text, plus the position's thesis and invalidation | Text is cleaned and truncated first |
-| `ReviewInput` / `ReviewOutput` | DB → reviewer → you | Position facts, triaged news, thesis | The result goes to you as 🧐 advice, never to the executor |
+| `NewsInput` / `NewsOutput` | news → News agent → code | Up to 8 stocks per call, each with its new headlines as `<untrusted>` text; for a held stock also the position facts, its thesis and invalidation, and earlier sorted news | Text is cleaned and truncated first. Code checks every answer (each headline once, `exit` only for held stocks, `buy` only with a `high` headline) and applies the confidence thresholds |
+| News `step` (buy signal) | News agent → scan (via DB) | Symbol, confidence, reason, headlines | **Filtering**: the scan only takes signals above `buy_confidence` from the last 24 hours, and passes them to the proposer as untrusted `catalyst` |
 
 Three channels, by timing:
 
 1. **Synchronous, inside a scan**: request and answer in a fixed order, one stock after another, paced to each model's rate limit.
-2. **Asynchronous, through shared memory**: stages that run at different times communicate by writing to and reading from the database. The scan writes proposals at 08:15, and the risk engine reads them at 09:15. Triage labels news every 30 minutes, and the reviewer reads the labels at 21:00. This is the **blackboard** pattern: producers and consumers never need to run at the same time, and a restart between them loses nothing.
+2. **Asynchronous, through shared memory**: stages that run at different times communicate by writing to and reading from the database. The scan writes proposals at 08:15, and the risk engine reads them at 09:15. The News agent writes buy signals at 07:45, and the scan reads them at 08:15. This is the **blackboard** pattern: producers and consumers never need to run at the same time, and a restart between them loses nothing.
 3. **Human channel**: Telegram. Alerts and digests go out; commands, buttons and free-text label reasons come in. Only your chat id is accepted.
 
 The only multi-turn conversation in the system is the **corrective retry**: if an answer fails validation, the runner sends the agent its own answer back with the list of errors, once.
@@ -210,33 +204,33 @@ The agents themselves are **stateless**: every run starts with an empty context 
 | Memory type | Tables | Holds | Written by | Read by |
 |---|---|---|---|---|
 | **Working memory** | none (the input object) | The facts for the current call; message history only for the one corrective retry | Orchestrator | The agent being called |
-| **World knowledge** (facts) | `instruments`, `bars_daily`, `earnings_events`, `fx_daily`, `macro_series`, `news` | Market data with source and timestamp | Ingestion jobs; triage adds a relevance label to `news` | Screen (also the quality checks and the optional regime gate), calculators, proposer (macro snapshot), risk engine, books, reviewer |
+| **World knowledge** (facts) | `instruments`, `bars_daily`, `earnings_events`, `fx_daily`, `macro_series`, `news` | Market data with source and timestamp | Ingestion jobs; the News agent adds a relevance label to `news` | Screen (also the quality checks and the optional regime gate), calculators, proposer (macro snapshot), risk engine, books, News agent |
 | **Episodic memory** (what agents thought) | `analyses` | Every agent run: full input, output, validation issues, status, model, prompt version, cost | Runner (every LLM agent) | Runner (cache), dashboard, `/why`, eval export |
-| **Deliberation record** | `proposals` | One row per stock and scan day: final status, prices, confidence, rank, critique summary, all agent outputs, links to the analyses | Orchestrator | Risk engine, shadow book, `/proposals`, `/review`, triage and reviewer (thesis), weekly report (calibration) |
-| **Action memory** (what was done) | `risk_decisions`, `brackets`, `orders`, `fills`, `trades`, `equity_daily` | Every check result, order, fill, round trip and daily account value | Risk engine, executor, end-of-day job | Risk engine (loss limits, holdings), end-of-day job (loss limits at the close), proposer and portfolio manager (holdings, free slots), reconciler, reports |
+| **Deliberation record** | `proposals` | One row per stock and scan day: final status, prices, confidence, rank, critique summary, all agent outputs, links to the analyses | Orchestrator | Risk engine, `/proposals`, `/review`, News agent (thesis), dashboard |
+| **Action memory** (what was done) | `risk_decisions`, `brackets`, `orders`, `fills`, `trades`, `equity_daily` | Every check result, order, fill, round trip and daily account value | Risk engine, executor, end-of-day job | Risk engine (loss limits, holdings), end-of-day job (loss limits at the close), proposer (holdings), reconciler, reports |
 | **Shared control state** | `kill_switch` | active / paused / halted, reason, until when, hashed reset code | Control center: you, loss-limit trips, reconciliation | Risk engine before every decision, `/status` |
 | **Shared resource** | `llm_calls` | Tokens, cost, latency and errors of every call | Runner | Budget guard: every agent draws from one monthly budget |
 | **Procedural memory** (how to act) | `prompts/`, `config/` (files, versioned in git) | Role instructions and rules | You, through reviewed commits | Every agent and the risk engine at start |
-| **Feedback memory** | `user_labels`, `reports` | Your agree/disagree labels with reasons; weekly reports | You (`/review`), weekly job | Weekly report, dashboard |
+| **Feedback memory** | `user_labels`, `reports` | Your agree/disagree labels with reasons; tax reports | You (`/review`), `tax-report` | Dashboard |
 | **Audit memory** | `audit_log` | Append-only record of every state change (orders, brackets, kill switch) | Executor, control center | You, for investigations |
 
 Design rules for the shared memory:
 
 - **Agents never write memory directly.** They return an object; code validates it and stores it. That keeps every write well-formed and attributable to an agent, a model and a prompt version.
-- **Memory carries intent across time.** The proposer's thesis and invalidation are written once, at the scan. Weeks later, the news triage and the position reviewer read them to judge whether the reason for the trade still holds. The proposer and the reviewer never run at the same time; they communicate through memory.
+- **Memory carries intent across time.** The proposer's thesis and invalidation are written once, at the scan. Weeks later, the News agent reads them to judge whether the reason for the trade still holds. The proposer and the News agent never talk; they communicate through memory.
 - **Memoisation.** Each analysis is keyed by a hash of agent, prompt version, model, scan date and full input. A re-run with the same input returns the stored answer at no cost, which makes re-runs cheap and their results identical.
 - **One row per decision.** A re-run of the same scan day updates the stock's proposal in place, so your labels and later references stay attached to it.
 - **Concurrency.** One process writes, in short transactions. The kill switch row is locked while it changes, and orders carry a unique reference (`<proposal id>:<kind>`), so a retry can never place an order twice.
-- **What agents deliberately don't remember.** No agent reads its own past answers or outcomes, so there is no self-learning loop. With a few dozen trades, an agent learning from its own results would mostly learn noise. Learning happens outside the agents: you read the weekly report and your labels, then change a prompt or rule as a new version, and the next reports compare the versions.
+- **What agents deliberately don't remember.** No agent reads its own past answers or outcomes, so there is no self-learning loop. With a few dozen trades, an agent learning from its own results would mostly learn noise. Learning happens outside the agents: you read the results and your labels, then change a prompt or rule as a new version, and compare the versions.
 
 ---
 
 ## 7. Coordination and conflict resolution
 
 - **Time-based coordination.** No agent decides when to act. The scheduler starts every stage at a fixed point relative to the exchange's open or close ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4), so stages never overlap and always run in the same order.
-- **Conditional routing.** The orchestrator decides who runs next, from the previous answer: only `buy` / `strong_buy` reach the proposer; only `propose` reaches the critic; the portfolio manager runs only if at least two proposals survive. This saves calls and money.
-- **Conflicts are settled by rules, not votes.** Critic `blocking` beats the proposer. Otherwise the critic's confidence change is added to the proposer's confidence. The portfolio manager can reorder but not remove. The risk engine overrides every AI decision, and you override the risk engine.
-- **Shared resources.** Free position slots, cash and the AI budget are shared by all agents. The orchestrator tells the portfolio manager how many slots are free and which budget mode is on. Lean mode at 80 % shrinks the number of candidates for every scan.
+- **Conditional routing.** The orchestrator decides who runs next, from the previous answer: only `buy` / `strong_buy` reach the proposer; only `propose` reaches the critic. This saves calls and money.
+- **Conflicts are settled by rules, not votes.** Critic `blocking` beats the proposer. Otherwise the critic's confidence change is added to the proposer's confidence. The survivors are ranked by code (confidence × R:R), not by an agent. The risk engine overrides every AI decision, and you override the risk engine.
+- **Shared resources.** Free position slots, cash and the AI budget are shared by all agents. The risk engine enforces the slots and cash, in rank order. Lean mode at 80 % of the AI budget shrinks the number of candidates for every scan.
 
 | Level | Can stop a trade? | Can force a trade? |
 |---|---|---|
@@ -244,7 +238,6 @@ Design rules for the shared memory:
 | Analysts | Yes: a rating below `buy`, or "wait until after the report" | No |
 | Proposer | Yes: `no_trade` | No |
 | Critic | Yes: `blocking` | No |
-| Portfolio manager | No, it can only rank | No |
 | Risk engine | Yes: any of 9 checks | It approves, but only what the agents proposed, and only within the limits |
 | Kill switch | Yes: paused or halted means no new entries | No |
 | You | Yes: `/pause`, `/stop`, settings | No: there is no manual buy. `/exit` is the only manual order. |
@@ -261,7 +254,7 @@ In a multi-agent system, one agent's mistake can cascade through the others. Thi
 | A bad answer cascades | Every answer is validated before any other agent sees it. Failures stop at that stock. |
 | Agents agree on the same mistake | The critic comes from another vendor and gets the plan in prices, not the proposer's reasoning steps |
 | An agent gains capabilities it shouldn't have | LLM agents have no tools and no broker access. `import-linter` contracts in CI forbid the `llm`, `modules` and `agents` packages from importing `risk` or `execution`. An approved order can only be built by the risk engine. |
-| Prompt injection through news | News reaches only the triage and review agents, wrapped in `<untrusted>` blocks, cleaned and truncated. Both can only give advice; neither can reach an order. |
+| Prompt injection through news | News reaches the News agent wrapped in `<untrusted>` blocks, cleaned and truncated, and the proposer and critic only as an untrusted `catalyst`. A buy signal only adds a stock to the scan, where the analysts, the critic and the risk engine must still agree, and at most 1 news trade is placed a day. A news exit can only sell a held position. |
 | Runaway cost | One shared monthly budget, per-model pacing, a fixed number of calls per stock, and memoisation |
 
 ---
@@ -276,8 +269,7 @@ Each failure stays local and the system degrades in steps instead of stopping:
 | An answer fails the schema | PydanticAI retries up to twice within the call |
 | An answer fails the validators | One corrective retry with the errors fed back; then stored as `rejected`. A rejected technical analysis or proposal skips that stock today. |
 | The critic fails | The proposal stays `proposed`, marked "no critique" |
-| The portfolio manager fails | The orchestrator ranks by confidence × R:R |
-| No price configured for a model, or the budget is used up | The agent is `skipped`; no call is made. At 100 % of the budget no agent runs, and the rule-based book keeps trading in simulation. |
+| No price configured for a model, or the budget is used up | The agent is `skipped`; no call is made. At 100 % of the budget no agent runs, so no new trades. |
 | The process restarts mid-scan | Finished analyses are in the cache, so a re-run continues at no cost; proposals are upserted per stock and day |
 | A stage misses its time | It runs late only within its grace period; a late order placement is skipped |
 
@@ -287,7 +279,7 @@ Each failure stays local and the system degrades in steps instead of stopping:
 
 - **Every agent run is a stored record**: input, output, issues, status, model, prompt version and cost (`analyses`). Every attempt is stored too, with its full messages (instructions, prompt, each model response including rejected ones, retry prompts), tokens, latency, errors and the trace ID (`llm_calls`).
 - **Every run is a trace** ([OBSERVABILITY.md](OBSERVABILITY.md)): a scan or CLI run is one OpenTelemetry trace (run → agent per symbol → attempt → model request), exported to Langfuse Cloud. Tracing never blocks a job, and the database keeps the record when the backend is down.
-- **Every proposal links to the analyses behind it**, so a trade can be traced back to the exact prompts, inputs and answers. `/why SYMBOL` in Telegram shows the thesis, critique, plan and a trace link. The dashboard's Proposals and Analyses pages show the attempts with their messages and open the trace.
+- **Every proposal links to the analyses behind it**, so a trade can be traced back to the exact prompts, inputs and answers. `/why SYMBOL` in Telegram shows the thesis, critique, plan and a trace link. The dashboard's Day page shows every step of every stock, including each agent's input, answer and attempts, and opens the trace.
 - **Structured logs** summarise each stage (`scan.done`, `proposals.done`, `place.done`), including candidates, statuses, skip reasons and cost. Lines written inside a trace carry its `trace_id`.
 - **Replays**: the same input gives the same stored answer, and changing a prompt version or a model gives a new key. Comparisons between versions are clean.
 
@@ -297,16 +289,13 @@ Each failure stays local and the system degrades in steps instead of stopping:
 
 | Question | How it's answered |
 |---|---|
-| Do the agents add value at all? | **Ablation**: `baseline_sim` is the same screen with no agents. The agent books must beat it after fees and AI costs ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 9). |
-| Are there enough trades to tell? | `agent_shadow` simulates every proposal the risk engine would approve, ignoring the 4-slot limit |
-| Is the agents' confidence meaningful? | **Calibration** in the weekly report: do 40 % proposals win about 40 % of the time? |
+| Do the agents add value at all? | The `agent_paper` book: every order the agent sent to the IBKR paper account and every fill, after fees and AI costs ([HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 9) |
 | Does a human agree with the agents? | Your `/review` labels, compared with the outcomes |
 | Does each agent behave? | 30 **golden cases** from real days (`tests/evals`), run against the real models, check schema, validators and plausibility per agent |
 | Does the system work together? | Integration tests run the whole pipeline with fake models (PydanticAI `FunctionModel`) in CI, at no cost and with no API key. `llm/fake.py` is a rule-following fake for every agent; with `LLM_FAKE=true` the local stack (`compose.dev.yaml`) runs the full schedule offline |
-| Is the baseline a fair bar? | `baseline_sim` and the backtest apply the risk engine's rules, including the correlation cap and the loss limits ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.2) |
 | Can the safety layer be trusted? | The risk engine has 100 % branch coverage and property-based tests: no approved decision may ever break a limit |
 
-The stored data also allows per-agent questions that the weekly report doesn't compute yet. For example: how did the trades the critic blocked turn out? Did its confidence changes improve calibration? Does the portfolio manager's order beat ranking by confidence × R:R?
+The stored data also allows per-agent questions: how did the trades the critic blocked turn out? Do higher-ranked proposals do better than lower-ranked ones?
 
 ---
 
@@ -320,7 +309,7 @@ The stored data also allows per-agent questions that the weekly report doesn't c
 | One process, asyncio | Distributed agents, message broker | 8 GB laptop, one user, a few hundred calls a day |
 | Plain Python orchestration with PydanticAI | LangGraph, CrewAI, AutoGen | The graph is small and fixed; fewer dependencies, full control over validation |
 
-Natural next steps for the showcase: a macro-regime agent (today the macro snapshot is code-computed context for the proposer, plus an optional rule-based regime gate in the screen) and a news agent inside the scan, a second critic round when the critic raises a `major` objection, read-only tools for the proposer, and per-agent attribution in the weekly report.
+Natural next steps for the showcase: a macro-regime agent (today the macro snapshot is code-computed context for the proposer, plus an optional rule-based regime gate in the screen), a second critic round when the critic raises a `major` objection, read-only tools for the proposer, and per-agent attribution (for example: do news trades do better or worse than pullback trades?).
 
 ---
 
@@ -328,23 +317,25 @@ Natural next steps for the showcase: a macro-regime agent (today the macro snaps
 
 | MAS concept | Where in the code |
 |---|---|
-| Orchestrator (scan) | `src/trading_agent/pipeline.py` (`propose`, `rank`, `build_proposal`) |
-| Orchestrator (positions) | `src/trading_agent/review.py` (news triage, position review) |
+| Orchestrator (the day) | `src/trading_agent/orchestrator.py`: `scan` (screen → agents → rank), `place` (risk engine → IBKR), `monitor`, `end_of_day` (fills, stops, time stop, book) |
+| Scan building blocks | `src/trading_agent/pipeline.py` (agent inputs, `build_proposal`, `rank`, the steps of each stock) |
+| Orchestrator (news) | `src/trading_agent/news.py`: `scan_news` (buy signals before each scan), `watch_positions` (held stocks every 30 minutes, news exits) |
 | Scheduler | `src/trading_agent/scheduler.py`, `config/schedule.yaml` |
 | Agent runtime | `src/trading_agent/llm/runner.py` (cache, budget, pacing, validation, retry, storage, analysis spans) |
 | Tracing | `src/trading_agent/telemetry.py` (OTel SDK, root spans), `src/trading_agent/llm/tracing.py` (attribute names), [OBSERVABILITY.md](OBSERVABILITY.md) |
-| LLM agents | `src/trading_agent/modules/{technical,earnings,news_triage,position_review}.py`, `src/trading_agent/agents/{proposer,critic,portfolio}.py` |
+| LLM agents | `src/trading_agent/modules/{technical,earnings,news}.py`, `src/trading_agent/agents/{proposer,critic}.py` |
 | Role prompts | `prompts/<role>/v<N>.md` |
 | Model registry, budget | `config/models.yaml`, `src/trading_agent/llm/{models,budget}.py` |
 | Untrusted text | `src/trading_agent/llm/sanitize.py` |
-| Screen | `src/trading_agent/strategies/pullback.py`, `src/trading_agent/backtest.py` (`latest_setups`, regime gate), `src/trading_agent/jobs.py` (`candidates`: drops blocked and blacklisted symbols) |
+| Screen | `src/trading_agent/strategies/pullback.py` (rules), `src/trading_agent/screen.py` (every stock's verdict, selection), `src/trading_agent/jobs.py` (`screen_stocks`: drops blocked, blacklisted and held symbols) |
+| Step log | `src/trading_agent/domain/steps.py`, `src/trading_agent/db/steps.py`; written by `orchestrator.py` and `executor.py` |
 | Macro context | `src/trading_agent/calc/macro.py`, `src/trading_agent/pipeline.py` (`macro_context`) |
 | Risk engine | `src/trading_agent/risk/engine.py`, `config/risk.yaml` |
-| Executor | `src/trading_agent/executor.py`, `src/trading_agent/trading.py` |
+| Executor | `src/trading_agent/executor.py`, `src/trading_agent/trading.py` (risk decision, book, IBKR sync) |
 | Reconciler | `src/trading_agent/execution/reconcile.py`, `src/trading_agent/broker.py` |
 | Shared control state | `src/trading_agent/controls.py`, `src/trading_agent/risk/kill_switch.py` |
 | Shared memory | `src/trading_agent/db/models.py` and the repositories in `src/trading_agent/db/` |
 | Human channel | `src/trading_agent/notify/telegram.py`, `src/trading_agent/journal.py` |
 | Containment contracts | `[tool.importlinter]` in `pyproject.toml` |
-| Tests | `tests/integration/test_pipeline.py` (whole pipeline, fake models), `tests/evals/` (golden cases), `tests/unit/risk/` (risk engine) |
+| Tests | `tests/integration/test_pipeline.py` (the scan, fake models), `tests/integration/test_trading.py` (place, monitor, end of day against a fake IBKR), `tests/evals/` (golden cases), `tests/unit/risk/` (risk engine) |
 | Offline fake agents | `src/trading_agent/llm/fake.py`, `compose.dev.yaml`, `make dev-up` |

@@ -151,7 +151,7 @@ async def test_why_links_the_trace_of_the_proposer(sessions: Sessions) -> None:
 async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> None:
     universe, ids = await _seed(sessions)
     trade = Trade(
-        book="agent_shadow",
+        book="agent_paper",
         strategy="pullback_uptrend",
         instrument_id=ids["AAA"],
         yahoo_symbol="AAA",
@@ -174,7 +174,7 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
         holding_sessions=2,
     )
     async with sessions.begin() as s:
-        await trades_repo.replace_book(s, "agent_shadow", [trade])
+        await trades_repo.replace_book(s, "agent_paper", [trade])
         aaa = next(p for p in await repo.proposals(s, start=DAY) if p.yahoo_symbol == "AAA")
         rejected = RiskDecision(
             approved=False,
@@ -191,8 +191,6 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
         "  2 to label: /review",
         "Risk engine: placed none",
         "  rejected AAA: portfolio: 4 positions and entries open",
-        "agent_paper: 0 open",
-        "agent_shadow: 0 open; closed AAA +€12.30 (+0.1 %) (target)",
-        "baseline_sim: 0 open",
+        "agent_paper: 0 open; closed AAA +€12.30 (+0.1 %) (target)",
         "LLM today: $0.0000",
     ]

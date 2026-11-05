@@ -1,0 +1,30 @@
+{
+ "module": "news",
+ "about": "Synthetic: a fictional company and invented headlines.",
+ "expect": {"actions": {"NOVA": ["none"]}},
+ "input": {
+  "as_of": "2026-10-08",
+  "stocks": [
+   {
+    "symbol": "NOVA",
+    "name": "Novaline Systems",
+    "market": "US",
+    "sector": "Technology",
+    "position": null,
+    "headlines": [
+     {
+      "ref": "NOVA:1",
+      "published": "2026-10-08T09:00:00Z",
+      "text": "<untrusted source=\"MarketBeat\">\nFive tech stocks to watch this week. A roundup of earnings dates and chart levels for several large technology companies, Novaline among them.\n</untrusted>"
+     },
+     {
+      "ref": "NOVA:2",
+      "published": "2026-10-08T06:00:00Z",
+      "text": "<untrusted source=\"Reuters\">\nNasdaq edges higher as yields ease. Broad market commentary.\n</untrusted>"
+     }
+    ],
+    "earlier": []
+   }
+  ]
+ }
+}

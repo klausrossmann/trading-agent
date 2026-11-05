@@ -1,7 +1,6 @@
 name: trading-agent
 
-# db, agent and dashboard; ib-gateway joins with COMPOSE_PROFILES=ibkr once the IBKR paper
-# login exists (IMPLEMENTATION.md 15.3, 15.5).
+# db, agent, dashboard and ib-gateway. Every order goes to IBKR (IMPLEMENTATION.md 15.3, 15.5).
 services:
   db:
     image: postgres:17
@@ -25,7 +24,7 @@ services:
     build: .
     image: trading-agent:latest
     command: ["python", "-m", "trading_agent", "run"]
-    restart: unless-stopped
+    restart: "no"  # started by hand (`make up`), never on boot
     env_file: .env
     environment:
       DB_HOST: db
@@ -70,13 +69,12 @@ services:
   # unauthenticated. VNC is on the host's loopback for maintenance through an SSH tunnel.
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
-    profiles: [ibkr]
-    restart: unless-stopped
+    restart: "no"  # started with the agent, not on boot
     environment:
       TWS_USERID: ${TWS_USERID:-}
       TWS_PASSWORD_FILE: /run/secrets/tws_password
       TRADING_MODE: paper
-      READ_ONLY_API: ${IB_READ_ONLY_API:-yes}  # "no" together with IB_ORDERS_ENABLED=true (M8 step 5)
+      READ_ONLY_API: "no"  # the agent places orders
       TIME_ZONE: Europe/Berlin
       TZ: Europe/Berlin
       AUTO_RESTART_TIME: "11:45 PM"

@@ -1,23 +1,22 @@
-"""Order placement and the daily execution cycle (IMPLEMENTATION.md 9.6; orchestration).
+"""What the orchestrator's place / monitor / end-of-day stages build on: the trading context,
+the agent book (accounting from IBKR's fills), the risk decision for one proposal, the IBKR
+sync with its alerts, and the Telegram commands /positions, /pnl and /exit.
 
-- `place`: today's ranked proposals of one market -> risk engine -> brackets at the broker.
-- `end_of_day`: simulator fills from the day's bar, broker sync, breakeven stops, time stops,
-  the agent book's trades and the sleeve's equity snapshot.
-- `monitor`: broker sync during sessions when orders go to IBKR.
+Orders go to IBKR or nowhere: while the gateway is disconnected nothing is placed, and the
+step log and Telegram say so.
 """
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trading_agent.backtest import SETTLEMENT_SESSIONS
 from trading_agent.calc.fees import FeeSchedule, order_fees
-from trading_agent.calc.indicators import atr, bars_to_frame
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars
 from trading_agent.data.ibkr import MarketInfo
@@ -27,32 +26,26 @@ from trading_agent.db import market as market_repo
 from trading_agent.db import orders as orders_repo
 from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
-from trading_agent.domain.market import (
-    BERLIN,
-    Bar,
-    Increments,
-    Instrument,
-    Market,
-    Observation,
-)
-from trading_agent.domain.orders import Bracket, BracketRequest
+from trading_agent.domain.market import BERLIN, Increments, Instrument, Market, Observation
+from trading_agent.domain.orders import Bracket
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
-from trading_agent.domain.trading import Book, Trade, book_for_mode
-from trading_agent.execution import sim
-from trading_agent.execution.sim_broker import SimBroker
+from trading_agent.domain.steps import Step
+from trading_agent.domain.trading import Book, book_for_mode
 from trading_agent.executor import Executor
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, Notifier
 from trading_agent.portfolio import book as accounting
-from trading_agent.portfolio.snapshot import CENT_TICKS, proposal_levels, snapshot, to_tick
+from trading_agent.portfolio.snapshot import CENT_TICKS, proposal_levels, snapshot
 from trading_agent.risk import engine
 from trading_agent.risk.config import RiskConfig
+from trading_agent.strategies.news import NewsParams
 from trading_agent.strategies.pullback import PullbackParams
 
 log = structlog.get_logger(__name__)
 
 HISTORY_DAYS = 150  # calendar days of bars for ATR(14), 20-day value and 60-day correlations
+SETTLEMENT_SESSIONS: dict[Market, int] = {"US": 1, "EU": 2}  # T+1 US, T+2 Xetra
 
 
 @dataclass
@@ -60,14 +53,14 @@ class TradingContext:
     sessions: Sessions
     executor: Executor
     center: ControlCenter
-    risk: RiskConfig
+    risk: RiskConfig  # as in risk.yaml; `limits` has the mode's budget
     fees: FeeSchedule
-    rules: PullbackParams  # entry validity, breakeven and time stop, as in the backtest
+    rules: PullbackParams  # entry validity, breakeven and time stop
     mode: Mode
     notifier: Notifier
-    sim: SimBroker | None  # None: orders go to IBKR
-    market_info: MarketInfo | None = None  # IBKR ticks and quotes, when the gateway is enabled
+    market_info: MarketInfo | None = None  # IBKR ticks and quotes
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
+    news: NewsParams = field(default_factory=NewsParams)  # news trades a day
 
     async def ticks(self, inst: Instrument) -> Increments:
         found = await self.market_info.increments(inst) if self.market_info else None
@@ -77,17 +70,22 @@ class TradingContext:
     def book(self) -> Book:
         return book_for_mode(self.mode)
 
-    def sleeve(self, market: Market) -> tuple[list[Market], RiskConfig]:
+    @property
+    def limits(self) -> RiskConfig:
+        return self.risk.for_mode(self.mode)
+
+    @property
+    def account(self) -> str:
+        """Key of the equity history: the markets of this mode, e.g. "US,EU"."""
         markets = self.risk.markets.paper if self.mode == "paper" else self.risk.markets.live
-        return next(
-            (ms, cfg)
-            for ms, cfg in self.risk.sleeves(list({*markets, market}), self.mode)
-            if market in ms
-        )
+        return ",".join(markets)
+
+    def connected(self) -> bool:
+        return self.executor.broker.connected()
 
 
 @dataclass
-class _Book:
+class LoadedBook:
     """Everything the accounting needs, loaded once per step."""
 
     brackets: list[tuple[Bracket, datetime]]
@@ -95,13 +93,6 @@ class _Book:
     instruments: dict[int, Instrument]
     marks: dict[int, Decimal]
     rates: dict[str, Decimal]
-
-    def sleeve(self, markets: Sequence[Market]) -> tuple[list[Bracket], list[accounting.BookFill]]:
-        brackets = [
-            b for b, _ in self.brackets if self.instruments[b.instrument_id].market in markets
-        ]
-        ids = {b.id for b in brackets}
-        return brackets, [f for f in self.fills if f.bracket_id in ids]
 
 
 def _rate_on(usd: Sequence[Observation], day: date) -> Decimal:
@@ -158,32 +149,36 @@ async def load_book(
     return brackets, fills, instruments
 
 
-async def _load(ctx: TradingContext) -> _Book:
+async def load(ctx: TradingContext) -> LoadedBook:
     async with ctx.sessions() as s:
         brackets, fills, instruments, usd = await _read_book(s, ctx.book, ctx.fees)
         marks = await market_repo.last_closes(s, instruments)
     today = ctx.clock().date()
     rates = {"EUR": Decimal(1)} | ({"USD": _rate_on(usd, today)} if usd else {})
-    return _Book(brackets, fills, instruments, marks, rates)
+    return LoadedBook(brackets, fills, instruments, marks, rates)
 
 
-async def _sleeve_state(
-    ctx: TradingContext, loaded: _Book, market: Market, today: date
-) -> tuple[accounting.Account, PortfolioState, RiskConfig, str]:
-    markets, cfg = ctx.sleeve(market)
-    key = ",".join(markets)
-    brackets, fills = loaded.sleeve(markets)
-    budget = cfg.capital.agent_budget_eur
+async def _state(
+    ctx: TradingContext, loaded: LoadedBook, today: date
+) -> tuple[accounting.Account, PortfolioState]:
+    """The account (both markets, one budget) and the risk engine's view of it."""
+    budget = ctx.limits.capital.agent_budget_eur
     acct = accounting.account(
-        budget, brackets, fills, loaded.instruments, loaded.marks, loaded.rates, today
+        budget,
+        [b for b, _ in loaded.brackets],
+        loaded.fills,
+        loaded.instruments,
+        loaded.marks,
+        loaded.rates,
+        today,
     )
     async with ctx.sessions() as s:
-        history = await book_repo.equity_history(s, ctx.book, key)
+        history = await book_repo.equity_history(s, ctx.book, ctx.account)
     orders_today = sum(
         1 for _, created in loaded.brackets if created.astimezone(BERLIN).date() == today
     )
     state = accounting.portfolio_state(acct, budget, history, today, orders_today)
-    return acct, state, cfg, key
+    return acct, state
 
 
 def _sessions_to_earnings(cal: str, today: date, dates: Sequence[date]) -> int | None:
@@ -193,11 +188,13 @@ def _sessions_to_earnings(cal: str, today: date, dates: Sequence[date]) -> int |
     return len(calendars.sessions(cal, today, min(upcoming))) - 1
 
 
-async def _decide(
-    ctx: TradingContext, loaded: _Book, p: Proposal, now: datetime, today: date
-) -> tuple[RiskDecision, Instrument]:
+async def decide(
+    ctx: TradingContext, loaded: LoadedBook, p: Proposal, now: datetime, today: date
+) -> tuple[RiskDecision, Instrument, dict[str, Any]]:
+    """The decision, the instrument and the decision's inputs (for the step log)."""
     cal = calendars.CALENDAR_BY_MARKET[p.market]
-    _, portfolio, cfg, _ = await _sleeve_state(ctx, loaded, p.market, today)
+    _, portfolio = await _state(ctx, loaded, today)
+    cfg = ctx.limits
     held_ids = {h.instrument_id for h in portfolio.holdings}
     start = today - timedelta(days=HISTORY_DAYS)
     async with ctx.sessions() as s:
@@ -220,73 +217,37 @@ async def _decide(
     controls = await ctx.center.controls()
     levels = proposal_levels(p, await ctx.ticks(inst))
     decision = engine.evaluate(p, levels, portfolio, market, controls, cfg, ctx.fees, now)
-    return decision, inst
+    inputs = {
+        "levels": {k: str(v) for k, v in levels.items()},
+        "confidence": p.confidence,
+        "rank": p.rank,
+        "market": market.model_dump(mode="json"),
+        "portfolio": portfolio.model_dump(mode="json"),
+        "controls": controls.model_dump(mode="json"),
+    }
+    return decision, inst, inputs
 
 
-@dataclass
-class Placement:
-    placed: list[messages.PlacedLine] = field(default_factory=list[messages.PlacedLine])
-    rejected: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
-
-
-async def place(ctx: TradingContext, market: Market) -> Placement:
-    """Run after the open: only proposals from today's scan (as_of = previous session)."""
-    now = ctx.clock()
-    cal = calendars.CALENDAR_BY_MARKET[market]
-    today = now.astimezone(calendars.calendar(cal).tz).date()
-    result = Placement()
-    if calendars.session_time(cal, today, "open") is None:
-        log.info("place.skipped", market=market, reason="no session today")
-        return result
-    as_of = calendars.session_offset(cal, today, -1)
-    async with ctx.sessions() as s:
-        found = await proposals_repo.proposals(s, start=as_of, end=as_of)
-    todo = sorted(
-        (p for p in found if p.market == market and p.status == "proposed"),
-        key=lambda p: (p.rank is None, p.rank or 0),
-    )
-    if not todo:
-        log.info("place.nothing", market=market, as_of=as_of.isoformat())
-        return result
-    await ctx.executor.sync()
-    expires_day = calendars.session_offset(cal, today, ctx.rules.entry_valid_sessions - 1)
-    expires = calendars.session_time(cal, expires_day, "close")
-    if expires is None:
-        raise LookupError(f"no close for {expires_day}")
-    for p in todo:
-        decision, inst = await _decide(ctx, await _load(ctx), p, now, today)
-        async with ctx.sessions.begin() as s:
-            await book_repo.save_decision(s, p.id, decision, now)
-        if decision.trip is not None:
-            await ctx.center.apply_trip(decision.trip)
-        entry, stop, target = decision.entry, decision.stop, decision.target
-        if not decision.approved or entry is None or stop is None or target is None:
-            first = decision.failures[0]
-            result.rejected.append((p.yahoo_symbol, f"{first.name}: {first.detail}"))
-            continue
-        await ctx.executor.submit(
-            BracketRequest(
-                id=p.id,
-                instrument=inst,
-                quantity=decision.quantity,
-                entry=entry,
-                stop=stop,
-                target=target,
-                expires=expires,
-            ),
-            decision,
+def risk_step(p: Proposal, decision: RiskDecision, inputs: dict[str, Any], now: datetime) -> Step:
+    if decision.approved:
+        summary = (
+            f"approved {decision.quantity.normalize():f} shares at {decision.entry}, "
+            f"risk {decision.risk:.2f}, value {decision.value:.2f}, fees {decision.fees:.2f}"
         )
-        result.placed.append(
-            messages.PlacedLine(
-                p.yahoo_symbol, decision.quantity, float(entry), float(stop), float(target)
-            )
-        )
-    broker = "simulator" if ctx.sim is not None else "IBKR"
-    await ctx.notifier.send(
-        messages.placement_summary(market, result.placed, result.rejected, broker)
+    else:
+        summary = "; ".join(f"{c.name}: {c.detail}" for c in decision.failures) or "rejected"
+    return Step(
+        day=now.astimezone(BERLIN).date(),
+        market=p.market,
+        instrument_id=p.instrument_id,
+        symbol=p.yahoo_symbol,
+        step="risk",
+        status="passed" if decision.approved else "stopped",
+        summary=summary,
+        input=inputs,
+        output=decision.model_dump(mode="json"),
+        proposal_id=p.id,
     )
-    log.info("place.done", market=market, placed=len(result.placed), rejected=len(result.rejected))
-    return result
 
 
 async def _announce(
@@ -309,88 +270,17 @@ async def _announce(
             await ctx.notifier.send(messages.entry_ended_alert(symbol, b.state))
 
 
-async def _sync(ctx: TradingContext) -> list[Bracket]:
+async def sync(ctx: TradingContext) -> list[Bracket]:
     before = {b.id: b for b in await ctx.executor.open_brackets()}
     changed = await ctx.executor.sync()
     await _announce(ctx, before, changed)
     return changed
 
 
-async def monitor(ctx: TradingContext) -> list[Bracket]:
-    """Every few minutes in sessions; the simulator only moves at the end of the day."""
-    if ctx.sim is not None:
-        return []
-    return await _sync(ctx)
-
-
-async def end_of_day(ctx: TradingContext, market: Market) -> None:
-    """After the market's EOD bars are stored."""
-    now = ctx.clock()
-    cal = calendars.CALENDAR_BY_MARKET[market]
-    day = calendars.last_closed_session(cal, now)
-    close_at = calendars.session_time(cal, day, "close") or now
-    open_ = await ctx.executor.open_brackets()
-    async with ctx.sessions() as s:
-        instruments = await market_repo.instruments(s, {b.instrument_id for b in open_})
-        bars = await market_repo.bars_on(s, instruments, day)
-    mine = [b for b in open_ if instruments[b.instrument_id].market == market]
-    if ctx.sim is not None:
-        for inst_id in {b.instrument_id for b in mine}:
-            if (bar := bars.get(inst_id)) is not None:
-                ctx.sim.on_bar(inst_id, _sim_bar(bar), close_at)
-    await _sync(ctx)
-    await _manage_positions(ctx, market, day, bars)
-    await rebuild_book(ctx, market, day)
-
-
-def _sim_bar(bar: Bar) -> sim.Bar:
-    return sim.Bar(float(bar.open), float(bar.high), float(bar.low), float(bar.close))
-
-
-async def _manage_positions(
-    ctx: TradingContext, market: Market, day: date, bars: dict[int, Bar]
-) -> None:
-    """Breakeven at +1R, the optional ATR trail and the time stop, on the day's bar as in the
-    backtest."""
-    cal = calendars.CALENDAR_BY_MARKET[market]
-    loaded = await _load(ctx)
-    fills = {f.bracket_id: f.day for f in loaded.fills if f.kind == "entry"}
-    for b in await ctx.executor.open_brackets():
-        inst = loaded.instruments.get(b.instrument_id)
-        entered = fills.get(b.id)
-        if inst is None or inst.market != market or b.state != "filled" or entered is None:
-            continue
-        held = len(calendars.sessions(cal, entered, day)) - 1
-        if held >= ctx.rules.time_stop_sessions:
-            await ctx.executor.request_exit(b.id, "time")
-            continue
-        bar = bars.get(b.instrument_id)
-        if bar is None or entered == day or b.entry_price is None:
-            continue
-        trigger = float(b.entry_price) + ctx.rules.breakeven_r * float(b.entry - b.initial_stop)
-        moved = sim.trailed_stop(_sim_bar(bar), float(b.stop), float(b.entry_price), trigger)
-        if ctx.rules.trail_atr is not None and moved >= float(b.entry_price):
-            async with ctx.sessions() as s:
-                since = entered - timedelta(days=HISTORY_DAYS)
-                history = [
-                    x for x in await market_repo.bars(s, b.instrument_id, since) if x.date <= day
-                ]
-            highest = max(float(x.close) for x in history if x.date >= entered)
-            last_atr = float(atr(bars_to_frame(history)).iloc[-1])
-            moved = sim.chandelier_stop(
-                moved, float(b.entry_price), highest, last_atr, ctx.rules.trail_atr
-            )
-        new_stop = to_tick(Decimal(str(moved)), True, await ctx.ticks(inst))
-        if new_stop > b.stop:
-            await ctx.executor.move_stop(b.id, new_stop)
-            log.info("stop.moved", symbol=inst.yahoo_symbol, stop=str(new_stop))
-
-
 async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
-    """Round trips of the agent book from its brackets, the sleeve's equity after `day`, and
-    the loss limits measured at that close (a breach pauses the next session, as in the
-    backtest)."""
-    loaded = await _load(ctx)
+    """Round trips of the agent book from its brackets, the account's equity after `day`, and
+    the loss limits measured at that close (a breach pauses the next session)."""
+    loaded = await load(ctx)
     async with ctx.sessions() as s:
         found = await proposals_repo.proposals(s)
     signals = {p.id: (p.as_of, p.strategy) for p in found}
@@ -406,7 +296,8 @@ async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
         signals,
         sessions_between,
     )
-    acct, state, cfg, key = await _sleeve_state(ctx, loaded, market, day)
+    acct, state = await _state(ctx, loaded, day)
+    key = ctx.account
     async with ctx.sessions.begin() as s:
         await trades_repo.replace_book(s, ctx.book, rows)
         await book_repo.upsert_equity(
@@ -418,11 +309,11 @@ async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
             cash_eur=acct.cash_eur + acct.unsettled_eur,
             invested_eur=acct.invested_eur,
         )
-    log.info("book.updated", book=ctx.book, sleeve=key, equity_eur=str(acct.equity_eur))
-    if trips := engine.loss_trips(state, cfg):
+    log.info("book.updated", book=ctx.book, account=key, equity_eur=str(acct.equity_eur))
+    if trips := engine.loss_trips(state, ctx.limits):
         log.warning(
             "loss_limits.breached",
-            sleeve=key,
+            account=key,
             trips=trips,
             pnl_today_eur=str(state.pnl_today_eur),
             pnl_week_eur=str(state.pnl_week_eur),
@@ -441,8 +332,11 @@ async def cancel_entries(ctx: TradingContext, reason: str) -> int:
 
 
 async def expected_positions(ctx: TradingContext) -> dict[int, tuple[str, float]]:
-    """conid -> (symbol, open quantity) of the agent book, for reconciliation with IBKR."""
-    loaded = await _load(ctx)
+    """conid -> (symbol, open quantity) of the agent book after a sync with IBKR, for the
+    reconciliation (a fill not yet synced would look like a mismatch)."""
+    if ctx.connected():
+        await sync(ctx)
+    loaded = await load(ctx)
     out: dict[int, tuple[str, float]] = {}
     for b, _ in loaded.brackets:
         inst = loaded.instruments[b.instrument_id]
@@ -456,7 +350,7 @@ async def expected_positions(ctx: TradingContext) -> dict[int, tuple[str, float]
 
 
 async def positions_text(ctx: TradingContext) -> str:
-    loaded = await _load(ctx)
+    loaded = await load(ctx)
     held: list[messages.HeldLine] = []
     pending: list[messages.PendingLine] = []
     for b, _ in loaded.brackets:
@@ -471,7 +365,6 @@ async def positions_text(ctx: TradingContext) -> str:
             continue
         last = loaded.marks.get(b.instrument_id, b.entry_price)
         risk = b.entry - b.initial_stop
-        _, cfg = ctx.sleeve(inst.market)
         held.append(
             messages.HeldLine(
                 symbol=inst.yahoo_symbol,
@@ -482,7 +375,7 @@ async def positions_text(ctx: TradingContext) -> str:
                 last=float(last),
                 r_now=float((last - b.entry_price) / risk) if risk > 0 else 0.0,
                 pnl_eur=float(b.open_qty * (last - b.entry_price) / loaded.rates[inst.currency]),
-                budget_eur=float(cfg.capital.agent_budget_eur),
+                budget_eur=float(ctx.limits.capital.agent_budget_eur),
                 exiting=b.state == "exiting",
             )
         )
@@ -496,41 +389,23 @@ def _change(history: Sequence[tuple[date, Decimal]], before: date, base: Decimal
 
 
 async def pnl_text(ctx: TradingContext) -> str:
-    markets = ctx.risk.markets.paper if ctx.mode == "paper" else ctx.risk.markets.live
+    budget = ctx.limits.capital.agent_budget_eur
     async with ctx.sessions() as s:
-        baseline = await trades_repo.trades(s, "baseline_sim")
-    lines: list[messages.PnlLine] = []
-    for sleeve_markets, cfg in ctx.risk.sleeves(list(markets), ctx.mode):
-        key = ",".join(sleeve_markets)
-        budget = cfg.capital.agent_budget_eur
-        async with ctx.sessions() as s:
-            history = await book_repo.equity_history(s, ctx.book, key)
-        as_of = history[-1][0] if history else None
-        ref = as_of or ctx.clock().date()
-        week_start = ref - timedelta(days=ref.weekday())
-        month_start = ref.replace(day=1)
-        mine = [t for t in baseline if t.market in sleeve_markets and t.exit_date is not None]
-
-        def closed_since(start: date, trades: Sequence[Trade] = mine) -> float:
-            return sum(t.pnl_net_eur or 0.0 for t in trades if t.exit_date and t.exit_date >= start)
-
-        lines.append(
-            messages.PnlLine(
-                sleeve=key,
-                budget_eur=float(budget),
-                as_of=as_of,
-                day=_change(history, ref, budget) if history else 0.0,
-                week=_change(history, week_start, budget) if history else 0.0,
-                month=_change(history, month_start, budget) if history else 0.0,
-                total=float(history[-1][1] - budget) if history else 0.0,
-                baseline=(
-                    closed_since(week_start),
-                    closed_since(month_start),
-                    closed_since(date.min),
-                ),
-            )
-        )
-    return messages.render_pnl(ctx.book, lines)
+        history = await book_repo.equity_history(s, ctx.book, ctx.account)
+    as_of = history[-1][0] if history else None
+    ref = as_of or ctx.clock().date()
+    week_start = ref - timedelta(days=ref.weekday())
+    month_start = ref.replace(day=1)
+    line = messages.PnlLine(
+        account=ctx.account,
+        budget_eur=float(budget),
+        as_of=as_of,
+        day=_change(history, ref, budget) if history else 0.0,
+        week=_change(history, week_start, budget) if history else 0.0,
+        month=_change(history, month_start, budget) if history else 0.0,
+        total=float(history[-1][1] - budget) if history else 0.0,
+    )
+    return messages.render_pnl(ctx.book, line)
 
 
 def commands(ctx: TradingContext) -> dict[str, Command]:
@@ -547,14 +422,14 @@ def commands(ctx: TradingContext) -> dict[str, Command]:
 
     return {
         "positions": Command("open positions and pending entries of the agent book", positions),
-        "pnl": Command("P&L by day, week, month and since start, with the baseline", pnl),
+        "pnl": Command("P&L by day, week, month and since start", pnl),
         "exit": Command("sell SYMBOL's open position at the next open (market order)", exit_),
     }
 
 
 async def manual_exit(ctx: TradingContext, symbol: str) -> str:
     """Your decision after a review alert: a market exit for the open position in `symbol`."""
-    loaded = await _load(ctx)
+    loaded = await load(ctx)
     wanted = symbol.strip().upper()
     for b, _ in loaded.brackets:
         inst = loaded.instruments[b.instrument_id]
@@ -562,6 +437,8 @@ async def manual_exit(ctx: TradingContext, symbol: str) -> str:
             continue
         if b.state != "filled":
             return f"{inst.yahoo_symbol}: an exit is already under way ({b.state})."
+        if not ctx.connected():
+            return f"IBKR not connected: no exit order for {inst.yahoo_symbol}. Try again later."
         await ctx.executor.request_exit(b.id, "manual")
         log.info("exit.manual", symbol=inst.yahoo_symbol, quantity=str(b.open_qty))
         return (

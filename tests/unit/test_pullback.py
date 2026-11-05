@@ -1,13 +1,15 @@
 from datetime import date
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from trading_agent.strategies.pullback import (
     PullbackParams,
     earnings_clear,
-    plan_trade,
+    load_params,
+    rule_detail,
+    rules,
     setup_mask,
 )
 
@@ -66,30 +68,9 @@ def test_earnings_buffer_is_inclusive() -> None:
     assert not earnings_clear(d, end, [end])
 
 
-def _history(lows: list[float]) -> pd.DataFrame:
-    lows_arr = np.array(lows)
-    return pd.DataFrame(
-        {"open": lows_arr + 1, "high": lows_arr + 2, "low": lows_arr, "close": lows_arr + 1},
-        index=pd.bdate_range("2026-01-05", periods=len(lows)),
-    )
-
-
-def test_plan_uses_lower_of_swing_low_and_atr_stop() -> None:
-    # close 101 -> entry 101.202; swing low 98 (confirmed), so stop = min(98 - 1, 101.202 - 4)
-    lows = [100.0] * 5 + [98.0] + [100.0] * 9
-    plan = plan_trade(_history(lows), atr_now=2.0, p=P)
-    assert plan is not None
-    assert plan.entry == pytest.approx(101.202)
-    assert plan.stop == pytest.approx(97.0)
-    assert plan.target == pytest.approx(101.202 + 2 * (101.202 - 97.0))
-
-
-def test_plan_without_swing_low_uses_atr_stop() -> None:
-    plan = plan_trade(_history([100.0] * 15), atr_now=2.0, p=P)
-    assert plan is not None
-    assert plan.stop == pytest.approx(101.202 - 4)
-
-
-def test_plan_rejects_missing_atr_and_negative_stop() -> None:
-    assert plan_trade(_history([100.0] * 15), atr_now=float("nan"), p=P) is None
-    assert plan_trade(_history([1.0] * 15), atr_now=5.0, p=P) is None
+def test_rule_details_and_config_file() -> None:
+    bar = _ind(rsi=61.0)
+    assert list(rules(bar, P).iloc[0][lambda r: ~r].index) == ["rsi"]
+    assert rule_detail("rsi", bar.iloc[0], P) == "RSI 61.0, needs 40-55"
+    root = Path(__file__).resolve().parents[2]
+    assert load_params(root / "config").time_stop_sessions == 15

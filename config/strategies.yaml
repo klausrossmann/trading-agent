@@ -1,4 +1,4 @@
-pullback:                          # IMPLEMENTATION.md 6.2
+pullback:                          # the screen's rules (IMPLEMENTATION.md 6.2) and trade management
   min_price: 5
   min_avg_dollar_volume: 20000000    # 20-day average, in the instrument currency
   avg_volume_sessions: 20
@@ -7,22 +7,21 @@ pullback:                          # IMPLEMENTATION.md 6.2
   ma_band_pct: [0, 3]                # close 0-3 % above EMA20 or SMA50
   rsi_range: [40, 55]
   earnings_buffer_sessions: 3
-  entry_offset_pct: 0.2              # limit = signal close + 0.2 %
-  entry_valid_sessions: 2
-  swing_lookback: 5
-  swing_window: 60
-  stop_swing_atr: 0.5                # stop = min(last swing low - 0.5 ATR, entry - 2 ATR)
-  stop_atr: 2.0
-  target_r: 2.0
-  breakeven_r: 1.0
-  time_stop_sessions: 15
+  entry_valid_sessions: 2            # the buy limit stays open for this many sessions
+  breakeven_r: 1.0                   # stop to the entry price once the high reaches +1R
+  time_stop_sessions: 15             # sell at the next open after this many sessions
   rs_window: 63                      # ranking: 3-month return relative to the benchmark
-  # Optional rules, off (null) in v1; compare with `trading-agent backtest` before switching on.
+  # Optional rules, off (null).
   trail_atr: null                    # e.g. 2.0: after breakeven, stop = highest close - 2 ATR
   regime_sma: null                   # e.g. 200: no new entries while the benchmark is below it
   regime_max_vix: null               # e.g. 30: no new entries while VIX is above it (FRED key)
 
-slippage_pct: 0.05                   # per side (IMPLEMENTATION.md 10.5)
-
-baseline_book:
-  start: 2026-10-05                  # forward book: replays from here every evening
+news:                              # the News agent: buys and exits triggered by news
+  buy_confidence: 0.6                # a buy signal this sure joins the market's next scan
+  exit_confidence: 0.7               # an exit this sure sells the position at the market
+  max_candidates: 3                  # news candidates per scan, after price, liquidity, earnings
+  max_trades_per_day: 1              # news-triggered entries placed per day, both markets
+  signal_hours: 24                   # older buy signals are ignored by the scan
+  lookback_days: 2                   # look-back of each news request
+  max_headlines: 5                   # newest new headlines per stock and run
+  batch: 8                           # stocks per News agent call

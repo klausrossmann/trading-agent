@@ -41,7 +41,7 @@ async def untriaged(session: AsyncSession, instrument_ids: Sequence[int]) -> lis
     stmt = (
         select(NewsRow)
         .where(NewsRow.instrument_id.in_(instrument_ids), NewsRow.relevance.is_(None))
-        .order_by(NewsRow.instrument_id, NewsRow.ts)
+        .order_by(NewsRow.instrument_id, NewsRow.ts, NewsRow.id)
     )
     return [_item(r) for r in await session.scalars(stmt)]
 

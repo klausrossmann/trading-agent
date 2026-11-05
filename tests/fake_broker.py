@@ -1,8 +1,7 @@
-"""Simulator broker (10.5): the OrderBroker interface, filled from daily bars.
+"""A stand-in for IBKR in tests: the OrderBroker interface, filled from daily bars.
 
-Stands in for IBKR while the gateway is disabled, and in tests. Its whole state is the order
-list; `restore` rebuilds it from the stored orders after a restart. Same fill model as the
-backtest: on the entry bar only the stop is checked, and the stop wins an ambiguous bar.
+Conservative where a daily bar is ambiguous: if stop and target are both inside a bar, the
+stop wins; on the entry bar only the stop is checked.
 """
 
 from collections import defaultdict
@@ -10,14 +9,53 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from trading_agent.domain.numbers import to_decimal
 from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, OrderKind, OrderSpec
-from trading_agent.execution import sim
 
 PRICE = Decimal("0.0001")
 ZERO = Decimal(0)
+
+
+@dataclass(frozen=True)
+class Bar:
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+@dataclass(frozen=True)
+class Fill:
+    price: float
+    reason: Literal["stop", "target", "time"]
+
+
+def _slip(price: float, slippage_pct: float, side: Literal["buy", "sell"]) -> float:
+    factor = slippage_pct / 100
+    return price * (1 + factor) if side == "buy" else price * (1 - factor)
+
+
+def fill_entry(bar: Bar, limit: float, slippage_pct: float) -> float | None:
+    """Buy limit: fills at the limit if the low reaches it, at the open if it gaps below."""
+    if bar.low > limit:
+        return None
+    return _slip(min(bar.open, limit), slippage_pct, "buy")
+
+
+def check_exit(bar: Bar, stop: float, target: float | None, slippage_pct: float) -> Fill | None:
+    """Stop (sell stop) and target (sell limit) of a long position on one bar."""
+    if bar.open <= stop:
+        return Fill(_slip(bar.open, slippage_pct, "sell"), "stop")
+    if target is not None and bar.open >= target:
+        return Fill(_slip(bar.open, slippage_pct, "sell"), "target")
+    if bar.low <= stop:
+        return Fill(_slip(stop, slippage_pct, "sell"), "stop")
+    if target is not None and bar.high >= target:
+        return Fill(_slip(target, slippage_pct, "sell"), "target")
+    return None
 
 
 @dataclass
@@ -50,13 +88,21 @@ def _deactivate(orders: Iterable["_Order"]) -> None:
 
 
 class SimBroker:
+    """Stands in for IBKR in tests; the agent itself never uses it."""
+
+    name = "simulator"
+
     def __init__(
         self, slippage_pct: float = 0.05, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     ) -> None:
         self.slippage_pct = slippage_pct
         self.clock = clock
+        self.online = True
         self._orders: dict[str, _Order] = {}
         self._fills: list[BrokerFill] = []
+
+    def connected(self) -> bool:
+        return self.online
 
     def restore(self, orders: Iterable[tuple[OrderSpec, BrokerOrder, datetime]]) -> None:
         for spec, state, placed_at in orders:
@@ -125,7 +171,7 @@ class SimBroker:
         self._fill(exits[kind], qty, price, at)
         _deactivate(exits.values())  # OCA
 
-    def on_bar(self, instrument_id: int, bar: sim.Bar, at: datetime) -> None:
+    def on_bar(self, instrument_id: int, bar: Bar, at: datetime) -> None:
         """The session of `instrument_id` that ended at `at`; orders placed later wait."""
         slip = self.slippage_pct
         brackets: dict[UUID, list[_Order]] = defaultdict(list)
@@ -136,7 +182,7 @@ class SimBroker:
             entry, exits = self._group(orders[0].spec)
             stop, target = exits.get("stop"), exits.get("target")
             if entry is not None and entry.status == "working":
-                price = sim.fill_entry(bar, _float(entry.spec.limit_price), slip)
+                price = fill_entry(bar, _float(entry.spec.limit_price), slip)
                 if price is None:
                     if entry.spec.good_till is not None and at >= entry.spec.good_till:
                         entry.status = "inactive"
@@ -144,7 +190,7 @@ class SimBroker:
                     continue
                 self._fill(entry, entry.spec.quantity - entry.filled, price, at)
                 if stop is not None and stop.status == "working":
-                    hit = sim.check_exit(bar, _float(stop.spec.stop_price), None, slip)
+                    hit = check_exit(bar, _float(stop.spec.stop_price), None, slip)
                     if hit is not None:
                         self._exit(exits, "stop", entry.filled, hit.price, at)
                 continue
@@ -153,10 +199,10 @@ class SimBroker:
             if held <= 0:
                 continue
             if market is not None and market.status == "working":
-                self._exit(exits, "exit", held, sim.open_exit(bar, slip).price, at)
+                self._exit(exits, "exit", held, _slip(bar.open, slip, "sell"), at)
             elif stop is not None and stop.status == "working":
                 live = target if target is not None and target.status == "working" else None
-                hit = sim.check_exit(
+                hit = check_exit(
                     bar,
                     _float(stop.spec.stop_price),
                     _float(live.spec.limit_price) if live else None,

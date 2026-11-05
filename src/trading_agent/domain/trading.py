@@ -1,4 +1,4 @@
-"""Round-trip trades of a book (simulated or real)."""
+"""Round-trip trades of the agent's book."""
 
 from datetime import date
 from typing import Literal
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from trading_agent.domain.market import Market
 from trading_agent.domain.risk import Mode
 
-Book = Literal["baseline_sim", "agent_paper", "agent_shadow", "agent_live", "backtest"]
+Book = Literal["agent_paper", "agent_live"]  # the IBKR paper or live account
 
 
 def book_for_mode(mode: Mode) -> Book:

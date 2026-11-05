@@ -9,7 +9,7 @@ import pytest
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
 
-from trading_agent import jobs
+from trading_agent import jobs, screen
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
@@ -198,6 +198,15 @@ async def test_candidates_skip_blocked_and_blacklisted(
     )
     ctx = jobs.AnalysisContext.build(cfg, sessions, universe)
     ctx.blacklist = frozenset({"CCC"})
-    setups = [("CCC", 3.0), ("BBB", 2.0), ("AAA", 1.0)]
-    monkeypatch.setattr(jobs.backtest, "latest_setups", lambda data, p: setups)
-    assert await jobs.candidates(ctx, "US", 5, now=NOW) == ["AAA"]
+
+    def passed(symbol: str, rs: float) -> screen.ScreenResult:
+        return screen.ScreenResult(ids[symbol], symbol, "US", date(2026, 10, 5), True, "", {}, rs)
+
+    found = [passed("CCC", 3.0), passed("BBB", 2.0), passed("AAA", 1.0)]
+    monkeypatch.setattr(jobs.screen, "check", lambda data, p, market: found)
+    results = await jobs.screen_stocks(ctx, "US", 5, now=NOW)
+    assert [(r.symbol, r.passed, r.reason) for r in results] == [
+        ("CCC", False, "blacklisted in risk.yaml"),
+        ("BBB", False, "data quality: jump"),
+        ("AAA", True, ""),
+    ]

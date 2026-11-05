@@ -38,13 +38,6 @@ def _briefing(**kw: object) -> m.Briefing:
         "markets": [m.MarketLine("SPY", date(2026, 10, 2), 612.4, 0.42, {"daily": "up"})],
         "eur_usd": 1.1355,
         "earnings": [m.EarningsLine("AAPL", date(2026, 10, 7), "amc")],
-        "book": [
-            m.SleeveLine(
-                "US", 1000, 3, 12.3, [m.PositionLine("MSFT", date(2026, 10, 1), 0.6, 5.1)]
-            ),
-            m.SleeveLine("EU", 5000, 0, 0.0),
-        ],
-        "book_start": date(2026, 10, 5),
         "setups": ["NVDA", "SAP.DE"],
         "last_bars": {"US": date(2026, 10, 2), "EU": date(2026, 10, 2)},
         "blocked": [],
@@ -59,20 +52,14 @@ def test_briefing_text() -> None:
         "SPY 612.40 +0.4 % (daily up)",
         "EUR/USD 1.1355",
         "AAPL Wed 7 Oct amc",
-        "US: 1 open, 3 closed, P&L +€12.30 (+1.2 %)",
-        "MSFT since Thu 1 Oct: +0.60 R, +€5.10 (+0.5 %)",
-        "EU: 0 open, 0 closed",
-        "NVDA, SAP.DE",
+        "Screen: setups at the last close:\n  NVDA, SAP.DE",
         "last bars US 02 Oct, EU 02 Oct; quality 0 blocked",
     ):
         assert expected in text
 
 
-def test_briefing_before_book_start_and_without_data() -> None:
-    text = m.render_briefing(
-        _briefing(book=None, earnings=[], setups=[], blocked=None, eur_usd=None)
-    )
-    assert "starts 2026-10-05" in text
+def test_briefing_without_data() -> None:
+    text = m.render_briefing(_briefing(earnings=[], setups=[], blocked=None, eur_usd=None))
     assert "none in the universe" in text
     assert "quality not checked yet" in text
     assert "EUR/USD" not in text
@@ -170,6 +157,18 @@ def test_alerts() -> None:
         "⚠️ Data quality EU: excluded from today's scan: X.DE (stale)"
     )
     assert m.job_alert("ingest_eod_us:2026-10-05", "HTTP 503").endswith("failed: HTTP 503")
+    assert m.not_connected_alert("Orders EU", ["SAP.DE"]) == (
+        "🔌 Orders EU skipped, IBKR not connected: SAP.DE"
+    )
+
+
+def test_pnl_of_the_one_account() -> None:
+    line = m.PnlLine("US,EU", 15000, date(2026, 10, 7), -30, 15, 150, 300)
+    assert m.render_pnl("agent_paper", line).splitlines() == [
+        "💶 P&L agent_paper (equity at the last close)",
+        "US,EU (budget €15,000, Wed 7 Oct): day −€30.00 (−0.2 %) · week +€15.00 (+0.1 %) · "
+        "month +€150.00 (+1.0 %) · since start +€300.00 (+2.0 %)",
+    ]
 
 
 def test_budget_message() -> None:
@@ -236,13 +235,11 @@ def test_render_why_shows_plan_critique_and_label() -> None:
         critic_summary="Weak target.",
         payload={
             "critic": {"objections": [{"severity": "major", "point": "Resistance first."}]},
-            "portfolio_manager": {"note": "Only energy name.", "rationale": "r"},
         },
     )
     text = m.render_why(p, ("disagree", "Extended."))
     assert "Plan: buy limit 100.00, stop 96.00, target 108.00, R:R 2.0 (close / atr_stop_2x" in text
     assert "Critic (major): Weak target.\n  - major: Resistance first." in text
-    assert "Ranking: Only energy name." in text
     assert text.endswith("Your label: disagree (Extended.)")
     passed = _proposal("DDD", "no_trade", payload={"proposer": {"no_trade_reason": "Fading."}})
     assert "passed" in m.render_why(passed).splitlines()[0]

@@ -1,35 +1,25 @@
-"""Agent pipeline (IMPLEMENTATION.md 8): candidates -> modules -> proposer -> critic -> ranking.
-
-Stores one proposal per proposer decision. No orders here: `trading.place` sends the stored
-proposals through the risk engine after the next open.
-"""
+"""Building blocks of the scan stage (the flow itself is in orchestrator.py): the inputs the
+agents get, how their answers become a proposal, the ranking, and each stock's steps."""
 
 import uuid
-from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
-import structlog
-
-from trading_agent import jobs
-from trading_agent.agents.critic import CriticInput, CriticVerdict, PlanView
-from trading_agent.agents.portfolio import Candidate, PortfolioInput, Ranking
+from trading_agent import jobs, screen
+from trading_agent.agents.critic import CriticVerdict, PlanView
 from trading_agent.agents.proposer import Holding, ProposerInput, ProposerOutput
 from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.macro import FRED_SERIES, MacroSnapshot, macro_snapshot
 from trading_agent.db import market as market_repo
-from trading_agent.db import proposals as proposals_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Market
 from trading_agent.domain.proposals import Proposal
+from trading_agent.domain.steps import Step, StepName, StepStatus
 from trading_agent.llm.runner import Outcome
 from trading_agent.modules.technical import TechnicalAssessment
-from trading_agent.notify import messages
-from trading_agent.notify.telegram import Notifier
 from trading_agent.strategies import pullback
-
-log = structlog.get_logger(__name__)
 
 BUY_RATINGS = ("buy", "strong_buy")
 
@@ -73,6 +63,8 @@ def proposer_input(
     tech: TechnicalAssessment,
     held: list[Holding],
     macro: MacroSnapshot | None = None,
+    source: str = pullback.NAME,
+    catalyst: str | None = None,
 ) -> ProposerInput:
     t, e = item.technical_input, item.earnings_input
     unknown = list(t.unknown)
@@ -86,7 +78,7 @@ def proposer_input(
         sector=t.sector,
         as_of=t.as_of,
         close=t.close,
-        candidate_source=pullback.NAME,
+        candidate_source=source,
         atr14=t.indicators.get("atr14"),
         levels=t.levels,
         rules=t.rules,
@@ -97,6 +89,7 @@ def proposer_input(
         holdings=held,
         unknown=sorted(unknown),
         macro=macro,
+        catalyst=catalyst,
     )
 
 
@@ -137,7 +130,7 @@ def build_proposal(
         "yahoo_symbol": inp.symbol,
         "market": inp.market,
         "sector": inp.sector,
-        "strategy": pullback.NAME,
+        "strategy": inp.candidate_source,
         "thesis": out.thesis,
         "invalidation": out.invalidation,
         "payload": {"proposer": out.model_dump(mode="json")},
@@ -176,153 +169,99 @@ def build_proposal(
     )
 
 
-def _fallback_order(items: list[Proposal]) -> list[Proposal]:
-    return sorted(items, key=lambda p: (p.confidence or 0) * (p.risk_reward or 0), reverse=True)
+def score(p: Proposal) -> float:
+    """What the ranking orders by: the chance to reach the target times the reward per risk."""
+    return (p.confidence or 0.0) * (p.risk_reward or 0.0)
 
 
-async def rank(
-    ctx: jobs.AnalysisContext, items: list[Proposal], held: list[Holding]
-) -> tuple[list[Proposal], Outcome[Ranking] | None]:
-    """Ranks `proposed` items; the LLM only runs when there is a choice to make."""
-    survivors = [p for p in items if p.status == "proposed"]
-    others = [p for p in items if p.status != "proposed"]
-    ranked = _fallback_order(survivors)
-    outcome: Outcome[Ranking] | None = None
-    if len(survivors) > 1:
-        inp = PortfolioInput(
-            as_of=max(p.as_of for p in survivors),
-            candidates=[
-                Candidate(
-                    symbol=p.yahoo_symbol,
-                    market=p.market,
-                    sector=p.sector,
-                    confidence=p.confidence or 0.0,
-                    risk_reward=round(p.risk_reward or 0.0, 2),
-                    thesis=p.thesis,
-                    critic_severity=p.critic_severity or "none",
-                    critic_summary=p.critic_summary or "no critique available",
-                )
-                for p in ranked
-            ],
-            holdings=held,
-            free_slots=max(ctx.max_open_positions - len(held), 0),
-            budget_mode=await ctx.runner.mode(),
-        )
-        outcome = await ctx.runner.run(ctx.portfolio, inp, instrument_id=None, as_of=inp.as_of)
-        if outcome.status == "ok" and outcome.output is not None:
-            order = [r.symbol for r in outcome.output.ranking]
-            notes = {r.symbol: r.note for r in outcome.output.ranking}
-            ranked = sorted(ranked, key=lambda p: order.index(p.yahoo_symbol))
-            ranked = [
-                p.model_copy(
-                    update={
-                        "analyses": p.analyses | _ids(outcome),
-                        "payload": p.payload
-                        | {
-                            "portfolio_manager": {
-                                "note": notes[p.yahoo_symbol],
-                                "rationale": outcome.output.rationale,
-                            }
-                        },
-                    }
-                )
-                for p in ranked
-            ]
-    ranked = [p.model_copy(update={"rank": n}) for n, p in enumerate(ranked, start=1)]
-    return ranked + others, outcome
+def rank(items: list[Proposal]) -> list[Proposal]:
+    """`proposed` items numbered by score, best first; the others get no rank."""
+    survivors = sorted((p for p in items if p.status == "proposed"), key=score, reverse=True)
+    ranked = [p.model_copy(update={"rank": n}) for n, p in enumerate(survivors, start=1)]
+    return ranked + [p for p in items if p.status != "proposed"]
 
 
-async def propose(
-    ctx: jobs.AnalysisContext,
-    market: Market | None = None,
-    symbols: list[str] | None = None,
-    today: date | None = None,
-) -> ProposalRun:
-    """Analyse today's candidates, let the agents decide, store the proposals."""
-    today = today or datetime.now(UTC).date()
-    scan = await jobs.analyse(ctx, symbols, market, today=today)
-    held = await holdings(ctx)
-    held_symbols = {h.symbol for h in held}
-    items: list[Proposal] = []
-    skipped: dict[str, str] = {}
-    macros: dict[tuple[Market, date], MacroSnapshot] = {}
-    cost = scan.cost_usd
-    for item in scan.items:
-        tech = item.technical.output
-        if item.symbol in held_symbols:
-            skipped[item.symbol] = "already held"
-            continue
-        if item.technical.status != "ok" or tech is None:
-            skipped[item.symbol] = f"technical {item.technical.status}"
-            continue
-        if tech.rating not in BUY_RATINGS:
-            skipped[item.symbol] = f"technical rating {tech.rating}"
-            continue
-        t_in = item.technical_input
-        key = (t_in.market, t_in.as_of)
-        if key not in macros:
-            macros[key] = await macro_context(ctx, *key)
-        inp = proposer_input(item, tech, held, macros[key])
-        as_of = inp.as_of
-        proposed = await ctx.runner.run(
-            ctx.proposer, inp, instrument_id=item.instrument_id, as_of=as_of, subject=item.symbol
-        )
-        cost += proposed.cost_usd
-        out = proposed.output
-        if proposed.status != "ok" or out is None:
-            skipped[item.symbol] = f"proposer {proposed.status}: {proposed.reason or 'invalid'}"
-            continue
-        critique: Outcome[CriticVerdict] | None = None
-        if out.decision == "propose":
-            critique = await ctx.runner.run(
-                ctx.critic,
-                CriticInput(facts=inp, proposal=plan_view(inp, out)),
-                instrument_id=item.instrument_id,
-                as_of=as_of,
-                subject=item.symbol,
-            )
-            cost += critique.cost_usd
-            if critique.status != "ok":
-                critique = Outcome(
-                    critique.module,
-                    critique.status,
-                    critique.model,
-                    analysis_id=critique.analysis_id,
-                    cost_usd=critique.cost_usd,
-                    reason=critique.reason or "critic answer failed validation",
-                )
-        items.append(build_proposal(item, inp, proposed, out, critique))
-
-    ranked, ranking = await rank(ctx, items, held)
-    if ranking is not None:
-        cost += ranking.cost_usd
-    if ranked:
-        async with ctx.sessions.begin() as s:
-            stored = await proposals_repo.save_proposals(s, ranked)
-        ranked = [p.model_copy(update={"id": i}) for p, i in zip(ranked, stored, strict=True)]
-    log.info(
-        "proposals.done",
-        market=market,
-        candidates=len(scan.items),
-        statuses=dict(Counter(p.status for p in ranked)),
-        skipped=skipped,
-        cost_usd=round(cost, 6),
-    )
-    as_of = max((i.technical_input.as_of for i in scan.items), default=None)
-    return ProposalRun(as_of, ranked, skipped, cost)
+# --- the steps each stock leaves in the step log ---
 
 
-def summary(run: ProposalRun, market: Market | None) -> str:
-    scope = f" {market}" if market else ""
-    as_of = f", as of {messages.day_label(run.as_of)}" if run.as_of else ""
-    return messages.render_proposals(
-        f"Proposals{scope}{as_of}", run.proposals, skipped=len(run.skipped), cost_usd=run.cost_usd
+def screen_step(day: date, r: screen.ScreenResult) -> Step:
+    if not r.passed:
+        summary = r.reason if r.source == pullback.NAME else f"news candidate: {r.reason}"
+    elif r.source == pullback.NAME:
+        summary = f"rank {r.rank} by relative strength"
+    else:
+        summary = f"news candidate {r.rank}: price, liquidity and report date ok"
+    return Step(
+        day=day,
+        market=r.market,
+        instrument_id=r.instrument_id,
+        symbol=r.symbol,
+        step="screen",
+        status="passed" if r.passed else "stopped",
+        summary=summary,
+        input={"as_of": r.as_of.isoformat() if r.as_of else None, **r.values},
+        output={"passed": r.passed, "rank": r.rank, "reason": r.reason, "source": r.source},
     )
 
 
-async def scheduled_scan(
-    ctx: jobs.AnalysisContext, notifier: Notifier, market: Market
-) -> ProposalRun:
-    run = await propose(ctx, market)
-    await notifier.send(summary(run, market))
-    return run
+def agent_step(
+    day: date,
+    item: jobs.SymbolAnalysis,
+    name: StepName,
+    outcome: Outcome[Any],
+    status: StepStatus,
+    summary: str,
+) -> Step:
+    """The agent's input and every attempt are in `analyses` and `llm_calls` (analysis_id)."""
+    return Step(
+        day=day,
+        market=item.technical_input.market,
+        instrument_id=item.instrument_id,
+        symbol=item.symbol,
+        step=name,
+        status=status,
+        summary=summary,
+        output=outcome.output.model_dump(mode="json") if outcome.output is not None else None,
+        error=None if outcome.status == "ok" else f"{outcome.status}: {outcome.reason or ''}",
+        analysis_id=outcome.analysis_id,
+    )
+
+
+def earnings_step(day: date, item: jobs.SymbolAnalysis) -> Step:
+    """Never stops a stock by itself: the proposer must pass on `wait_until_after`."""
+    e = item.earnings
+    if e.status != "ok" or e.output is None:
+        return agent_step(
+            day, item, "earnings", e, "error", f"earnings {e.status}, proposer runs without it"
+        )
+    out = e.output
+    return agent_step(
+        day, item, "earnings", e, "passed", f"{out.stance}, event risk {out.event_risk}"
+    )
+
+
+def critic_step(step: Callable[..., Step], critique: Outcome[CriticVerdict]) -> Step:
+    verdict = critique.output
+    if verdict is None:
+        return step("critic", critique, "error", f"no critique ({critique.reason})")
+    status: StepStatus = "stopped" if verdict.severity == "blocking" else "passed"
+    return step(
+        "critic",
+        critique,
+        status,
+        f"{verdict.severity}, confidence {verdict.confidence_delta:+.2f}: {verdict.summary}",
+    )
+
+
+def rank_step(day: date, p: Proposal) -> Step:
+    confidence, rr = p.confidence or 0.0, p.risk_reward or 0.0
+    return Step(
+        day=day,
+        market=p.market,
+        instrument_id=p.instrument_id,
+        symbol=p.yahoo_symbol,
+        step="rank",
+        status="passed",
+        summary=(f"rank {p.rank}: confidence {confidence:.2f} x R:R {rr:.2f} = {score(p):.2f}"),
+        output={"rank": p.rank, "confidence": confidence, "risk_reward": rr, "score": score(p)},
+    )

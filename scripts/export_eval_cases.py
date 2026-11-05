@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from trading_agent import backtest
+from trading_agent import screen
 from trading_agent.data.universe import load_universe
 from trading_agent.db.session import create_engine, session_factory
 from trading_agent.domain.market import Market
@@ -24,6 +24,7 @@ from trading_agent.modules import earnings, technical
 from trading_agent.modules.history import load_history
 from trading_agent.risk.config import load_risk_config
 from trading_agent.settings import Settings
+from trading_agent.strategies import pullback
 
 OUT = Path(__file__).resolve().parents[1] / "tests" / "evals" / "cases"
 START = date(2022, 1, 1)
@@ -43,7 +44,7 @@ async def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]
     cfg_dir = settings.config_dir
     universe = load_universe(cfg_dir)
-    p = backtest.load_backtest_config(cfg_dir).pullback
+    p = pullback.load_params(cfg_dir)
     per_trade = load_risk_config(cfg_dir).per_trade
     rules = technical.PlanRules(
         min_risk_reward=float(per_trade.min_risk_reward),
@@ -54,17 +55,19 @@ async def main() -> None:
     engine = create_engine(settings.database_url)
     sessions = session_factory(engine)
     try:
-        data = await backtest.load_market_data(sessions, dict(universe.benchmarks), p)
+        data = await screen.load_market_data(sessions, dict(universe.benchmarks), p)
         rng = random.Random(SEED)  # noqa: S311  # reproducible sampling, not security
         setups: dict[Market, list[tuple[int, date]]] = {"US": [], "EU": []}
         downs: dict[Market, list[tuple[int, date]]] = {"US": [], "EU": []}
         for x in data.instruments.values():
             ind = x.ind
+            setup = pullback.setup_mask(ind, p)
             down = (ind["close"] < ind["sma200"]) & (ind["sma50"] < ind["sma200"])
-            for day, row in x.rows.items():
+            for row, ts in enumerate(x.frame.index):
+                day = pd.Timestamp(ts).date()
                 if day < START:
                     continue
-                if bool(x.setup.iloc[row]):
+                if bool(setup.iloc[row]):
                     setups[x.instrument.market].append((x.id, day))
                 elif bool(down.iloc[row]) and day.weekday() == 4:
                     downs[x.instrument.market].append((x.id, day))

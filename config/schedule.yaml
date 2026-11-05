@@ -22,17 +22,12 @@ jobs:
     anchor: close
     offset_minutes: 30
     misfire_grace_minutes: 360
-  baseline_sim:                     # replay the rule-based book once the US bars are in
-    calendar: XNYS
-    anchor: close
-    offset_minutes: 60
-    misfire_grace_minutes: 360
-  evening_digest:                   # replay agent_shadow from the proposals, then the digest (M7)
+  evening_digest:                   # the day's proposals, orders, fills and exits
     calendar: XNYS
     anchor: close
     offset_minutes: 65
     misfire_grace_minutes: 360
-  reconcile:                        # broker positions vs. the book; skipped without IB_ENABLED (M6)
+  reconcile:                        # IBKR positions vs. the book; any difference halts
     calendar: XNYS
     anchor: close
     offset_minutes: 40
@@ -57,7 +52,7 @@ jobs:
     anchor: open
     offset_minutes: 15
     misfire_grace_minutes: 2
-  execution_eu:                     # simulator fills, sync, stops, time stops, agent book (M8)
+  execution_eu:                     # IBKR sync, stops, time stops, agent book
     calendar: XETR
     anchor: close
     offset_minutes: 35
@@ -67,17 +62,19 @@ jobs:
     anchor: close
     offset_minutes: 35
     misfire_grace_minutes: 360
-  monitor:                          # broker sync in sessions; IBKR mode only (M8)
+  monitor:                          # IBKR sync in sessions
     cron: {day_of_week: mon-fri, hour: "9-22", minute: "*/10"}
     misfire_grace_minutes: 5
-  weekly_report:                    # KPIs vs. baselines, costs, calibration, go-live gate (M9)
-    cron: {day_of_week: sat, hour: 10, minute: 0}
-    misfire_grace_minutes: 720
-  ingest_news:                      # Finnhub headlines for held positions, triaged (M9)
+  news_positions:                   # held stocks' news -> News agent -> exit at the market
     cron: {day_of_week: mon-fri, hour: "7-22", minute: "0,30"}
     misfire_grace_minutes: 20
-  reevaluate_positions:             # positions with important news or a report soon (M9)
+  news_eu:                          # EU stocks' news -> buy signals for the EU scan
+    calendar: XETR
+    anchor: open
+    offset_minutes: -75
+    misfire_grace_minutes: 25
+  news_us:
     calendar: XNYS
-    anchor: close
-    offset_minutes: -60
-    misfire_grace_minutes: 30
+    anchor: open
+    offset_minutes: -75
+    misfire_grace_minutes: 25

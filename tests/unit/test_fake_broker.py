@@ -5,12 +5,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from fake_broker import Bar, SimBroker
 
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.orders import Bracket, BracketRequest, BrokerOrder, order_ref
 from trading_agent.execution.orders import bracket_specs, exit_spec
-from trading_agent.execution.sim import Bar
-from trading_agent.execution.sim_broker import SimBroker
 
 D = Decimal
 AAPL = Instrument(
@@ -45,7 +44,9 @@ def request(**kw: object) -> BracketRequest:
 def test_bracket_specs() -> None:
     req = request()
     entry, target, stop = bracket_specs(req)
-    assert entry.order_ref == order_ref(req.id, "entry") == f"{req.id}:entry"
+    assert (
+        entry.order_ref == order_ref(req.id, "entry", "AAPL") == f"TA-AAPL-entry-{req.id.hex[:8]}"
+    )
     assert (entry.action, entry.order_type, entry.limit_price, entry.tif, entry.good_till) == (
         "BUY",
         "LMT",
@@ -107,7 +108,7 @@ async def placed(req: BracketRequest, broker: SimBroker | None = None) -> SimBro
 
 async def status(broker: SimBroker) -> dict[str, tuple[str, Decimal, Decimal | None]]:
     return {
-        o.order_ref.split(":")[1]: (o.status, o.filled, o.avg_fill_price)
+        o.order_ref.split("-")[2]: (o.status, o.filled, o.avg_fill_price)
         for o in await broker.orders()
     }
 
@@ -131,7 +132,7 @@ async def test_entry_then_target() -> None:
     assert s["target"] == ("filled", 3, D("107.946"))
     assert s["stop"][0] == "inactive"
     fills = await broker.fills()
-    assert [(f.order_ref.split(":")[1], f.quantity, f.ts) for f in fills] == [
+    assert [(f.order_ref.split("-")[2], f.quantity, f.ts) for f in fills] == [
         ("entry", 3, DAY1),
         ("target", 3, DAY2),
     ]
@@ -262,7 +263,7 @@ async def test_quiet_bars_and_missing_children() -> None:
     lone = request()  # an entry without children
     await broker.place(bracket_specs(lone)[:1])
     broker.on_bar(7, Bar(101, 102, 95, 97), DAY3 + timedelta(days=1))
-    assert len([f for f in await broker.fills() if f.order_ref.startswith(str(lone.id))]) == 1
+    assert len([f for f in await broker.fills() if f.order_ref.endswith(lone.id.hex[:8])]) == 1
 
 
 async def test_a_stop_order_needs_its_price() -> None:

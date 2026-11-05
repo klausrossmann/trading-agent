@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from trading_agent.agents import critic, portfolio, proposer
+from trading_agent.agents import critic, proposer
 from trading_agent.agents.critic import (
     CriticAgent,
     CriticInput,
@@ -12,13 +12,6 @@ from trading_agent.agents.critic import (
     Objection,
     PlanView,
     max_severity,
-)
-from trading_agent.agents.portfolio import (
-    Candidate,
-    PortfolioInput,
-    PortfolioManagerAgent,
-    Ranking,
-    ranking_type,
 )
 from trading_agent.agents.proposer import (
     FABRICATION_CAP,
@@ -112,7 +105,7 @@ def agent() -> ProposerAgent:
 def test_prompts_load() -> None:
     prompts = ROOT / "prompts"
     assert load_prompt(prompts, critic.NAME, critic.PROMPT_VERSION).role == "critic"
-    assert load_prompt(prompts, portfolio.NAME, portfolio.PROMPT_VERSION).role == "proposer"
+    assert load_prompt(prompts, proposer.NAME, proposer.PROMPT_VERSION).role == "proposer"
 
 
 def test_valid_proposal_passes(agent: ProposerAgent) -> None:
@@ -192,42 +185,3 @@ def test_critic_severity_must_match_objections() -> None:
     assert max_severity([]) == "none"
     with pytest.raises(ValidationError):
         CriticVerdict(objections=[], severity="none", confidence_delta=0.3, summary="s")
-
-
-def test_portfolio_ranking_covers_every_candidate_once() -> None:
-    agent = PortfolioManagerAgent(
-        load_prompt(ROOT / "prompts", portfolio.NAME, portfolio.PROMPT_VERSION)
-    )
-    candidates = [
-        Candidate(
-            symbol=s,
-            market="US",
-            sector=None,
-            confidence=0.4,
-            risk_reward=2.0,
-            thesis="t",
-            critic_severity="none",
-            critic_summary="ok",
-        )
-        for s in ("AAA", "CCC")
-    ]
-    inp = PortfolioInput(
-        as_of=date(2026, 10, 2),
-        candidates=candidates,
-        holdings=[],
-        free_slots=4,
-        budget_mode="normal",
-    )
-    out_type = agent.output_type(inp)
-    assert out_type is ranking_type(("AAA", "CCC"))
-    with pytest.raises(ValidationError):
-        out_type.model_validate({"ranking": [{"symbol": "ZZZ", "note": "n"}], "rationale": "r"})
-    bad = Ranking.model_validate(
-        {"ranking": [{"symbol": "AAA", "note": "n"}] * 2, "rationale": "r"}
-    )
-    (issue,) = agent.validate(inp, bad)
-    assert issue.message.endswith("missing: CCC, repeated: AAA")
-    good = Ranking.model_validate(
-        {"ranking": [{"symbol": s, "note": "n"} for s in ("CCC", "AAA")], "rationale": "r"}
-    )
-    assert agent.validate(inp, good) == []

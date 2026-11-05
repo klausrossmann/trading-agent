@@ -46,7 +46,6 @@ def test_repo_schedule_config_loads() -> None:
     assert 1 <= schedule.heartbeat.interval_minutes <= 60
 
 
-def test_ibkr_orders_need_the_gateway() -> None:
-    with pytest.raises(ValidationError, match="IB_ORDERS_ENABLED=true needs IB_ENABLED=true"):
-        Settings(db_password=SecretStr("x"), ib_orders_enabled=True)
-    assert Settings(db_password=SecretStr("x"), ib_enabled=True, ib_orders_enabled=True)
+def test_ibkr_connection_defaults() -> None:
+    s = Settings(db_password=SecretStr("x"))
+    assert (s.ib_host, s.ib_port, s.ib_client_id) == ("ib-gateway", 4004, 11)

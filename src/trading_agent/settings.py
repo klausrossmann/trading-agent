@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_owner_chat_id: int | None = None  # unset: every chat is ignored and logged (setup)
     gemini_api_key: SecretStr | None = None
-    finnhub_api_key: SecretStr | None = None  # company news for position re-evaluation (M9)
+    finnhub_api_key: SecretStr | None = None  # company news for US stocks (EU: Yahoo, no key)
     llm_dev_overrides: bool = False  # config/models.yaml dev_overrides (Phase 0-1)
     llm_fake: bool = False  # offline stand-in for every model (llm/fake.py, compose.dev.yaml)
 
@@ -49,19 +49,10 @@ class Settings(BaseSettings):
     db_user: str = "agent"
     db_password: SecretStr
 
-    # IB Gateway (M6). Off until the paper login exists and the gateway runs.
-    ib_enabled: bool = False
+    # IB Gateway: every order goes to IBKR; without a connection nothing is placed.
     ib_host: str = "ib-gateway"
     ib_port: int = 4004  # gnzsnz socat port: 4004 paper, 4003 live
     ib_client_id: int = 11
-    # Orders through IBKR (M8 step 5, READ_ONLY_API=no); otherwise the simulator broker.
-    ib_orders_enabled: bool = False
-
-    @model_validator(mode="after")
-    def _orders_need_the_gateway(self) -> "Settings":
-        if self.ib_orders_enabled and not self.ib_enabled:
-            raise ValueError("IB_ORDERS_ENABLED=true needs IB_ENABLED=true")
-        return self
 
     @property
     def database_url(self) -> URL:
@@ -113,7 +104,7 @@ class PricesConfig(BaseModel):
     backfill_years: int = Field(ge=1, le=20)
     overlap_sessions: int = Field(ge=1, le=30)
     restatement_tolerance_pct: float = Field(gt=0)
-    # ibkr only takes effect with IB_ENABLED=true and a connected gateway; else Yahoo.
+    # ibkr only takes effect while the gateway is connected; else Yahoo.
     sources: dict[Market, Literal["yahoo", "ibkr"]] = Field(
         default_factory=lambda: {"US": "yahoo", "EU": "yahoo"}
     )

@@ -1,10 +1,8 @@
 # Hard limits (CONCEPT.md 6.1). Changes need explicit sign-off (IMPLEMENTATION.md 16.1).
 capital:
-  agent_budget_eur: 1000           # hard cap, also in paper (ignores the paper account's simulated balance)
+  agent_budget_eur: 1000           # hard cap in live mode (ignores the account's real balance)
   min_cash_reserve_pct: 10
-  paper_budget_eur:                # paper only: separate notional sleeve per market (IMPLEMENTATION.md 19.1)
-    US: 10000                      # budgets must differ: markets with the same budget share one account
-    EU: 15000                      # Xetra minimum fees weigh more on small positions
+  paper_budget_eur: 15000          # paper only: one notional budget for US and EU together
 
 per_trade:
   # Fractional shares: size grows linearly with the agents' confidence (proposer, adjusted by the

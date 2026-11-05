@@ -3,6 +3,8 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from fake_broker import Bar as SimBar
+from fake_broker import SimBroker
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,15 +16,18 @@ from trading_agent.data.universe import Universe
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as repo
 from trading_agent.db import proposals as proposals_repo
-from trading_agent.db import reports as reports_repo
+from trading_agent.db import steps as steps_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.db.analyses import DbAnalysisStore
 from trading_agent.db.controls import save_kill_switch
 from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
 from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
+from trading_agent.domain.orders import BracketRequest
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.risk import Check, KillSwitch, RiskDecision
+from trading_agent.domain.steps import Step
 from trading_agent.domain.trading import Trade
+from trading_agent.executor import Executor
 from trading_agent.settings import Settings
 
 pytestmark = pytest.mark.db
@@ -83,7 +88,7 @@ async def _seed(sessions: Sessions) -> dict[str, int]:
             fetched_at=NOW,
         )
         trade = Trade(
-            book="baseline_sim",
+            book="agent_paper",
             strategy="pullback_uptrend",
             instrument_id=ids["AAA"],
             yahoo_symbol="AAA",
@@ -111,7 +116,7 @@ async def _seed(sessions: Sessions) -> dict[str, int]:
                 "holding_sessions": 1,
             }
         )
-        await trades_repo.replace_book(s, "baseline_sim", [trade, closed])
+        await trades_repo.replace_book(s, "agent_paper", [trade, closed])
         proposal = Proposal(
             id=uuid4(),
             source="agent",
@@ -163,46 +168,101 @@ async def _seed(sessions: Sessions) -> dict[str, int]:
 
 async def test_dashboard_queries(sessions: Sessions, settings: Settings) -> None:
     ids = await _seed(sessions)
+    async with sessions() as s:
+        (proposal,) = await proposals_repo.proposals(s)
+    hit = await DbAnalysisStore(sessions).cached("h1")
+    assert hit is not None
+    clock = lambda: datetime(2026, 10, 7, 14, 0, tzinfo=UTC)  # noqa: E731
+    broker = SimBroker(clock=clock)
+    ex = Executor(sessions, broker, "agent_paper", clock)
+    inst = _inst("AAA").model_copy(update={"id": ids["AAA"]})
+    request = BracketRequest(
+        id=proposal.id,
+        instrument=inst,
+        quantity=Decimal(3),
+        entry=Decimal(100),
+        stop=Decimal(96),
+        target=Decimal(108),
+        expires=datetime(2026, 10, 8, 20, 0, tzinfo=UTC),
+    )
+    await ex.submit(request, RiskDecision(approved=True, checks=(), quantity=Decimal(3)))
+    broker.on_bar(ids["AAA"], SimBar(101, 102, 99, 101), datetime(2026, 10, 7, 20, 0, tzinfo=UTC))
+    clock = lambda: datetime(2026, 10, 7, 20, 35, tzinfo=UTC)  # noqa: E731
+    ex.clock = clock
+    await ex.sync()
+    async with sessions.begin() as s:
+        await steps_repo.add_steps(
+            s,
+            [
+                Step(
+                    day=date(2026, 10, 7),
+                    market="US",
+                    instrument_id=ids["AAA"],
+                    symbol="AAA",
+                    step="technical",
+                    status="passed",
+                    summary="rating buy",
+                    analysis_id=hit.id,
+                    proposal_id=proposal.id,
+                )
+            ],
+        )
     engine = queries.read_only_engine(settings.database_url)
     try:
         async with AsyncSession(engine) as s:
             trades = await queries.trades(s)
-            closes = await queries.open_trade_closes(s)
             rate = await queries.usd_per_eur(s)
             status = await queries.data_status(s)
-            analyses = await queries.analyses(s)
             costs = await queries.llm_costs(s)
-            proposals = await queries.proposals(s)
+            days = await queries.step_days(s)
+            on_day = await queries.steps(s, day=date(2026, 10, 7))
+            of_trade = await queries.steps(s, proposal_id=proposal.id)
+            analysis = await queries.analysis(s, hit.id)
+            missing = await queries.analysis(s, -1)
+            positions = await queries.positions(s)
+            sold = await queries.sold(s)
     finally:
         await engine.dispose()
-
-    (p,) = proposals.to_dict("records")
-    assert (p["symbol"], p["status"], p["label"], p["reason"]) == (
-        "AAA",
-        "proposed",
-        "agree",
-        "clean",
-    )
-    assert p["risk_reward"] == pytest.approx(2.0)
 
     assert [(t.yahoo_symbol, t.exit_date) for t in trades] == [
         ("AAA", None),
         ("BBB", date(2026, 10, 7)),
     ]
     assert trades[1].pnl_net_eur == pytest.approx(22.5)
-    assert closes == {ids["AAA"]: (date(2026, 10, 7), 107.0)}
     assert rate == pytest.approx(1.17)
     assert status.values.tolist() == [
         ["Bars EU", date(2026, 10, 6), "1 symbols, 0 behind"],
         ["Bars US", date(2026, 10, 7), "2 symbols, 1 behind"],
         ["EUR/USD", date(2026, 10, 7), "ECB"],
     ]
-    (row,) = analyses.to_dict("records")
-    assert (row["symbol"], row["verdict"], row["score"], row["status"]) == ("AAA", "buy", 0.7, "ok")
-    assert row["issues"][0]["code"] == "ungrounded_number"
     (call,) = costs.to_dict("records")
     assert (call["role"], call["calls"], call["errors"]) == ("analysis", 1, 0)
     assert call["cost_usd"] == pytest.approx(0.002)
+
+    assert days == [date(2026, 10, 7)]
+    assert list(on_day["step"]) == ["order", "broker", "fill", "technical"]
+    assert list(of_trade["symbol"].unique()) == ["AAA"]
+    assert len(of_trade) == len(on_day)
+    assert analysis is not None
+    assert (analysis["module"], analysis["input"], analysis["issues"][0]["code"]) == (
+        "technical",
+        {"close": 106},
+        "ungrounded_number",
+    )
+    assert missing is None
+
+    (held,) = positions.to_dict("records")
+    assert (held["symbol"], held["state"], held["open_qty"], held["entry_price"]) == (
+        "AAA",
+        "filled",
+        3.0,
+        pytest.approx(100.05),
+    )
+    assert held["id"] == str(proposal.id)
+    assert held["entered"] == datetime(2026, 10, 7, 20, 0, tzinfo=UTC)
+    assert (held["last_date"], held["last_close"]) == (date(2026, 10, 7), 107.0)
+    (row,) = sold.to_dict("records")
+    assert (row["symbol"], row["exit_reason"], row["id"]) == ("BBB", "target", None)
 
 
 async def test_dashboard_connection_is_read_only(sessions: Sessions, settings: Settings) -> None:
@@ -251,7 +311,6 @@ async def test_risk_and_report_queries(sessions: Sessions, settings: Settings) -
             invested_eur=Decimal("290.5"),
         )
         await save_kill_switch(s, KillSwitch(state="halted", reason="/stop", since=NOW), "test")
-        await reports_repo.save_report(s, "weekly", date(2026, 10, 10), "# Weekly")
     engine = queries.read_only_engine(settings.database_url)
     try:
         async with AsyncSession(engine) as s:
@@ -260,7 +319,6 @@ async def test_risk_and_report_queries(sessions: Sessions, settings: Settings) -
             brackets = await queries.open_brackets(s)
             closes = await queries.closes(s, [ids["AAA"], ids["BBB"]], date(2026, 10, 1))
             rejected = await queries.rejections(s, date(2026, 10, 1))
-            stored = await queries.reports(s)
     finally:
         await engine.dispose()
     assert equity.values.tolist() == [["agent_paper", "US", date(2026, 10, 7), 990.5]]
@@ -269,4 +327,3 @@ async def test_risk_and_report_queries(sessions: Sessions, settings: Settings) -
     assert list(closes.columns) == [ids["AAA"], ids["BBB"]]
     assert len(closes) == 3
     assert rejected.values.tolist() == [[date(2026, 10, 6), "AAA", "portfolio", "4 open"]]
-    assert stored == [(date(2026, 10, 10), "# Weekly")]

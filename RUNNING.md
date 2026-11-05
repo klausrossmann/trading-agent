@@ -29,16 +29,15 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 | The dashboard | `https://klaus-ux301laa.<your-tailnet>.ts.net`, with Tailscale on (finding the exact address: section 2) |
 | Is everything running? | Telegram `/status` |
 | What happens next, and when? | Telegram `/status` → Next jobs; the daily schedule in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4 |
-| What did the agent propose today? | Telegram 🧠 messages, `/proposals`; dashboard → **Proposals** |
-| Why did it propose (or skip) a stock? | Telegram `/why SYMBOL`; dashboard → **Proposals** (details) and **Analyses** (every AI answer in full) |
-| Exactly what the AI was asked and answered, step by step | Dashboard → **Analyses** → Details → LLM calls (kept for good); **Open trace** there, under Proposals or in `/why` shows the whole run in Langfuse (cloud.langfuse.com → project `trading-agent` → Tracing, last 30 days; [OBSERVABILITY.md](OBSERVABILITY.md)) |
-| What was ordered, and what was rejected? | Telegram 📤 messages; dashboard → **Risk** → Rejections |
-| What does it hold, and how is it doing? | Telegram `/positions`, `/pnl`; dashboard → **Positions**, **Overview** |
-| Closed trades | Dashboard → **Journal** |
-| Is the AI any good? Is it ready for real money? | Dashboard → **Evaluation**; the Saturday report (Telegram, dashboard → **Reports**) |
+| What did the agent propose today? | Telegram 🧠 messages, `/proposals`; dashboard → **Day** |
+| Why did it propose (or skip) a stock? | Telegram `/why SYMBOL`; dashboard → **Day** → pick the stock: every step with its reason |
+| Exactly what the AI was asked and answered, step by step | Dashboard → **Day** → pick the stock → open an agent step: its input, output and every attempt with prompts and answers (kept for good); **Open trace** there or in `/why` shows the whole run in Langfuse (cloud.langfuse.com → project `trading-agent` → Tracing, last 30 days; [OBSERVABILITY.md](OBSERVABILITY.md)) |
+| What was ordered, and what was rejected? | Telegram 📤 messages; dashboard → **Day** (risk, order and fill columns, with IBKR's answer and error) and **Risk** → Rejections |
+| What does it hold, and how is it doing? | Telegram `/positions`, `/pnl`; dashboard → **Portfolio** |
+| What was sold, when and why | Dashboard → **Portfolio** → Sold |
 | AI and broker costs | Telegram `/budget`; dashboard → **Costs** |
 | Limits used, kill switch | Telegram `/status`; dashboard → **Risk** |
-| Are the prices up to date? | Telegram `/status` → Data; dashboard → **Overview** → Data |
+| Are the prices up to date? | Telegram `/status` → Data; dashboard → **Day** → Data freshness |
 | Something went wrong | Telegram ⚠️ and 🔌 messages; the log (section 4) |
 | The machine itself is down | E-mail from healthchecks.io; its website shows when the last heartbeat arrived (section 3.1) |
 | The IB Gateway's login screen | Remmina on the Zenbook desktop (8.3) |
@@ -66,19 +65,14 @@ Bookmark it on the phone. If `tailscale serve status` prints nothing, the dashbo
 
 | Page | Shows | At the start (no trades yet) |
 |---|---|---|
-| **Overview** | Open positions, closed trades, unrealized P&L, AI spend this month; results per book (`agent_paper`, `agent_shadow`, `baseline_sim`); **Data**: the latest date of every dataset | 0 / 0 / 0.00 €; "No trades yet"; Data: EU prices from today (after 18:00), US prices from the last US close (after 22:30) |
-| **Positions** | Open positions with entry, stop, target, last close, R now, P&L in EUR | "No open positions." |
-| **Journal** | Closed trades of all books, with filters for book, market and symbol | "No closed trades yet." |
-| **Proposals** | Every proposal: status (`proposed`, `blocked`, `no_trade`), rank, plan, confidence, your label. **Details**: thesis, invalidation, the critic's objections, the portfolio manager's note | Empty until the first scan (08:15) |
-| **Analyses** | Every AI answer: role, stock, status, model, cost; **Details**: the full answer, any check that failed, every attempt (LLM calls) with its prompts and answers, and **Open trace** | Empty until the first scan |
-| **Costs** | AI spend per month, role and model, and per day; broker fees per book | Empty until the first AI call |
-| **Risk** | Kill switch; per sleeve how much of each limit is used (drawdown, day and week loss, positions, sector); correlation of the holdings; the risk engine's rejections of the last 30 days by check | Kill switch `active`; limits after the first end of day; "None." under rejections |
-| **Evaluation** | The go-live gate (days, trades, result after costs, better than the rule-based book), calibration of the AI's confidence, how often your labels were right | Every criterion not met yet |
-| **Reports** | The weekly reports | Empty until the first Saturday |
+| **Day** | Pick a day and a market. **Stocks past each phase**: how many stocks remain after the screen, technical analyst, earnings analyst, proposer, critic, ranking, risk engine, IBKR order and fill. **Stocks**: one row per stock, one column per phase, each with ✓ passed, ✗ stopped (and why), ⚠ error; the first column, **news**, shows the News agent's buy signals and its verdicts on held stocks (hold or exit, with the confidence); filter e.g. "stopped at critic" or "bought". **What happened to**: pick a stock to see every step with its time, input and output: the screen's indicator values, each agent's input, answer and attempts (prompts and replies), the risk engine's 9 checks, the orders as sent to IBKR with IBKR's reply, order reference and any error, fills, stop moves and the sale. "Follow this trade over every day" adds the later days. **Data freshness**: the latest date of every dataset | "Nothing recorded" until the first scan (08:15) |
+| **Portfolio** | **Held at IBKR**: quantity, entry, current stop (and whether it moved), target, last close, R now, P&L in EUR, day bought, sessions held, time-stop day. **Buy orders waiting**. **Sold**: when, why in words (target, stop, stop after it was raised, time stop, `/exit`), result in EUR and R, fees. **Results** and the realized P&L curve. **A trade, step by step**: the whole timeline of any trade | "No open positions.", "Nothing sold yet." |
+| **Costs** | AI spend per month, role and model, and per day; broker fees | Empty until the first AI call |
+| **Risk** | Kill switch; how much of each limit the account (US and EU, one budget) uses (drawdown, day and week loss, positions, sector); correlation of the holdings; the risk engine's rejections of the last 30 days by check | Kill switch `active`; limits after the first end of day; "None." under rejections |
 
-**How it fills:** the scans (08:15, 14:45) fill Proposals, Analyses and Costs; the placements (09:15, 15:45) fill Risk → Rejections; a filled buy appears in Positions; the first sale fills Journal, the Books table and Evaluation; Saturday brings the first report.
+**How it fills:** the scans (08:15, 14:45) fill Day and Costs; the placements (09:15, 15:45) add the risk and order steps; IBKR's fills, stop moves and sales follow during the day and in the evening, and appear in Portfolio.
 
-**Daily one-minute check:** Overview → Data (are the dates current?) and Risk (kill switch `active`, rejections plausible). If both look right, the rest works too.
+**Daily one-minute check:** Day → Data freshness (are the dates current?), the order column (any ⚠?) and Risk (kill switch `active`). If these look right, the rest works too.
 
 ---
 
@@ -89,14 +83,14 @@ The bot answers only your chat. It sends these messages by itself:
 | Icon | When (Berlin time) | What |
 |---|---|---|
 | 🧠 | 08:15 EU, 14:45 US | Scan result: ranked proposals, blocked ones, passes, AI cost |
-| 📰 | 08:30 | Morning briefing: markets, EUR/USD, earnings ahead, the rule-based book, data status |
-| 📤 | 09:15 EU, 15:45 US | Placement: orders sent (simulator or IBKR) and rejections with the reason |
-| 🟢 🔴 ⌛ | After each close | Bought, sold (target, stop, time, `/exit`), entry expired |
-| 🧐 | 21:00, if needed | Position review: the AI thinks the reason for a trade is gone; suggests `/exit SYMBOL` |
+| 📰 | 08:30; 07:45 EU, 14:15 US; every 30 min | Morning briefing; a buy signal from the news (the stock joins the next scan); important news on a held stock |
+| 📤 | 09:15 EU, 15:45 US | Placement: orders sent to IBKR and rejections with the reason |
+| 🟢 🔴 ⌛ | When IBKR reports it (checked every 10 min in sessions) | Bought, sold (target, stop, time, news, `/exit`), entry expired or rejected |
+| 🚪 | Every 30 min, if needed | News exit: the News agent is at least 0.7 sure the reason for a trade is gone; a market sell went to IBKR |
+| 🧐 | Every 30 min, if needed | The same, but less sure: no sale, `/exit SYMBOL` is your call |
 | 🌙 | 23:05 | Evening digest: proposals, orders, fills, labels to do, AI spend |
-| 📈 | Saturday 10:00 | Weekly report with the go-live gate |
 | ⏸ ⛔ ▶️ | Any time | Kill switch paused, halted, active again |
-| ⚠️ 🔌 | Any time | A job failed or was missed, data problem, reconciliation mismatch; gateway down for 10 minutes |
+| ⚠️ 🔌 | Any time | A job failed or was missed, data problem, reconciliation mismatch; gateway down for 10 minutes; orders or end-of-day work skipped because IBKR wasn't connected |
 
 | Command | What it does |
 |---|---|
@@ -178,7 +172,9 @@ docker compose exec db psql -U dashboard -d trading -c \
 
 ## 5. Starting and stopping
 
-The app starts by itself after a reboot or a crash. Start it by hand after `make down` or an update:
+After a reboot only `db` and `dashboard` start by themselves. The agent and the IB Gateway never start on their own, not after a reboot and not after a crash: start them by hand. Orders already at IBKR (stops, targets) stay active there while the agent is down, but nothing watches them.
+
+Start:
 
 | Step | Command | What it does | Expect |
 |---|---|---|---|
@@ -211,10 +207,10 @@ Run these once, in this order, and again when you suspect a problem in that area
 | 9 | Kill switch | See below | `Kill switch: active` at the end | You can stop it from the phone; only you can restart it | ☐ |
 | 10 | Backups | See below | `backup ok`; row counts twice | Backups are written, readable and decryptable | ☐ |
 | 11 | Gateway overnight | Next morning: `docker compose logs --since 12h ib-gateway \| grep -v "Connection refused" \| tail -50` | The 23:45 restart and a new login without you | The gateway runs unattended | ☐ |
-| 12 | A trading day | Watch Telegram (section 3) for two trading days | 🧠 📰 📤 🌙 at their times; 🟢 🔴 ⌛ when something fills. "No trades" is a valid day. | The whole chain runs by itself | ☐ |
-| 13 | IBKR orders | After a few stable days, with `/positions` empty: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17 | Orders at IBKR; the three chaos tests pass | No order is lost, duplicated or left without a stop | ☐ |
-| 14 | Paper phase | 3 months of daily routine | The Saturday report shows the go-live gate met | Ready for the go-live checklist ([IMPLEMENTATION.md](IMPLEMENTATION.md) section 18) | ☐ |
-| 15 | AI tracing | After setup step "Tracing" (9.3): `/status`; `docker compose run --rm agent trading-agent analyse --top 1`, then Langfuse → Tracing → Traces; dashboard → Analyses → Details → Open trace | `LLM tracing: on (cloud.langfuse.com, paper)`; a `cli analyse` trace (environment `paper`) with one step per AI answer; the dashboard shows the LLM calls with their messages and the link opens the trace | Every AI call is recorded and can be followed step by step | ☐ |
+| 12 | A trading day | Watch Telegram (section 3) for two trading days | 🧠 📰 📤 🌙 at their times; 🟢 🔴 ⌛ when something fills; every order with its `TA-SYMBOL-kind-…` reference in TWS or Client Portal. "No trades" is a valid day. | The whole chain runs by itself, at IBKR | ☐ |
+| 13 | Chaos tests | With `/positions` empty: [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.5 step 17 | The three chaos tests pass | No order is lost, duplicated or left without a stop | ☐ |
+| 14 | Paper phase | 3 months of daily routine | Results you trust in the dashboard | Ready for the go-live checklist ([IMPLEMENTATION.md](IMPLEMENTATION.md) section 18) | ☐ |
+| 15 | AI tracing | After setup step "Tracing" (9.3): `/status`; `docker compose run --rm agent trading-agent propose AAPL`, then Langfuse → Tracing → Traces; dashboard → Day → AAPL → technical step → Open trace | `LLM tracing: on (cloud.langfuse.com, paper)`; a `cli propose` trace (environment `paper`) with one step per AI answer; the dashboard shows the LLM calls with their messages and the link opens the trace | Every AI call is recorded and can be followed step by step | ☐ |
 
 **Test 9, kill switch** (not at 09:15 or 15:45):
 
@@ -342,14 +338,12 @@ Done on this Zenbook, except backups (9.4). For a new machine (e.g. the mini PC)
 | `TELEGRAM_BOT_TOKEN` | From `@BotFather` → `/newbot` |
 | `GEMINI_API_KEY` | aistudio.google.com → Get API key |
 | `LLM_DEV_OVERRIDES` | `true` (the critic runs on Gemini until an Anthropic key exists) |
-| `FRED_API_KEY`, `FINNHUB_API_KEY` | Free keys from fred.stlouisfed.org and finnhub.io: macro data, news on held stocks |
+| `FRED_API_KEY`, `FINNHUB_API_KEY` | Free keys from fred.stlouisfed.org and finnhub.io: macro data, news on US stocks (EU news comes from Yahoo, no key) |
 | `HEARTBEAT_URL` | The ping URL of a healthchecks.io check (period 5 minutes, grace 15) |
 | `TWS_USERID` | Your normal IBKR username (the gateway uses paper mode) |
-| `COMPOSE_PROFILES` | `ibkr` |
-| `IB_ENABLED` | `true` |
-| `IB_ORDERS_ENABLED` | `false` (simulator) until test 13 |
-| `IB_READ_ONLY_API` | `yes` until test 13 |
 | `TRACE_UI_URL` | `https://cloud.langfuse.com/project/<id>`: open the project in Langfuse and copy the address up to the project id |
+
+There is no switch for the broker: every order goes to the IBKR account the gateway is logged in to. While the gateway isn't connected, nothing is placed; the dashboard's step log and a 🔌 Telegram message say so.
 
 ### 9.4 Backups
 

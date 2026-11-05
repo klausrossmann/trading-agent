@@ -13,13 +13,15 @@ from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import AnalysisModule, LlmRunner
 from trading_agent.llm.store import MemoryStore
 from trading_agent.modules.earnings import EarningsInput, EarningsModule
+from trading_agent.modules.news import NewsAgent, NewsInput
 from trading_agent.modules.technical import TechnicalInput, TechnicalModule
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = sorted((ROOT / "tests" / "evals" / "cases").glob("*/*.json"))
-INPUTS: dict[str, type[TechnicalInput] | type[EarningsInput]] = {
+INPUTS: dict[str, type[TechnicalInput] | type[EarningsInput] | type[NewsInput]] = {
     "technical": TechnicalInput,
     "earnings": EarningsInput,
+    "news": NewsInput,
 }
 
 
@@ -49,6 +51,10 @@ def _summary(output: BaseModel | None) -> str:
     if "rating" in data:
         refs = "/".join(str(data[k]) for k in ("entry_ref", "stop_ref", "target_ref"))
         return f"{data['rating']} q={data['setup_quality']:.2f} {refs}"
+    if "stocks" in data:
+        return " ".join(
+            f"{s['symbol']}={s['action']}@{s['confidence']:.2f}" for s in data["stocks"]
+        )
     return f"{data['stance']} risk={data['event_risk']} c={data['confidence']:.2f}"
 
 
@@ -57,6 +63,7 @@ def _modules() -> dict[str, AnalysisModule[Any, Any]]:
     return {
         "technical": TechnicalModule(load_prompt(prompts, "technical", 1)),
         "earnings": EarningsModule(load_prompt(prompts, "earnings", 1)),
+        "news": NewsAgent(load_prompt(prompts, "news", 1)),
     }
 
 
@@ -113,3 +120,6 @@ async def test_golden_case(
     assert out.output is not None
     if ratings := case["expect"].get("ratings"):
         assert out.output.model_dump()["rating"] in ratings
+    if actions := case["expect"].get("actions"):
+        got = {s["symbol"]: s["action"] for s in out.output.model_dump()["stocks"]}
+        assert all(got[symbol] in allowed for symbol, allowed in actions.items()), got

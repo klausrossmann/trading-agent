@@ -1,16 +1,15 @@
 import math
 from datetime import date
 
-import pandas as pd
 import pytest
 
 from trading_agent.domain.trading import Trade
-from trading_agent.evaluation.kpi import equity_stats, max_drawdown_pct, trade_stats
+from trading_agent.evaluation.kpi import trade_stats
 
 
 def trade(pnl: float | None, r: float | None = None, fees: float = 1.0) -> Trade:
     return Trade(
-        book="backtest",
+        book="agent_paper",
         strategy="s",
         instrument_id=1,
         yahoo_symbol="X",
@@ -45,13 +44,3 @@ def test_trade_stats() -> None:
 def test_trade_stats_empty_and_no_losses() -> None:
     assert trade_stats([]).trades == 0
     assert math.isinf(trade_stats([trade(5, 0.5)]).profit_factor)
-
-
-def test_drawdown_and_cagr() -> None:
-    idx = pd.to_datetime(["2025-01-01", "2025-07-01", "2026-01-01"])
-    equity = pd.Series([1000.0, 1500.0, 2000.0 * 365 / 365], index=idx)
-    assert max_drawdown_pct(pd.Series([100.0, 120, 90, 130])) == pytest.approx(-25)
-    es = equity_stats(equity)
-    assert es.total_return_pct == pytest.approx(100)
-    assert es.cagr_pct == pytest.approx(100, rel=0.01)  # one year (365 of 365.25 days)
-    assert es.max_drawdown_pct == 0

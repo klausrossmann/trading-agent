@@ -1,6 +1,4 @@
-"""IB Gateway link: connection, contract ids, reconciliation, the check.
-
-Read-only unless IB_ORDERS_ENABLED (M8 step 5)."""
+"""IB Gateway link: connection, contract ids, reconciliation, the check."""
 
 import asyncio
 import contextlib
@@ -36,7 +34,7 @@ DELAYED = 3  # IBKR market data type: real-time where subscribed, else 15-20 min
 
 
 class BrokerLink:
-    """Keeps one read-only ib_async connection; alerts on long outages, runs `on_connect`."""
+    """Keeps one ib_async connection; alerts on long outages, runs `on_connect`."""
 
     def __init__(
         self,
@@ -56,6 +54,12 @@ class BrokerLink:
         self._clock = clock
         self.down_since: float | None = None
         self.alerted = False
+        self.ib.errorEvent += self._on_error
+
+    @staticmethod
+    def _on_error(req_id: int, code: int, message: str, contract: object) -> None:
+        """Order errors also reach the order's step; this logs the rest (data, connection)."""
+        log.warning("ibkr.error", req_id=req_id, code=code, message=message)
 
     @property
     def connected(self) -> bool:
@@ -82,7 +86,6 @@ class BrokerLink:
                 s.ib_host,
                 s.ib_port,
                 clientId=s.ib_client_id,
-                readonly=not s.ib_orders_enabled,
                 timeout=15,
             )
         except (OSError, TimeoutError, ConnectionError) as exc:
@@ -150,7 +153,7 @@ async def reconcile_positions(
     halt: Callable[[str], Awaitable[object]] | None = None,
 ) -> ReconcileReport | None:
     """Broker positions vs. the agent book (conid -> symbol, quantity); any difference halts
-    (10.3). Without `expected` (orders still simulated) the account must hold nothing."""
+    (10.3). Without `expected` the account must hold nothing."""
     if link is None or not link.connected:
         log.info("reconcile.skipped", reason="gateway not connected")
         return None
@@ -280,8 +283,6 @@ async def check(
 
 async def _order_test(link: BrokerLink, sessions: Sessions, symbol: str) -> list[str]:
     """Buy 1 share with a limit at half the price, read its status, cancel, read it again."""
-    if not link.settings.ib_orders_enabled:
-        return ["Order test skipped: IB_ORDERS_ENABLED=false"]
     found = await _instrument(sessions, symbol)
     if found is None:
         return [f"Order test skipped: {symbol} not in the universe"]
@@ -295,7 +296,7 @@ async def _order_test(link: BrokerLink, sessions: Sessions, symbol: str) -> list
     ticks = await link.market_info.increments(inst) or CENT_TICKS
     bracket_id = uuid4()
     spec = OrderSpec(
-        order_ref=order_ref(bracket_id, "entry"),
+        order_ref=order_ref(bracket_id, "entry", inst.yahoo_symbol),
         bracket_id=bracket_id,
         instrument=inst,
         kind="entry",

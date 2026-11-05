@@ -18,8 +18,7 @@ class _Strict(BaseModel):
 class Capital(_Strict):
     agent_budget_eur: Decimal = Field(gt=0)
     min_cash_reserve_pct: Decimal = Field(ge=0, lt=100)
-    # paper only: a separate notional budget per market
-    paper_budget_eur: dict[Market, Decimal] = Field(default_factory=dict[Market, Decimal])
+    paper_budget_eur: Decimal | None = Field(default=None, gt=0)  # paper only, both markets
 
 
 class PerTrade(_Strict):
@@ -110,27 +109,14 @@ class RiskConfig(_Strict):
             cash_reserve_pct=self.capital.min_cash_reserve_pct,
         )
 
-    def budget_for(self, market: Market, mode: Literal["paper", "live"]) -> Decimal:
-        if mode == "paper":
-            return self.capital.paper_budget_eur.get(market, self.capital.agent_budget_eur)
-        return self.capital.agent_budget_eur
-
-    def sleeves(
-        self, markets: list[Market], mode: Literal["paper", "live"]
-    ) -> list[tuple[list[Market], "RiskConfig"]]:
-        """Markets grouped by budget; each group is simulated as its own account."""
-        groups: dict[Decimal, list[Market]] = {}
-        for m in markets:
-            groups.setdefault(self.budget_for(m, mode), []).append(m)
-        return [
-            (
-                ms,
-                self.model_copy(
-                    update={"capital": self.capital.model_copy(update={"agent_budget_eur": b})}
-                ),
-            )
-            for b, ms in groups.items()
-        ]
+    def for_mode(self, mode: Literal["paper", "live"]) -> "RiskConfig":
+        """The limits with the mode's budget: paper_budget_eur in paper, if set."""
+        paper = self.capital.paper_budget_eur
+        if mode == "live" or paper is None:
+            return self
+        return self.model_copy(
+            update={"capital": self.capital.model_copy(update={"agent_budget_eur": paper})}
+        )
 
 
 def load_risk_config(config_dir: Path) -> RiskConfig:

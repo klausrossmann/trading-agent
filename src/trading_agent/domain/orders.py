@@ -24,9 +24,10 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-def order_ref(bracket_id: UUID, kind: OrderKind) -> str:
-    """The idempotency key at the broker (10.1)."""
-    return f"{bracket_id}:{kind}"
+def order_ref(bracket_id: UUID, kind: OrderKind, symbol: str) -> str:
+    """The idempotency key at the broker (10.1), readable in TWS and statements:
+    TA-AAPL-entry-1a2b3c4d (the bracket id's first 8 hex digits)."""
+    return f"TA-{symbol}-{kind}-{bracket_id.hex[:8]}"
 
 
 class OrderSpec(_Frozen):
@@ -56,6 +57,7 @@ class BrokerOrder(_Frozen):
     avg_fill_price: Decimal | None = None
     broker_order_id: int | None = None
     perm_id: int | None = None
+    message: str | None = None  # the broker's last error or warning, e.g. "10243: ..."
 
 
 class BrokerFill(_Frozen):

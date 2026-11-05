@@ -7,16 +7,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from trading_agent import backtest, jobs
+from trading_agent import jobs
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
 from trading_agent.db import market as repo
-from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Bar, BarSeries, EarningsEvent, Instrument, Observation
-from trading_agent.domain.trading import Trade
 from trading_agent.risk.config import load_risk_config
 from trading_agent.settings import load_fees
+from trading_agent.strategies.pullback import load_params
 
 pytestmark = pytest.mark.db
 
@@ -87,44 +86,12 @@ async def book(sessions: Sessions) -> jobs.BookContext:
             source="t",
             fetched_at=NOW,
         )
-        base = {
-            "book": "baseline_sim",
-            "strategy": "pullback_uptrend",
-            "instrument_id": ids["AAA"],
-            "yahoo_symbol": "AAA",
-            "market": "US",
-            "sector": None,
-            "signal_date": date(2026, 9, 30),
-            "entry_date": date(2026, 10, 1),
-            "quantity": 10,
-            "risk_eur": 16,
-            "fees": 0.8,
-            "fees_eur": 0.64,
-        }
-        await trades_repo.replace_book(
-            s,
-            "baseline_sim",
-            [
-                Trade.model_validate(base | {"entry_price": 129.9, "stop": 127.9, "target": 133.9}),
-                Trade.model_validate(
-                    base
-                    | {
-                        "entry_price": 120.0,
-                        "stop": 118.0,
-                        "target": 124.0,
-                        "exit_date": date(2026, 10, 2),
-                        "exit_price": 124.0,
-                        "exit_reason": "target",
-                        "pnl_net_eur": 30.0,
-                        "r_multiple": 1.9,
-                        "holding_sessions": 1,
-                    }
-                ),
-            ],
-        )
-    cfg = backtest.BacktestConfig(baseline_book=backtest.BaselineBook(start=date(2026, 10, 1)))
     return jobs.BookContext(
-        sessions, cfg, load_risk_config(ROOT / "config"), load_fees(ROOT / "config"), {"US": "SPY"}
+        sessions,
+        load_params(ROOT / "config"),
+        load_risk_config(ROOT / "config"),
+        load_fees(ROOT / "config"),
+        {"US": "SPY"},
     )
 
 
@@ -136,13 +103,6 @@ async def test_briefing_from_database(book: jobs.BookContext) -> None:
     assert b.markets[0].trend == {"daily": "up", "weekly": "up"}
     assert b.eur_usd == 1.25
     assert [(e.symbol, e.date) for e in b.earnings] == [("AAA", date(2026, 10, 8))]
-    assert b.book is not None
-    us = next(s for s in b.book if s.label == "US")
-    assert (us.closed_trades, us.closed_pnl_eur, us.budget_eur) == (1, 30.0, 10000)
-    (position,) = us.open
-    # last close 131.9: (131.9 - 129.9) / 2 = +1 R; 10 x 2 USD / 1.25 - 0.64 fees
-    assert position.r_now == pytest.approx(1.0)
-    assert position.pnl_eur == pytest.approx(16 - 0.64)
     assert b.last_bars == {"US": date(2026, 10, 5), "EU": None}
     assert b.blocked == []
 

@@ -1,20 +1,17 @@
-"""Baseline strategy "pullback in an uptrend" (IMPLEMENTATION.md 6.2).
-
-Both the candidate generator for the LLM pipeline and the rule-based book it must beat.
-All functions only look at data up to the signal bar.
+"""Strategy "pullback in an uptrend" (IMPLEMENTATION.md 6.2): the screen's rules and the trade
+management of open positions. All functions only look at data up to the signal bar.
 """
 
-import math
 from collections.abc import Iterable
-from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from trading_agent.calc.indicators import atr, ema, rsi, sma
-from trading_agent.calc.levels import swing_points
 from trading_agent.calc.trend import relative_strength
 
 NAME = "pullback_uptrend"
@@ -31,17 +28,11 @@ class PullbackParams(BaseModel):
     ma_band_pct: tuple[float, float] = (0.0, 3.0)  # close this far above EMA20 or SMA50
     rsi_range: tuple[float, float] = (40.0, 55.0)
     earnings_buffer_sessions: int = 3
-    entry_offset_pct: float = 0.2
     entry_valid_sessions: int = 2
-    swing_lookback: int = 5
-    swing_window: int = 60
-    stop_swing_atr: float = 0.5
-    stop_atr: float = 2.0
-    target_r: float = 2.0
     breakeven_r: float = 1.0
     time_stop_sessions: int = 15
     rs_window: int = 63
-    # Optional, off (None) in v1. After breakeven the stop trails this many ATR under the
+    # Optional, off (None). After breakeven the stop trails this many ATR under the
     # highest close since the entry.
     trail_atr: float | None = Field(default=None, gt=0)
     # Market regime gate: no new entries while the market's benchmark closes below its SMA of
@@ -50,15 +41,9 @@ class PullbackParams(BaseModel):
     regime_max_vix: float | None = Field(default=None, gt=0)
 
 
-@dataclass(frozen=True)
-class TradePlan:
-    entry: float  # limit price
-    stop: float
-    target: float
-
-    @property
-    def risk_per_share(self) -> float:
-        return self.entry - self.stop
+def load_params(config_dir: Path) -> PullbackParams:
+    raw = yaml.safe_load((config_dir / "strategies.yaml").read_text(encoding="utf-8"))
+    return PullbackParams.model_validate(raw["pullback"])
 
 
 def _sessions_since_high(close: pd.Series, window: int) -> pd.Series:
@@ -86,44 +71,57 @@ def indicators(frame: pd.DataFrame, benchmark_close: pd.Series, p: PullbackParam
     )
 
 
-def setup_mask(ind: pd.DataFrame, p: PullbackParams) -> pd.Series:
-    """True on bars where the setup is complete at the close (earnings are checked separately)."""
+def rules(ind: pd.DataFrame, p: PullbackParams) -> pd.DataFrame:
+    """One boolean column per setup rule, in the order the screen reports the first failure."""
     close = ind["close"]
     lo, hi = p.ma_band_pct
     above_ema = ((close / ind["ema20"] - 1) * 100).between(lo, hi)
     above_sma = ((close / ind["sma50"] - 1) * 100).between(lo, hi)
-    mask = (
-        (close > p.min_price)
-        & (ind["avg_dollar_volume"] > p.min_avg_dollar_volume)
-        & (close > ind["sma200"])
-        & (ind["sma50"] > ind["sma200"])
-        & ind["sessions_since_high"].between(*p.pullback_sessions)
-        & (above_ema | above_sma)
-        & ind["rsi"].between(*p.rsi_range)
-    )
-    return mask.fillna(False).astype(bool)
+    return pd.DataFrame(
+        {
+            "price": close > p.min_price,
+            "liquidity": ind["avg_dollar_volume"] > p.min_avg_dollar_volume,
+            "above_sma200": close > ind["sma200"],
+            "sma50_above_sma200": ind["sma50"] > ind["sma200"],
+            "pullback": ind["sessions_since_high"].between(*p.pullback_sessions),
+            "near_average": above_ema | above_sma,
+            "rsi": ind["rsi"].between(*p.rsi_range),
+        },
+        index=ind.index,
+    ).fillna(False)
+
+
+def setup_mask(ind: pd.DataFrame, p: PullbackParams) -> pd.Series:
+    """True on bars where the setup is complete at the close (earnings are checked separately)."""
+    return rules(ind, p).all(axis=1).astype(bool)
+
+
+def rule_detail(rule: str, last: pd.Series, p: PullbackParams) -> str:
+    """Why `rule` failed on the bar `last` (a row of `indicators`), in plain words."""
+    close = float(last["close"])
+    if rule == "price":
+        return f"close {close:.2f} not above {p.min_price:g}"
+    if rule == "liquidity":
+        value = float(last["avg_dollar_volume"]) / 1e6
+        return f"avg traded value {value:.1f}M below {p.min_avg_dollar_volume / 1e6:g}M"
+    if rule == "above_sma200":
+        return f"close {close:.2f} not above SMA200 {float(last['sma200']):.2f}"
+    if rule == "sma50_above_sma200":
+        return f"SMA50 {float(last['sma50']):.2f} not above SMA200 {float(last['sma200']):.2f}"
+    if rule == "pullback":
+        lo, hi = p.pullback_sessions
+        return f"highest close {last['sessions_since_high']:.0f} sessions ago, needs {lo}-{hi}"
+    if rule == "near_average":
+        ema_pct = (close / float(last["ema20"]) - 1) * 100
+        sma_pct = (close / float(last["sma50"]) - 1) * 100
+        lo, hi = p.ma_band_pct
+        return f"close {ema_pct:+.1f}% vs EMA20, {sma_pct:+.1f}% vs SMA50, needs {lo:g} to {hi:g}%"
+    if rule == "rsi":
+        lo, hi = p.rsi_range
+        return f"RSI {float(last['rsi']):.1f}, needs {lo:g}-{hi:g}"
+    return rule
 
 
 def earnings_clear(start: date, end: date, earnings: Iterable[date]) -> bool:
     """No announcement between the signal day and the end of the buffer (inclusive)."""
     return not any(start <= d <= end for d in earnings)
-
-
-def plan_trade(history: pd.DataFrame, atr_now: float, p: PullbackParams) -> TradePlan | None:
-    """Entry, stop and target from bars up to and including the signal bar."""
-    close = float(history["close"].iloc[-1])
-    entry = close * (1 + p.entry_offset_pct / 100)
-    if not math.isfinite(atr_now) or atr_now <= 0:
-        return None
-    window = history.iloc[-p.swing_window :]
-    lows = [
-        s
-        for s in swing_points(window["high"], window["low"], p.swing_lookback)
-        if s.kind == "low" and s.price < entry
-    ]
-    stop = entry - p.stop_atr * atr_now
-    if lows:
-        stop = min(stop, lows[-1].price - p.stop_swing_atr * atr_now)
-    if stop <= 0:
-        return None
-    return TradePlan(entry=entry, stop=stop, target=entry + p.target_r * (entry - stop))

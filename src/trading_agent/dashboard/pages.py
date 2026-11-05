@@ -1,8 +1,13 @@
-"""Streamlit pages (IMPLEMENTATION.md 13). Read-only: no buttons that change state."""
+"""Streamlit pages (IMPLEMENTATION.md 13). Read-only: no buttons that change state.
 
-from collections.abc import Awaitable, Callable
+Agent and broker text is always shown as plain text (st.text, st.json), never rendered as
+Markdown, so a crafted answer or news item can't inject links or images.
+"""
+
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import altair as alt
@@ -17,6 +22,7 @@ from trading_agent.domain.trading import Trade
 from trading_agent.settings import Settings
 
 CACHE_TTL_S = 60
+ALL_MARKETS = "US and EU"
 
 
 @st.cache_resource
@@ -28,14 +34,13 @@ def _load[T](query: Callable[[AsyncSession], Awaitable[T]]) -> T:
     return queries.run(_settings().database_url, query)
 
 
+def _today() -> date:
+    return datetime.now(ZoneInfo(queries.TZ)).date()
+
+
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _trades() -> list[Trade]:
     return _load(queries.trades)
-
-
-@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def _positions() -> pd.DataFrame:
-    return frames.open_positions(_trades(), _load(queries.open_trade_closes), _usd_per_eur())
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
@@ -44,8 +49,23 @@ def _data_status() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def _analyses() -> pd.DataFrame:
-    return _load(queries.analyses)
+def _step_days() -> list[date]:
+    return _load(queries.step_days)
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _steps_on(day: date) -> pd.DataFrame:
+    return _load(lambda s: queries.steps(s, day=day))
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _trade_steps(proposal_id: str) -> pd.DataFrame:
+    return _load(lambda s: queries.steps(s, proposal_id=UUID(proposal_id)))
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _analysis(analysis_id: int) -> dict[str, Any] | None:
+    return _load(lambda s: queries.analysis(s, analysis_id))
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
@@ -53,15 +73,14 @@ def _llm_calls(analysis_id: int) -> list[dict[str, Any]]:
     return _load(lambda s: queries.llm_calls(s, analysis_id))
 
 
-def _trace_link(trace_id: Any) -> None:
-    url = trace_url(_settings().trace_ui_url, trace_id if isinstance(trace_id, str) else None)
-    if url:
-        st.link_button("Open trace", url)
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def _positions() -> pd.DataFrame:
+    return _load(queries.positions)
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def _proposals() -> pd.DataFrame:
-    return _load(queries.proposals)
+def _sold() -> pd.DataFrame:
+    return _load(queries.sold)
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
@@ -91,19 +110,12 @@ def _usd_per_eur() -> float | None:
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _rejections() -> pd.DataFrame:
-    since = datetime.now(ZoneInfo(queries.TZ)).date() - timedelta(days=30)
-    return _load(lambda s: queries.rejections(s, since))
+    return _load(lambda s: queries.rejections(s, _today() - timedelta(days=30)))
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def _closes(ids: tuple[int, ...]) -> pd.DataFrame:
-    since = datetime.now(ZoneInfo(queries.TZ)).date() - timedelta(days=120)
-    return _load(lambda s: queries.closes(s, list(ids), since))
-
-
-@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def _reports() -> list[tuple[date, str]]:
-    return _load(queries.reports)
+    return _load(lambda s: queries.closes(s, list(ids), _today() - timedelta(days=120)))
 
 
 @st.cache_data(show_spinner=False)
@@ -113,38 +125,182 @@ def _config(name: str) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _local(ts: pd.Series) -> pd.Series:
-    return pd.to_datetime(ts, utc=True).dt.tz_convert(queries.TZ).dt.strftime("%Y-%m-%d %H:%M")
-
-
 def _table(frame: pd.DataFrame, **kwargs: Any) -> None:
     st.dataframe(frame, hide_index=True, width="stretch", **kwargs)
+
+
+def _trace_link(trace_id: Any) -> None:
+    url = trace_url(_settings().trace_ui_url, trace_id if isinstance(trace_id, str) else None)
+    if url:
+        st.link_button("Open trace", url)
 
 
 EUR = st.column_config.NumberColumn(format="%.2f €")
 PRICE = st.column_config.NumberColumn(format="%.2f")
 R = st.column_config.NumberColumn(format="%.2f R")
 PCT = st.column_config.NumberColumn(format="%.1f %%")
+USD4 = st.column_config.NumberColumn(format="$%.4f")
 
 
-def overview() -> None:
-    st.title("Overview")
-    trades = _trades()
+# --- what happened, step by step ---
+
+
+def _agent_details(analysis_id: int) -> None:
+    a = _analysis(analysis_id)
+    if a is None:
+        st.text("The agent's answer is no longer stored.")
+        return
+    st.caption(
+        f"Agent {a['module']}, prompt v{a['prompt_version']}, {a['model']}, "
+        f"status {a['status']}, ${a['cost_usd']:.4f}"
+    )
+    _trace_link(a["trace_id"])
+    if a["issues"]:
+        st.text("\n".join(f"{i['severity']} {i['code']}: {i['message']}" for i in a["issues"]))
+    st.caption("Agent input")
+    st.json(a["input"], expanded=False)
+    st.caption("Agent output")
+    st.json(a["output"], expanded=False)
+    for c in _llm_calls(analysis_id):
+        error = f", error {c['error']}" if c["error"] else ""
+        st.caption(
+            f"Attempt {c['attempt'] or '-'} ({c['kind'] or 'initial'}), {c['model']}, "
+            f"{c['tokens_in']} + {c['tokens_out']} tokens, {c['latency_ms']} ms{error}"
+        )
+        st.text(frames.transcript(c["messages"]))
+
+
+def _step_details(step: Mapping[Any, Any]) -> None:
+    st.text(step["summary"])
+    if step["error"]:
+        st.text(f"Error: {step['error']}")
+    if step["order_ref"]:
+        st.text(f"IBKR order reference: {step['order_ref']}")
+    if step["input"] is not None:
+        st.caption("Input")
+        st.json(step["input"], expanded=False)
+    if step["output"] is not None:
+        st.caption("Output")
+        st.json(step["output"], expanded=False)
+    if pd.notna(step["analysis_id"]):
+        _agent_details(int(step["analysis_id"]))
+
+
+def _timeline(steps: pd.DataFrame) -> None:
+    for step in steps.sort_values(["ts", "id"]).to_dict("records"):
+        when = pd.Timestamp(step["ts"]).tz_convert(queries.TZ).strftime("%a %d %b %H:%M")
+        label = f"{frames.ICONS[step['status']]} {when} · {step['step']}: {step['summary']}"
+        with st.expander(label if len(label) <= 160 else label[:159] + "…"):
+            _step_details(step)
+
+
+def day() -> None:
+    st.title("Day")
+    days = _step_days()
+    c1, c2, c3 = st.columns(3)
+    picked = c1.date_input("Day", value=days[0] if days else _today(), max_value=_today())
+    market = c2.selectbox("Market", [ALL_MARKETS, "US", "EU"])
+    show = c3.selectbox("Show", frames.ROW_FILTERS)
+    with st.expander("Data freshness"):
+        _table(_data_status())
+    on = picked if isinstance(picked, date) else _today()
+    steps = _steps_on(on)
+    if market != ALL_MARKETS:
+        steps = steps[steps["market"] == market]
+    if steps.empty:
+        recent = ", ".join(str(d) for d in days[:5]) or "none yet"
+        st.info(f"Nothing recorded on {on}. Latest days with steps: {recent}.")
+        return
+    table = frames.day_table(steps)
+    st.subheader("Stocks past each phase")
+    counts = frames.funnel(table)
+    chart = (
+        alt.Chart(counts)
+        .mark_bar()
+        .encode(
+            x=alt.X("count:Q", title="stocks"),
+            y=alt.Y("phase:N", sort=None, title=None),
+            tooltip=["phase", "count"],
+        )
+    )
+    st.altair_chart(chart)
+    rows = frames.select_rows(table, show)
+    st.subheader(f"Stocks ({len(rows)})")
+    _table(rows.drop(columns=["first", "proposal_id"]))
+    st.caption("✓ passed · ✗ stopped · ⚠ error · · information. Pick a stock for every step.")
+    if rows.empty:
+        return
+    symbol = st.selectbox("What happened to", list(rows["symbol"]))
+    if symbol is None:
+        return
+    _timeline(steps[steps["symbol"] == symbol])
+    proposal_id = rows[rows["symbol"] == symbol]["proposal_id"].iloc[0]
+    if isinstance(proposal_id, str) and st.toggle("Follow this trade over every day"):
+        _timeline(_trade_steps(proposal_id))
+
+
+# --- portfolio ---
+
+
+def portfolio() -> None:
+    st.title("Portfolio")
     positions = _positions()
-    costs = _llm_costs()
-    month = datetime.now(ZoneInfo(queries.TZ)).date().replace(day=1)
-    spent = float(costs.loc[pd.to_datetime(costs["day"]).dt.date >= month, "cost_usd"].sum())
+    time_stop = int(_config("strategies.yaml")["pullback"]["time_stop_sessions"])
+    held = frames.open_positions(positions, _usd_per_eur(), time_stop, _today())
+    pending = frames.pending_entries(positions)
+    sold = frames.sold_trades(_sold())
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Open positions", len(positions))
-    c2.metric("Closed trades", sum(1 for t in trades if t.exit_date is not None))
-    c3.metric("Unrealized P&L", f"{positions['pnl_eur'].sum():.2f} €")
-    c4.metric("LLM spend this month", f"${spent:.2f}" if spent >= 1 else f"${spent:.4f}")
+    c1.metric("Held", len(held))
+    c2.metric("Buy orders waiting", len(pending))
+    c3.metric("Unrealized P&L", f"{held['pnl_eur'].sum():.2f} €")
+    c4.metric("Realized P&L (net)", f"{sold['pnl_net_eur'].sum():.2f} €")
 
-    st.subheader("Books")
-    kpi = frames.kpis(trades)
-    if kpi.empty:
-        st.info("No trades yet. The baseline_sim book fills from its start date.")
+    st.subheader("Held at IBKR")
+    if held.empty:
+        st.info("No open positions.")
     else:
+        _table(
+            held.drop(columns=["id"]),
+            column_config={
+                "entry_price": PRICE,
+                "stop": PRICE,
+                "target": PRICE,
+                "last_close": PRICE,
+                "r_now": R,
+                "pnl_eur": EUR,
+            },
+        )
+        st.caption(
+            "Marked to the last stored close, before fees. Stop and target sit at IBKR. The stop "
+            "moves up to the entry price once the high reaches +1R; on the time-stop day the "
+            "position is sold at the next open."
+        )
+    st.subheader("Buy orders waiting at IBKR")
+    if pending.empty:
+        st.info("None.")
+    else:
+        _table(
+            pending.drop(columns=["id"]),
+            column_config={"limit": PRICE, "stop": PRICE, "target": PRICE},
+        )
+    st.subheader("Sold")
+    if sold.empty:
+        st.info("Nothing sold yet.")
+    else:
+        _table(
+            sold.drop(columns=["id"]),
+            column_config={
+                "entry_price": PRICE,
+                "exit_price": PRICE,
+                "r_multiple": R,
+                "pnl_net_eur": EUR,
+                "fees_eur": EUR,
+            },
+        )
+    trades = _trades()
+    kpi = frames.kpis(trades)
+    if not kpi.empty:
+        st.subheader("Results")
         _table(
             kpi,
             column_config={
@@ -155,176 +311,24 @@ def overview() -> None:
                 "fees_eur": EUR,
             },
         )
-    curve = frames.realized_pnl_curve(trades)
-    if not curve.empty:
-        st.caption("Cumulative realized P&L (EUR, after fees)")
-        st.line_chart(curve)
+        curve = frames.realized_pnl_curve(trades)
+        if not curve.empty:
+            st.caption("Cumulative realized P&L (EUR, after fees)")
+            st.line_chart(curve)
 
-    st.subheader("Data")
-    _table(_data_status())
-
-
-def positions() -> None:
-    st.title("Positions")
-    frame = _positions()
-    if frame.empty:
-        st.info("No open positions.")
-        return
-    _table(
-        frame,
-        column_config={
-            "entry": PRICE,
-            "stop": PRICE,
-            "target": PRICE,
-            "close": PRICE,
-            "r_now": R,
-            "pnl_eur": EUR,
-            "risk_eur": EUR,
-        },
-    )
-    st.caption("Marked to the last stored daily close; P&L after the fees paid so far.")
-
-
-def journal() -> None:
-    st.title("Journal")
-    frame = frames.closed_trades(_trades())
-    if frame.empty:
-        st.info("No closed trades yet.")
-        return
-    c1, c2, c3 = st.columns(3)
-    books = c1.multiselect("Book", sorted(frame["book"].unique()))
-    markets = c2.multiselect("Market", sorted(frame["market"].unique()))
-    symbol = c3.text_input("Symbol").strip().upper()
-    if books:
-        frame = frame[frame["book"].isin(books)]
-    if markets:
-        frame = frame[frame["market"].isin(markets)]
-    if symbol:
-        frame = frame[frame["yahoo_symbol"].str.contains(symbol, regex=False)]
-    columns = [
-        "book",
-        "yahoo_symbol",
-        "market",
-        "strategy",
-        "entry_date",
-        "entry_price",
-        "quantity",
-        "stop",
-        "target",
-        "exit_date",
-        "exit_price",
-        "exit_reason",
-        "holding_sessions",
-        "r_multiple",
-        "pnl_net_eur",
-        "fees_eur",
+    choices = [
+        *((f"held: {r['symbol']}", r["id"]) for r in held.to_dict("records")),
+        *((f"waiting: {r['symbol']}", r["id"]) for r in pending.to_dict("records")),
+        *(
+            (f"sold {r['exit_date']}: {r['symbol']} ({r['why']})", r["id"])
+            for r in sold.to_dict("records")
+            if isinstance(r["id"], str)
+        ),
     ]
-    _table(
-        frame[columns],
-        column_config={
-            "entry_price": PRICE,
-            "stop": PRICE,
-            "target": PRICE,
-            "exit_price": PRICE,
-            "r_multiple": R,
-            "pnl_net_eur": EUR,
-            "fees_eur": EUR,
-        },
-    )
-    st.caption(f"{len(frame)} trades, {frame['pnl_net_eur'].sum():.2f} € net")
-
-
-def analyses() -> None:
-    st.title("Analyses")
-    frame = _analyses()
-    if frame.empty:
-        st.info("No LLM analyses yet (`trading-agent analyse`).")
-        return
-    c1, c2, c3 = st.columns(3)
-    modules = c1.multiselect("Module", sorted(frame["module"].unique()))
-    statuses = c2.multiselect("Status", sorted(frame["status"].unique()))
-    symbol = c3.text_input("Symbol", key="analysis_symbol").strip().upper()
-    if modules:
-        frame = frame[frame["module"].isin(modules)]
-    if statuses:
-        frame = frame[frame["status"].isin(statuses)]
-    if symbol:
-        frame = frame[frame["symbol"].fillna("").str.contains(symbol, regex=False)]
-    shown = frame.assign(created_at=_local(frame["created_at"]))
-    _table(
-        shown.drop(columns=["issues", "output", "trace_id"]),
-        column_config={"cost_usd": st.column_config.NumberColumn(format="$%.4f")},
-    )
-    if frame.empty:
-        return
-    records = frame.to_dict("records")
-    labels = [f"#{r['id']} {r['symbol'] or '-'} {r['module']} {r['as_of']}" for r in records]
-    picked = st.selectbox("Details", range(len(records)), format_func=labels.__getitem__)
-    row = records[picked or 0]
-    _trace_link(row["trace_id"])
-    if row["issues"]:
-        lines = [f"- {i['severity']} `{i['code']}`: {i['message']}" for i in row["issues"]]
-        st.warning("\n".join(lines))
-    st.json(row["output"])
-    calls = _llm_calls(int(row["id"]))
-    if calls:
-        st.subheader("LLM calls")
-        _table(
-            pd.DataFrame(calls).drop(columns=["messages"]),
-            column_config={"cost_usd": st.column_config.NumberColumn(format="$%.4f")},
-        )
-        for c in calls:
-            with st.expander(f"Attempt {c['attempt'] or '-'} ({c['kind'] or 'initial'})"):
-                # Prompts and answers as plain text, never rendered as Markdown.
-                st.text(frames.transcript(c["messages"]))
-
-
-def proposals() -> None:
-    st.title("Proposals")
-    frame = _proposals()
-    if frame.empty:
-        st.info("No agent proposals yet (`trading-agent propose` or the scheduled scans).")
-        return
-    c1, c2, c3 = st.columns(3)
-    statuses = c1.multiselect("Status", sorted(frame["status"].unique()))
-    labels = c2.multiselect("Label", ["agree", "disagree", "none"])
-    symbol = c3.text_input("Symbol", key="proposal_symbol").strip().upper()
-    if statuses:
-        frame = frame[frame["status"].isin(statuses)]
-    if labels:
-        frame = frame[frame["label"].fillna("none").isin(labels)]
-    if symbol:
-        frame = frame[frame["symbol"].str.contains(symbol, regex=False)]
-    _table(
-        frame.drop(columns=["thesis", "invalidation", "critic_summary", "payload", "trace_id"]),
-        column_config={
-            "entry": PRICE,
-            "stop": PRICE,
-            "target": PRICE,
-            "risk_reward": PRICE,
-            "confidence": PRICE,
-        },
-    )
-    if frame.empty:
-        return
-    records = frame.to_dict("records")
-    names = [f"{r['as_of']} {r['symbol']} ({r['status']})" for r in records]
-    picked = st.selectbox("Details", range(len(records)), format_func=names.__getitem__)
-    row = records[picked or 0]
-    # LLM text is shown as plain text, never rendered as Markdown (links, images).
-    lines = [f"Thesis: {row['thesis']}", f"Invalidation: {row['invalidation']}"]
-    critic = row["payload"].get("critic", {})
-    if row["critic_summary"]:
-        lines.append(f"Critic ({row['critic']}): {row['critic_summary']}")
-        lines += [f"  - {o['severity']}: {o['point']}" for o in critic.get("objections", [])]
-    if pm := row["payload"].get("portfolio_manager"):
-        lines.append(f"Ranking: {pm['note']}")
-    if row["label"]:
-        lines.append(f"Your label: {row['label']} {row['reason'] or ''}")
-    st.text("\n".join(lines))
-    _trace_link(row["trace_id"])
-    with st.expander("Agent outputs"):
-        st.json(row["payload"])
+    if choices:
+        st.subheader("A trade, step by step")
+        picked = st.selectbox("Trade", range(len(choices)), format_func=lambda i: choices[i][0])
+        _timeline(_trade_steps(choices[picked or 0][1]))
 
 
 def costs() -> None:
@@ -333,10 +337,7 @@ def costs() -> None:
     if calls.empty:
         st.info("No LLM calls yet.")
     else:
-        _table(
-            frames.monthly_costs(calls),
-            column_config={"cost_usd": st.column_config.NumberColumn(format="$%.4f")},
-        )
+        _table(frames.monthly_costs(calls), column_config={"cost_usd": USD4})
         daily = calls.pivot_table(index="day", columns="role", values="cost_usd", aggfunc="sum")
         st.caption("LLM spend per day and role (USD)")
         st.bar_chart(daily.fillna(0.0))
@@ -346,10 +347,7 @@ def costs() -> None:
             {"book": [t.book for t in trades], "fees_eur": [t.fees_eur for t in trades]}
         )
         st.subheader("Broker fees")
-        _table(
-            fees.groupby("book", as_index=False).sum(),
-            column_config={"fees_eur": EUR},
-        )
+        _table(fees.groupby("book", as_index=False).sum(), column_config={"fees_eur": EUR})
 
 
 def _refresh() -> None:
@@ -404,58 +402,14 @@ def risk() -> None:
         _table(rejected)
 
 
-def evaluation() -> None:
-    st.title("Evaluation")
-    trades = _trades()
-    costs = _llm_costs()
-    usd = _usd_per_eur() or 1.0
-    start = date.fromisoformat(str(_config("strategies.yaml")["baseline_book"]["start"]))
-    today = datetime.now(ZoneInfo(queries.TZ)).date()
-    llm_eur = float(costs["cost_usd"].sum()) / usd if not costs.empty else 0.0
-    st.subheader("Go-live gate")
-    _table(frames.gate(trades, llm_eur, start, today))
-    items = frames.outcomes(trades, _proposals())
-    st.subheader("Calibration (agent sample)")
-    calibration = frames.calibration(items)
-    if calibration.empty:
-        st.info("No closed agent trades with a confidence yet.")
-    else:
-        _table(calibration, column_config={"hit_rate_pct": PCT})
-        st.bar_chart(calibration.set_index("confidence")["hit_rate_pct"])
-        st.caption("Well calibrated: the 0.7-0.8 bucket wins about 70-80 % of the time.")
-    labelled = [o for o in items if o.label is not None]
-    if labelled:
-        right = sum((o.label == "agree") == (o.pnl_eur > 0) for o in labelled)
-        st.metric(
-            "Your labels right", f"{right / len(labelled) * 100:.0f} %", f"{len(labelled)} trades"
-        )
-
-
-def reports() -> None:
-    st.title("Reports")
-    stored = _reports()
-    if not stored:
-        st.info("No weekly report yet (Saturdays, or `trading-agent weekly-report`).")
-        return
-    picked = st.selectbox(
-        "Week ending", range(len(stored)), format_func=lambda i: str(stored[i][0])
-    )
-    st.markdown(stored[picked or 0][1])  # our own text, no LLM output in it
-
-
 def main() -> None:
     st.set_page_config(page_title="Trading agent", layout="wide")
     page = st.navigation(
         [
-            st.Page(overview, title="Overview", default=True),
-            st.Page(positions, title="Positions"),
-            st.Page(proposals, title="Proposals"),
-            st.Page(journal, title="Journal"),
-            st.Page(analyses, title="Analyses"),
+            st.Page(day, title="Day", default=True),
+            st.Page(portfolio, title="Portfolio"),
             st.Page(costs, title="Costs"),
             st.Page(risk, title="Risk"),
-            st.Page(evaluation, title="Evaluation"),
-            st.Page(reports, title="Reports"),
         ]
     )
     st.sidebar.button("Reload data", on_click=_refresh)
