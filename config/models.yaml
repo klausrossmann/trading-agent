@@ -22,7 +22,7 @@ prices:
 budget:
   monthly_usd: 16                  # about EUR 15 a month
   lean_mode_at: 0.8                # fewer candidates per scan
-  hard_stop_at: 1.0                # no more LLM calls this month; the baseline keeps running
+  hard_stop_at: 1.0                # no more LLM calls this month, so no new proposals
 
 # Client-side pacing. Free-tier limits are shown in Google AI Studio under "Rate limits".
 rate_limits_rpm:
@@ -30,5 +30,5 @@ rate_limits_rpm:
   google:gemini-3.1-flash-lite: 15
 
 scan:
-  candidates: 10                   # top baseline setups analysed per scan
+  candidates: 10                   # top screened setups analysed per scan and market
   candidates_lean: 5

@@ -11,7 +11,7 @@ import pandas as pd
 
 from trading_agent.data import calendars
 from trading_agent.domain.trading import Trade
-from trading_agent.evaluation.kpi import trade_stats
+from trading_agent.portfolio.kpi import trade_stats
 
 BERLIN = ZoneInfo("Europe/Berlin")
 

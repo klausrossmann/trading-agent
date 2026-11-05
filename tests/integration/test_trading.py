@@ -21,7 +21,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select, text
 
-from trading_agent import jobs, news, orchestrator, reports, trading
+from trading_agent import jobs, news, orchestrator, trading
+from trading_agent.contexts import BookContext
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import Sessions
@@ -277,8 +278,8 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     assert [d for d, _ in history] == [TODAY, day2, day3]
 
     universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA")])
-    book = jobs.BookContext.load(ROOT / "config", sessions, universe)
-    body = await reports.tax_report(book, 2026, "agent_paper")
+    book = BookContext.load(ROOT / "config", sessions, universe)
+    body = await jobs.tax_report(book, 2026, "agent_paper")
     assert "| 2026-10-09 | AAA | 11 | 2026-10-07 |" in body
     async with sessions() as s:
         assert [d for d, _ in await reports_repo.reports(s, "tax:agent_paper")] == [

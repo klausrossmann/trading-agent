@@ -52,7 +52,7 @@ async def insert_bracket(
 
 
 async def add_orders(session: AsyncSession, specs: Sequence[OrderSpec], at: datetime) -> None:
-    """`at` is when the order goes to the broker; the simulator only fills later sessions."""
+    """`at` is when the order goes to the broker."""
     for spec in specs:
         stmt = insert(OrderRow).values(
             order_ref=spec.order_ref,

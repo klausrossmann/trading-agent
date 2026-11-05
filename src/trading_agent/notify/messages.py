@@ -356,7 +356,7 @@ def gateway_up_alert(minutes: int) -> str:
 
 
 def not_connected_alert(what: str, symbols: Sequence[str]) -> str:
-    """Something that needs IBKR was skipped; nothing went to a simulator instead."""
+    """Something that needs IBKR was skipped."""
     names = f": {', '.join(symbols)}" if symbols else ""
     return f"🔌 {what} skipped, IBKR not connected{names}"
 

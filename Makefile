@@ -4,8 +4,8 @@ ZENBOOK ?= zenbook
 # Checkout on the Zenbook, relative to the SSH user's home
 ZENBOOK_DIR ?= projects/trading-agent
 TEST_DB := ta-test-db
-# Risk engine and execution need 100 % branch coverage (IMPLEMENTATION.md 16.2).
-RISK_COV := --cov=trading_agent.risk --cov=trading_agent.execution --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
+# Risk engine, execution and the IBKR order adapter need 100 % branch coverage (IMPLEMENTATION.md 16.2).
+RISK_COV := --cov=trading_agent.risk --cov=trading_agent.execution --cov=trading_agent.ibkr.orders --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
 
 sync:
 	uv sync

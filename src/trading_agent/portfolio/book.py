@@ -1,6 +1,6 @@
 """Book accounting from brackets and fills (IMPLEMENTATION.md 9.6). Pure; amounts in EUR.
 
-One account per budget sleeve: settled and unsettled cash, positions marked to market,
+One account (both markets, one budget): settled and unsettled cash, positions marked to market,
 cash reserved for pending entries, round-trip trades, and the risk engine's PortfolioState.
 """
 
@@ -64,7 +64,7 @@ def account(
     rates: Mapping[str, Decimal],
     today: date,
 ) -> Account:
-    """`brackets` and `fills` of one sleeve; `marks` are last prices, `rates` today's FX."""
+    """`brackets` and `fills` of the book; `marks` are last prices, `rates` today's FX."""
     cash, unsettled = budget_eur, Decimal(0)
     for f in fills:
         if f.kind == "entry" or f.settles <= today:

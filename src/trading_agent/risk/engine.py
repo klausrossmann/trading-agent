@@ -233,7 +233,7 @@ def evaluate(
     fees: FeeSchedule,
     now: datetime,
 ) -> RiskDecision:
-    """Decides one long entry. `limits` is the RiskConfig of the proposal's budget sleeve."""
+    """Decides one long entry. `limits` is the RiskConfig with the mode's budget."""
     if market.instrument_id != proposal.instrument_id:
         raise ValueError("market snapshot is for another instrument")
     if now.tzinfo is None:

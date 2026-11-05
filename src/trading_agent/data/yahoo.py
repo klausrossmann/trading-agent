@@ -1,4 +1,4 @@
-"""Yahoo Finance via yfinance (unofficial; Phase 0-1 only, replaced by IBKR bars in M6)."""
+"""Yahoo Finance via yfinance (unofficial): daily bars and earnings dates for both markets."""
 
 import math
 from datetime import UTC, date, datetime, time, timedelta

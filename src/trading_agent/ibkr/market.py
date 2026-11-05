@@ -1,4 +1,5 @@
-"""IBKR market data through IB Gateway (ib_async): contracts and daily bars (M6, read-only).
+"""IBKR market data through IB Gateway (ib_async): contracts, daily bars (optional, see
+config/data.yaml), price increments and quotes.
 
 Pacing: IBKR allows at most 60 historical data requests in any 10 minutes.
 """

@@ -34,7 +34,7 @@ class Controls(_Frozen):
 
     trading: TradingState
     app_mode: Mode  # APP_MODE in .env
-    gateway_mode: Mode | None  # TRADING_MODE of the connected gateway; None for the simulator
+    gateway_mode: Mode | None  # TRADING_MODE of the connected gateway; None if not connected
     live_confirmed: bool  # /confirm_live after this start
 
 
@@ -48,7 +48,7 @@ class KillSwitch(_Frozen):
 
 
 class Holding(_Frozen):
-    """An open position or a pending entry order of the sleeve."""
+    """An open position or a pending entry order of the account."""
 
     instrument_id: int
     sector: str | None
@@ -56,7 +56,7 @@ class Holding(_Frozen):
 
 
 class PortfolioState(_Frozen):
-    """One budget sleeve (19.1); the sleeve's budget comes with its RiskConfig."""
+    """The account (both markets, one budget); the budget comes with its RiskConfig."""
 
     holdings: tuple[Holding, ...]
     settled_cash_eur: Decimal  # minus the cash reserved for pending entries

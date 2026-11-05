@@ -10,7 +10,7 @@ from trading_agent.domain.trading import Book, Trade
 
 
 async def replace_book(session: AsyncSession, book: Book, trades: Sequence[Trade]) -> int:
-    """Replace all trades of a simulated book (it is recomputed from scratch each run)."""
+    """Replace all trades of a book (it is rebuilt from its brackets and fills each evening)."""
     await session.execute(delete(TradeRow).where(TradeRow.book == book))
     session.add_all(
         TradeRow(

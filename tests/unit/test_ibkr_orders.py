@@ -20,8 +20,8 @@ from ib_async import (
 
 from trading_agent.domain.market import Instrument
 from trading_agent.domain.orders import BracketRequest
-from trading_agent.execution.ibkr import IbkrBroker, ib_order
 from trading_agent.execution.orders import bracket_specs
+from trading_agent.ibkr.orders import IbkrBroker, ib_order
 
 D = Decimal
 AAPL = Instrument(

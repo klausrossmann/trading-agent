@@ -1,1 +1,1 @@
-"""Proposer, critic and portfolio manager agents (read-only tools only)."""
+"""Proposer and critic agents (no tools: every fact comes in with the input)."""

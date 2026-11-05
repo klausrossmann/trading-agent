@@ -1,7 +1,7 @@
 """Execution service (IMPLEMENTATION.md 10): approved entries become brackets at the broker,
 and the broker's order states move them through the state machine (10.2).
 
-Works with any `OrderBroker`: the simulator while the gateway is disabled, IBKR afterwards.
+Works with any `OrderBroker`: IBKR in the agent, a fake in the tests.
 Every step is safe to repeat: brackets are keyed by the proposal id, orders by order_ref.
 """
 

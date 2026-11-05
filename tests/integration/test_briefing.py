@@ -7,7 +7,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from trading_agent import jobs
+from trading_agent import briefing
+from trading_agent.contexts import BookContext, RuntimeState
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
@@ -56,7 +57,7 @@ def series(symbol: str, slope: float) -> BarSeries:
 
 
 @pytest.fixture
-async def book(sessions: Sessions) -> jobs.BookContext:
+async def book(sessions: Sessions) -> BookContext:
     universe = Universe(
         generated=TODAY,
         benchmarks={"US": "SPY"},
@@ -86,7 +87,7 @@ async def book(sessions: Sessions) -> jobs.BookContext:
             source="t",
             fetched_at=NOW,
         )
-    return jobs.BookContext(
+    return BookContext(
         sessions,
         load_params(ROOT / "config"),
         load_risk_config(ROOT / "config"),
@@ -95,9 +96,9 @@ async def book(sessions: Sessions) -> jobs.BookContext:
     )
 
 
-async def test_briefing_from_database(book: jobs.BookContext) -> None:
-    state = jobs.RuntimeState(mode="paper", started_at=NOW, blocked={"US": []})
-    b = await jobs.build_briefing(book, state, TODAY)
+async def test_briefing_from_database(book: BookContext) -> None:
+    state = RuntimeState(mode="paper", started_at=NOW, blocked={"US": []})
+    b = await briefing.build_briefing(book, state, TODAY)
     assert [(m.name, m.last_date) for m in b.markets] == [("SPY", date(2026, 10, 5))]
     assert b.markets[0].change_pct == pytest.approx((259.5 / 259.0 - 1) * 100)
     assert b.markets[0].trend == {"daily": "up", "weekly": "up"}
@@ -106,26 +107,26 @@ async def test_briefing_from_database(book: jobs.BookContext) -> None:
     assert b.last_bars == {"US": date(2026, 10, 5), "EU": None}
     assert b.blocked == []
 
-    text = await jobs.briefing_text(book, state, TODAY)
+    text = await briefing.briefing_text(book, state, TODAY)
     assert "AAA Thu 8 Oct amc" in text
 
 
-async def test_status_from_database(book: jobs.BookContext) -> None:
-    state = jobs.RuntimeState(mode="paper", started_at=NOW - timedelta(minutes=30))
-    text = await jobs.status_text(state, book.sessions, now=NOW)
+async def test_status_from_database(book: BookContext) -> None:
+    state = RuntimeState(mode="paper", started_at=NOW - timedelta(minutes=30))
+    text = await briefing.status_text(state, book.sessions, now=NOW)
     assert "Agent running (paper), up 30 min" in text
     assert "Heartbeat: not configured" in text
     assert "last bars US 05 Oct, EU -" in text
     assert "not checked since start" in text
 
 
-async def test_status_from_database_with_links(book: jobs.BookContext) -> None:
-    state = jobs.RuntimeState(
+async def test_status_from_database_with_links(book: BookContext) -> None:
+    state = RuntimeState(
         mode="paper",
         started_at=NOW - timedelta(minutes=30),
         trace_ui_url="https://cloud.langfuse.com/project/p1",
         dashboard_ui_url="https://agent.example.com",
     )
-    text = await jobs.status_text(state, book.sessions, now=NOW)
+    text = await briefing.status_text(state, book.sessions, now=NOW)
     assert "Tracing UI: https://cloud.langfuse.com/project/p1" in text
     assert "Dashboard: https://agent.example.com" in text

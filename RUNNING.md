@@ -1,6 +1,6 @@
 # Running the Trading Agent
 
-How to watch, start, test, update and fix the app on the Zenbook. Day to day you need sections 1–3; the rest is for when you start, update or troubleshoot. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains how the system decides.
+How to watch, start, test and fix the app on the Zenbook. Day to day you need sections 1–3; the rest is for when you start, update or troubleshoot. Installing and setting up the Zenbook is in [ZENBOOK.md](ZENBOOK.md); what the agent does and when is in [RUNTIME.md](RUNTIME.md); how it decides is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 Every command runs on the Zenbook as your normal user (a member of the `docker` group) in the app's folder:
 
@@ -28,7 +28,7 @@ cd ~/projects/trading-agent     # code, .env, secrets/, backups/
 |---|---|
 | The dashboard | `https://klaus-ux301laa.<your-tailnet>.ts.net`, with Tailscale on (finding the exact address: section 2) |
 | Is everything running? | Telegram `/status` |
-| What happens next, and when? | Telegram `/status` → Next jobs; the daily schedule in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 4 |
+| What happens next, and when? | Telegram `/status` → Next jobs; the whole day in [RUNTIME.md](RUNTIME.md) |
 | What did the agent propose today? | Telegram 🧠 messages, `/proposals`; dashboard → **Day** |
 | Why did it propose (or skip) a stock? | Telegram `/why SYMBOL`; dashboard → **Day** → pick the stock: every step with its reason |
 | Exactly what the AI was asked and answered, step by step | Dashboard → **Day** → pick the stock → open an agent step: its input, output and every attempt with prompts and answers (kept for good); **Open trace** there or in `/why` shows the whole run in Langfuse (cloud.langfuse.com → project `trading-agent` → Tracing, last 30 days; [OBSERVABILITY.md](OBSERVABILITY.md)) |
@@ -105,7 +105,7 @@ The bot answers only your chat. It sends these messages by itself:
 | `/exit SYMBOL` | Sell that position at the next open |
 | `/help` | All commands |
 
-**Your daily part** (about an hour; details in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 11.4): morning, read 📰 and 🧠, `/pause` if something looks wrong; evening, read 🌙, `/review`, decide on 🧐; Saturday, read the report; about once a week, confirm the IBKR 2FA prompt on the phone.
+**Your daily part** (details in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) 11.4): morning, read 📰 and 🧠, `/pause` if something looks wrong; evening, read 🌙, decide on 🧐, optionally `/review`; about once a week, confirm the IBKR 2FA prompt on the phone.
 
 ### 3.1 The heartbeat (healthchecks.io)
 
@@ -129,7 +129,7 @@ make logs
 **One line per step of the last 24 hours:**
 
 ```sh
-docker compose logs agent --since 24h | grep -E '"event": "(agent.started|scheduler.planned|ingest.done|quality.checked|scan.done|scan.excluded|proposals.done|llm.analysis|place.done|place.nothing|executor.submitted|stop.moved|reconcile.done|review.done|weekly_report.stored)"'
+docker compose logs agent --since 24h | grep -E '"event": "(agent.started|scheduler.planned|ingest.done|quality.checked|scan.done|scan.excluded|proposals.done|llm.analysis|news.done|place.done|place.nothing|place.not_connected|executor.submitted|stop.moved|reconcile.done)"'
 ```
 
 | Event | Means |
@@ -139,7 +139,8 @@ docker compose logs agent --since 24h | grep -E '"event": "(agent.started|schedu
 | `scan.done`, `scan.excluded` | Scan finished (analyses, cost); stocks left out (data problem, blacklist) |
 | `llm.analysis` | One AI answer: role, model, status, tokens, cost |
 | `proposals.done` | Proposals stored, with the reasons for skipped stocks |
-| `place.done`, `place.nothing` | Orders placed and rejected; nothing to place |
+| `news.done` | A News agent run: how many stocks, which got a buy signal or an exit |
+| `place.done`, `place.nothing`, `place.not_connected` | Orders placed and rejected; nothing to place; IBKR wasn't connected |
 | `executor.submitted`, `stop.moved` | Order sent; stop raised |
 | `reconcile.done` | Broker and agent agree (`clean: true`) |
 
@@ -316,34 +317,7 @@ Nothing on the Zenbook accepts connections from the internet or the home network
 
 ### 9.3 One-time setup
 
-Done on this Zenbook, except backups (9.4). For a new machine (e.g. the mini PC), in this order; the machine preparation itself is in [IMPLEMENTATION.md](IMPLEMENTATION.md) 15.1.
-
-| Step | Commands | What it does |
-|---|---|---|
-| Code | `git clone git@github.com:klausrossmann/trading-agent.git ~/projects/trading-agent && cd ~/projects/trading-agent && git config pull.ff only` | Downloads the code with a read-only deploy key (GitHub → repo → Settings → Deploy keys); `pull.ff only` stops `git pull` from mixing in local changes |
-| Passwords | `make secrets` | Random database and VNC passwords in `secrets/` |
-| Settings | `cp .env.example .env && chmod 600 .env`, then `nano .env` | Keys and switches (below) |
-| Build | `make build && docker compose up -d db && make migrate` | Builds the image, starts the database, creates the tables |
-| Data | `docker compose run --rm agent trading-agent backfill` (twice) | Loads 6 years of prices, FX, macro data and earnings; the second run must change nothing |
-| Start | `make up` | Section 5 |
-| Telegram | Message the bot, `docker compose logs agent \| grep telegram.ignored`, put the `chat_id` into `TELEGRAM_OWNER_CHAT_ID`, `make up` | The bot answers only that chat |
-| Dashboard | `sudo tailscale serve --bg 8501` (as your desktop user) | Publishes the dashboard to your tailnet |
-| IBKR | `make tws-password`, then `.env` as below, `make up` | The gateway logs in to the paper account |
-| Tracing | cloud.langfuse.com → sign up (EU), project `trading-agent`, Project settings → API keys → create; then `make trace-headers` (paste public key, then secret key), `TRACE_UI_URL` in `.env`, `make up` | Each scan's AI calls become a trace in Langfuse; starts with the agent from then on ([OBSERVABILITY.md](OBSERVABILITY.md), Setup) |
-
-`.env`: write each value directly after `=`, without quotes, and never put a comment on the same line (Docker Compose would read the comment as the value).
-
-| Key | Value |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | From `@BotFather` → `/newbot` |
-| `GEMINI_API_KEY` | aistudio.google.com → Get API key |
-| `LLM_DEV_OVERRIDES` | `true` (the critic runs on Gemini until an Anthropic key exists) |
-| `FRED_API_KEY`, `FINNHUB_API_KEY` | Free keys from fred.stlouisfed.org and finnhub.io: macro data, news on US stocks (EU news comes from Yahoo, no key) |
-| `HEARTBEAT_URL` | The ping URL of a healthchecks.io check (period 5 minutes, grace 15) |
-| `TWS_USERID` | Your normal IBKR username (the gateway uses paper mode) |
-| `TRACE_UI_URL` | `https://cloud.langfuse.com/project/<id>`: open the project in Langfuse and copy the address up to the project id |
-
-There is no switch for the broker: every order goes to the IBKR account the gateway is logged in to. While the gateway isn't connected, nothing is placed; the dashboard's step log and a 🔌 Telegram message say so.
+Moved to [ZENBOOK.md](ZENBOOK.md): accounts and keys (1), preparing the machine (2), installing the app and every `.env` value (3), the first start (4), and the first update to the simplified version (6.1).
 
 ### 9.4 Backups
 

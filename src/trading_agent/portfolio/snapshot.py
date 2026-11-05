@@ -79,7 +79,7 @@ def snapshot(
     eur_rate: Decimal,
     mid: Decimal | None = None,
 ) -> MarketSnapshot:
-    """`mid` defaults to the last close (no live quote in simulator mode)."""
+    """`mid` defaults to the last close (no quote from IBKR)."""
     if inst.id is None or not bars:
         raise ValueError(f"{inst.yahoo_symbol}: no id or no bars")
     frame = bars_to_frame(list(bars))

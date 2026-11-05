@@ -70,6 +70,7 @@ strict = [
     "src/trading_agent/calc",
     "src/trading_agent/risk",
     "src/trading_agent/execution",
+    "src/trading_agent/ibkr/orders.py",
 ]
 
 [tool.pytest.ini_options]
@@ -91,7 +92,7 @@ root_package = "trading_agent"
 name = "LLM code has no path to orders"
 type = "forbidden"
 source_modules = ["trading_agent.llm", "trading_agent.modules", "trading_agent.agents"]
-forbidden_modules = ["trading_agent.execution", "trading_agent.risk"]
+forbidden_modules = ["trading_agent.execution", "trading_agent.ibkr", "trading_agent.risk"]
 
 [[tool.importlinter.contracts]]
 name = "Risk engine is deterministic"
@@ -100,7 +101,7 @@ source_modules = ["trading_agent.risk"]
 forbidden_modules = ["trading_agent.llm", "trading_agent.modules", "trading_agent.agents"]
 
 [[tool.importlinter.contracts]]
-name = "Only the orchestration layer calls execution"
+name = "Only the orchestration layer calls execution and IBKR"
 type = "forbidden"
 source_modules = [
     "trading_agent.domain",
@@ -113,11 +114,10 @@ source_modules = [
     "trading_agent.agents",
     "trading_agent.risk",
     "trading_agent.portfolio",
-    "trading_agent.evaluation",
     "trading_agent.notify",
     "trading_agent.dashboard",
 ]
-forbidden_modules = ["trading_agent.execution"]
+forbidden_modules = ["trading_agent.execution", "trading_agent.ibkr"]
 
 [[tool.importlinter.contracts]]
 name = "Domain is pure"
@@ -134,8 +134,8 @@ forbidden_modules = [
     "trading_agent.agents",
     "trading_agent.risk",
     "trading_agent.execution",
+    "trading_agent.ibkr",
     "trading_agent.portfolio",
-    "trading_agent.evaluation",
     "trading_agent.notify",
     "trading_agent.dashboard",
     "trading_agent.scheduler",
@@ -151,4 +151,6 @@ forbidden_modules = [
     "trading_agent.agents",
     "trading_agent.notify",
     "trading_agent.scheduler",
+    "trading_agent.execution",
+    "trading_agent.ibkr",
 ]

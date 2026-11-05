@@ -9,7 +9,8 @@ import pytest
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
 
-from trading_agent import jobs, screen
+from trading_agent import briefing, pipeline, screen
+from trading_agent.contexts import AnalysisContext
 from trading_agent.data import calendars, ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
@@ -148,10 +149,10 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     cfg = settings.model_copy(
         update={"config_dir": ROOT / "config", "prompts_dir": ROOT / "prompts"}
     )
-    ctx = jobs.AnalysisContext.build(cfg, sessions, universe)
+    ctx = AnalysisContext.build(cfg, sessions, universe)
     ctx.runner = LlmRunner(ctx.models, DbAnalysisStore(sessions), lambda _: TestModel())
 
-    result = await jobs.analyse(ctx, ["AAA", "NOPE"], today=date(2026, 10, 6))
+    result = await pipeline.analyse(ctx, ["AAA", "NOPE"], today=date(2026, 10, 6))
     assert result.missing == ["NOPE"]
     (item,) = result.items
     assert item.technical_input.as_of == date(2026, 10, 5)
@@ -159,11 +160,11 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     assert all(o.analysis_id is not None and not o.cached for o in item.outcomes)
     assert result.cost_usd > 0
 
-    again = await jobs.analyse(ctx, ["AAA"], today=date(2026, 10, 6))
+    again = await pipeline.analyse(ctx, ["AAA"], today=date(2026, 10, 6))
     assert all(o.cached for o in again.items[0].outcomes)
     assert again.cost_usd == 0
 
-    text = await jobs.budget_text(ctx)
+    text = await briefing.budget_text(ctx)
     assert text.startswith("💸 LLM budget")
     assert "google:gemini-3.8-flash: " in text
 
@@ -196,15 +197,15 @@ async def test_candidates_skip_blocked_and_blacklisted(
     cfg = settings.model_copy(
         update={"config_dir": ROOT / "config", "prompts_dir": ROOT / "prompts"}
     )
-    ctx = jobs.AnalysisContext.build(cfg, sessions, universe)
+    ctx = AnalysisContext.build(cfg, sessions, universe)
     ctx.blacklist = frozenset({"CCC"})
 
     def passed(symbol: str, rs: float) -> screen.ScreenResult:
         return screen.ScreenResult(ids[symbol], symbol, "US", date(2026, 10, 5), True, "", {}, rs)
 
     found = [passed("CCC", 3.0), passed("BBB", 2.0), passed("AAA", 1.0)]
-    monkeypatch.setattr(jobs.screen, "check", lambda data, p, market: found)
-    results = await jobs.screen_stocks(ctx, "US", 5, now=NOW)
+    monkeypatch.setattr(pipeline.screen, "check", lambda data, p, market: found)
+    results = await pipeline.screen_stocks(ctx, "US", 5, now=NOW)
     assert [(r.symbol, r.passed, r.reason) for r in results] == [
         ("CCC", False, "blacklisted in risk.yaml"),
         ("BBB", False, "data quality: jump"),

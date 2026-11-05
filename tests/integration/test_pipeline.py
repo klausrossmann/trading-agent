@@ -18,7 +18,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from trading_agent import jobs, orchestrator, pipeline
+from trading_agent import orchestrator, pipeline
+from trading_agent.contexts import AnalysisContext
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
@@ -140,7 +141,7 @@ class Agents:
 
 async def _context(
     sessions: Sessions, settings: Settings, script: Agents
-) -> tuple[jobs.AnalysisContext, Universe]:
+) -> tuple[AnalysisContext, Universe]:
     universe = Universe(
         generated=date(2026, 10, 6),
         benchmarks={"US": "SPY"},
@@ -156,7 +157,7 @@ async def _context(
     cfg = settings.model_copy(
         update={"config_dir": ROOT / "config", "prompts_dir": ROOT / "prompts"}
     )
-    ctx = jobs.AnalysisContext.build(cfg, sessions, universe)
+    ctx = AnalysisContext.build(cfg, sessions, universe)
 
     async def no_pause(_: float) -> None:
         return None

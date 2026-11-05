@@ -1,4 +1,4 @@
-"""Company news (M9): headlines for held positions, triaged by a cheap model."""
+"""Company news: headlines per stock, sorted by the News agent."""
 
 from datetime import datetime
 from typing import Literal

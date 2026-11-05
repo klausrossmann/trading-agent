@@ -23,11 +23,12 @@ from functools import partial
 
 import structlog
 
-from trading_agent import jobs, pipeline, trading
+from trading_agent import pipeline, trading
 from trading_agent.agents.critic import CriticInput, CriticVerdict
 from trading_agent.calc.indicators import atr, bars_to_frame
 from trading_agent.calc.macro import MacroSnapshot
 from trading_agent.calc.stops import breakeven_stop, chandelier_stop
+from trading_agent.contexts import AnalysisContext
 from trading_agent.data import calendars
 from trading_agent.data.ingest import describe_error
 from trading_agent.db import book as book_repo
@@ -59,7 +60,7 @@ def _catalyst(signal: Step) -> str:
 
 
 async def news_signals(
-    ctx: jobs.AnalysisContext, market: Market | None, now: datetime
+    ctx: AnalysisContext, market: Market | None, now: datetime
 ) -> dict[int, Step]:
     """The latest buy signal per stock within `news.signal_hours`."""
     since = now - timedelta(hours=ctx.news.signal_hours)
@@ -69,7 +70,7 @@ async def news_signals(
 
 
 async def scan(
-    ctx: jobs.AnalysisContext,
+    ctx: AnalysisContext,
     market: Market | None = None,
     symbols: list[str] | None = None,
     today: date | None = None,
@@ -88,13 +89,13 @@ async def scan(
     steps: list[Step] = []
     if symbols is None:
         confidence = {k: float((x.output or {})["confidence"]) for k, x in signals.items()}
-        found = await jobs.screen_stocks(
-            ctx, market, await jobs.scan_size(ctx), held_symbols, now, confidence
+        found = await pipeline.screen_stocks(
+            ctx, market, await pipeline.scan_size(ctx), held_symbols, now, confidence
         )
         steps += [pipeline.screen_step(today, r) for r in found]
         symbols = [r.symbol for r in found if r.passed]
         sources = {r.symbol: r.source for r in found if r.passed}
-    analysed = await jobs.analyse(ctx, symbols, market, today=today)
+    analysed = await pipeline.analyse(ctx, symbols, market, today=today)
     items: list[Proposal] = []
     skipped: dict[str, str] = {}
     macros: dict[tuple[Market, date], MacroSnapshot] = {}
@@ -208,7 +209,7 @@ def summary(run: pipeline.ProposalRun, market: Market | None) -> str:
 
 
 async def scheduled_scan(
-    ctx: jobs.AnalysisContext, notifier: Notifier, market: Market
+    ctx: AnalysisContext, notifier: Notifier, market: Market
 ) -> pipeline.ProposalRun:
     run = await scan(ctx, market)
     await notifier.send(summary(run, market))

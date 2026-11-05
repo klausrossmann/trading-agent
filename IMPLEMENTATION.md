@@ -117,22 +117,25 @@ trading-agent/
 │   ├── settings.py              # pydantic-settings, loads .env + config/*.yaml
 │   ├── orchestrator.py          # the trading day: scan, place, monitor, end_of_day
 │   ├── news.py                  # news stages: buy signals before each scan, exits for held stocks
-│   ├── pipeline.py              # scan building blocks: agent inputs, proposals, ranking, steps
+│   ├── pipeline.py              # scan building blocks: screen + analysts, agent inputs, proposals, ranking, steps
 │   ├── screen.py                # every stock's screen verdict (pullback rules, or basic rules for news)
 │   ├── trading.py               # risk decision, book accounting, IBKR sync, /positions /pnl /exit
 │   ├── executor.py              # brackets, orders, fills, stop moves, exits (writes the step log)
+│   ├── contexts.py              # shared setup objects: data, book and analysis contexts, runtime state
+│   ├── jobs.py                  # data jobs (prices, macro, earnings, backfill, quality), tax report
+│   ├── briefing.py              # morning briefing, /status, /budget
 │   ├── domain/                  # pure models, no I/O
 │   ├── db/                      # SQLAlchemy models, repositories
-│   ├── data/                    # providers (Yahoo, IBKR, ECB, FRED, Finnhub/Yahoo news) + ingestion jobs
+│   ├── data/                    # providers (Yahoo, ECB, FRED, Finnhub/Yahoo news) + ingestion jobs
 │   ├── calc/                    # indicators, levels, stats, fees, sizing, stops
 │   ├── strategies/              # pullback rules (the screen), news thresholds
 │   ├── modules/                 # analysis modules: technical, earnings, news (the News agent)
 │   ├── llm/                     # model registry, budget guard, prompt loader, sanitizer, validators, fake model
 │   ├── agents/                  # proposer, critic
 │   ├── risk/                    # risk engine, kill switch, state
-│   ├── execution/               # order specs, IBKR adapter, reconciliation, order FSM
-│   ├── portfolio/               # ledger, P&L in EUR, tax report
-│   ├── evaluation/              # KPIs
+│   ├── execution/               # order specs, broker interface, order FSM, reconciliation (no I/O)
+│   ├── ibkr/                    # IB Gateway connection, market data, order adapter
+│   ├── portfolio/               # ledger, P&L in EUR, KPIs, tax report
 │   ├── notify/                  # telegram bot, message templates
 │   ├── scheduler.py             # job wiring
 │   └── dashboard/               # streamlit pages
@@ -527,7 +530,7 @@ As built, the agents have no tools at all: the orchestrator injects every fact i
 | Ranking | `pipeline.rank`, `pipeline.score` | Code only: confidence × R:R, best first. The rank step's summary shows the numbers. |
 | Step log | migration `0013`, `domain/steps.py`, `db/steps.py` | Every phase of every stock writes a step: the screen's values, each agent's answer (with the `analysis_id` of its input and attempts), the risk engine's checks, the order as sent to IBKR with IBKR's reply and error text (`orders.message` from the trade log), fills, stop moves, exits and cancels. A re-run of a scan replaces that day's scan steps. |
 | News agent | `modules/news.py`, `prompts/news/v1.md` (role `triage`), `news.py` | Replaces news triage and position review. One call reads up to 8 stocks (`batch`), each with its newest new headlines (`max_headlines`, as `<untrusted>` text) and, for a held stock, the position facts, thesis, invalidation and earlier sorted news. Out per stock: relevance per headline, `action` (`buy` only for a stock not held and only with a `high` headline; `exit` only for a held stock; else `none`), confidence and reason. |
-| News buys | `news.scan_news`, jobs `news_eu`/`news_us` (open − 75 min); `orchestrator.scan`, `jobs.screen_stocks`, `screen.news_check` | Every stock of the market not held. A `buy` ≥ `buy_confidence` (0.6) is stored as a passed `news` step and sends 📰. The next scan takes signals of the last `signal_hours` (24): such a stock only needs the basic rules (fresh bars, price, liquidity, regime, earnings buffer), at most `max_candidates` (3) per scan by confidence; the pullback verdict wins if it passed too. The proposer and critic get the news as untrusted `catalyst` (proposer prompt v3); the proposal's `strategy` is `news`. `place` places at most `max_trades_per_day` (1) news trades a day across both markets; the others get a stopped risk step. |
+| News buys | `news.scan_news`, jobs `news_eu`/`news_us` (open − 75 min); `orchestrator.scan`, `pipeline.screen_stocks`, `screen.news_check` | Every stock of the market not held. A `buy` ≥ `buy_confidence` (0.6) is stored as a passed `news` step and sends 📰. The next scan takes signals of the last `signal_hours` (24): such a stock only needs the basic rules (fresh bars, price, liquidity, regime, earnings buffer), at most `max_candidates` (3) per scan by confidence; the pullback verdict wins if it passed too. The proposer and critic get the news as untrusted `catalyst` (proposer prompt v3); the proposal's `strategy` is `news`. `place` places at most `max_trades_per_day` (1) news trades a day across both markets; the others get a stopped risk step. |
 | News exits | `news.watch_positions`, job `news_positions` (every 30 min, 07–22 h, weekdays) | Held stocks with new headlines, or (once a day) a report within 3 sessions. An `exit` ≥ `exit_confidence` (0.7) sends a market sell through the executor (`exit_reason` `news`, 🚪); below it 🧐 advice with `/exit SYMBOL`; without a gateway connection an error step and 🔌. Every verdict on a held stock is a `news` step. |
 | News sources | `data/news.py` | `FinnhubNews` (US, `FINNHUB_API_KEY`, 1.1 s between requests for the free tier's 60 a minute) and `YahooNews` (EU, `yfinance` ≥ 1.8 `get_news`, latest headlines only, filtered to the look-back). A failing request is logged and skipped. |
 | Settings | `config/strategies.yaml` `news:`, `strategies/news.py` | `buy_confidence`, `exit_confidence`, `max_candidates`, `max_trades_per_day`, `signal_hours`, `lookback_days`, `max_headlines`, `batch` |
@@ -1183,3 +1186,4 @@ Why: it was unclear which orders really existed at IBKR and which only in a simu
 | 7 | News | One News agent replaces triage and review; news triggers buys (via the next scan, basic rules, at most 1 news trade a day) and exits (market sell at confidence ≥ 0.7, advice below) | Supersedes 19.2 #14; Finnhub for US, Yahoo for EU (`yfinance` ≥ 1.8) |
 | 8 | Markets | US and EU in paper, one paper budget (EUR 15,000) | Supersedes the sleeves of 19.1 |
 | 9 | Start | The agent and the gateway start by hand (`make up`), never on boot | `restart: "no"` in `compose.yaml` |
+| 10 | Code layout | All IBKR code in one package `ibkr/` (`link.py` was `broker.py`, `market.py` was `data/ibkr.py`, `orders.py` was `execution/ibkr.py`); `jobs.py` split into `contexts.py`, `jobs.py` (data jobs, tax report) and `briefing.py`, with the screen and analysts moved to `pipeline.py`; `evaluation/kpi.py` became `portfolio/kpi.py`; `reports.py` merged into `jobs.py` | Older sections name the old paths. Map of the code: [CODE.md](CODE.md) |

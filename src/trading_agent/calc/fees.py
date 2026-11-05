@@ -1,4 +1,5 @@
-"""IBKR commission model (Tiered/Fixed) per market, for fee checks and simulated fills."""
+"""IBKR commission model (Tiered/Fixed) per market, for the risk engine's fee check and the
+book's fee estimates."""
 
 from decimal import ROUND_UP, Decimal
 from typing import Literal

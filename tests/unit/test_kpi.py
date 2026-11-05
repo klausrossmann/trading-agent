@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from trading_agent.domain.trading import Trade
-from trading_agent.evaluation.kpi import trade_stats
+from trading_agent.portfolio.kpi import trade_stats
 
 
 def trade(pnl: float | None, r: float | None = None, fees: float = 1.0) -> Trade:

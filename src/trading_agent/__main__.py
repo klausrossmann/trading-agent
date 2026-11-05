@@ -11,7 +11,7 @@ from trading_agent.settings import Settings
 
 if TYPE_CHECKING:
     from trading_agent.data.ingest import Sessions
-    from trading_agent.jobs import SymbolAnalysis
+    from trading_agent.pipeline import SymbolAnalysis
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -86,15 +86,17 @@ def backfill(market: Literal["US", "EU"] | None = MarketOption) -> None:
     import httpx
 
     from trading_agent import jobs
+    from trading_agent.contexts import DataContext
+    from trading_agent.data.ingest import IngestResult
     from trading_agent.data.universe import load_universe
     from trading_agent.settings import load_data_config
 
     settings = _settings()
 
-    async def _run(sessions: "Sessions") -> list[jobs.IngestResult]:
+    async def _run(sessions: "Sessions") -> list[IngestResult]:
         async with httpx.AsyncClient() as http:
             cfg = load_data_config(settings.config_dir)
-            ctx = jobs.DataContext.build(settings, cfg, sessions, http)
+            ctx = DataContext.build(settings, cfg, sessions, http)
             return await jobs.backfill(ctx, load_universe(settings.config_dir), market)
 
     results = _with_db(settings, _run)
@@ -166,16 +168,17 @@ def analyse(
     market: Literal["US", "EU"] | None = MarketOption,
     top: int | None = TopOption,
 ) -> None:
-    """LLM technical and earnings analysis of today's top baseline setups (or given symbols)."""
-    from trading_agent import jobs, telemetry
+    """LLM technical and earnings analysis of today's top screened setups (or given symbols)."""
+    from trading_agent import pipeline, telemetry
+    from trading_agent.contexts import AnalysisContext
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
 
-    async def _run(sessions: "Sessions") -> jobs.ScanResult:
-        ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
+    async def _run(sessions: "Sessions") -> pipeline.ScanResult:
+        ctx = AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span("cli analyse", tags=("cli",)):
-            return await jobs.analyse(ctx, symbols or None, market, top)
+            return await pipeline.analyse(ctx, symbols or None, market, top)
 
     result = _with_db(settings, _run)
     for item in result.items:
@@ -210,13 +213,14 @@ def propose(
     market: Literal["US", "EU"] | None = MarketOption,
 ) -> None:
     """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
-    from trading_agent import jobs, orchestrator, pipeline, telemetry
+    from trading_agent import orchestrator, pipeline, telemetry
+    from trading_agent.contexts import AnalysisContext
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> pipeline.ProposalRun:
-        ctx = jobs.AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
+        ctx = AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span(f"cli propose {market or 'all'}", tags=("cli",)):
             return await orchestrator.scan(ctx, market, symbols or None)
 
@@ -234,12 +238,12 @@ def ibkr_check(
     ),
 ) -> None:
     """Check the IB Gateway: account, positions, contract ids, bars vs. Yahoo, quotes, ticks."""
-    from trading_agent import broker
+    from trading_agent.ibkr import link as gateway
 
     settings = _settings()
     lines = _with_db(
         settings,
-        lambda s: broker.check(settings, s, symbols or ["AAPL", "SAP.DE"], order_test),
+        lambda s: gateway.check(settings, s, symbols or ["AAPL", "SAP.DE"], order_test),
     )
     typer.echo("\n".join(lines))
 
@@ -248,17 +252,19 @@ def ibkr_check(
 def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) -> None:
     """Run today's placement for MARKET now, at IBKR. Safe to repeat: proposals with a bracket
     are rejected as already pending, and no orderRef is sent twice."""
-    from trading_agent import broker, jobs, orchestrator, scheduler
+    from trading_agent import orchestrator, scheduler
+    from trading_agent.contexts import BookContext
     from trading_agent.controls import ControlCenter
     from trading_agent.data.universe import load_universe
+    from trading_agent.ibkr import link as gateway
     from trading_agent.notify.telegram import LogNotifier
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> orchestrator.Placement:
-        link = broker.BrokerLink(settings, LogNotifier())
+        link = gateway.BrokerLink(settings, LogNotifier())
         try:
-            book = jobs.BookContext.load(
+            book = BookContext.load(
                 settings.config_dir,
                 sessions,
                 load_universe(settings.config_dir),
@@ -292,16 +298,15 @@ def tax_report(
     output: Path | None = OutputOption,
 ) -> None:
     """Yearly tax helper: share sales in EUR at trade-day ECB rates (not tax advice)."""
-    from trading_agent import jobs, reports
+    from trading_agent import jobs
+    from trading_agent.contexts import BookContext
     from trading_agent.data.universe import load_universe
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> str:
-        ctx = jobs.BookContext.load(
-            settings.config_dir, sessions, load_universe(settings.config_dir)
-        )
-        return await reports.tax_report(ctx, year, book)
+        ctx = BookContext.load(settings.config_dir, sessions, load_universe(settings.config_dir))
+        return await jobs.tax_report(ctx, year, book)
 
     text = _with_db(settings, _run)
     typer.echo(text)

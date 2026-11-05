@@ -1,5 +1,6 @@
-"""Strategy "pullback in an uptrend" (IMPLEMENTATION.md 6.2): the screen's rules and the trade
-management of open positions. All functions only look at data up to the signal bar.
+"""Strategy "pullback in an uptrend" (IMPLEMENTATION.md 6.2): the screen's rules and the
+parameters of trade management (entry validity, breakeven, time stop, trailing stop). All
+functions only look at data up to the signal bar.
 """
 
 from collections.abc import Iterable

@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from trading_agent.calc.fees import FeeSchedule, order_fees
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars
-from trading_agent.data.ibkr import MarketInfo
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
@@ -33,6 +32,7 @@ from trading_agent.domain.risk import Mode, PortfolioState, RiskDecision
 from trading_agent.domain.steps import Step
 from trading_agent.domain.trading import Book, book_for_mode
 from trading_agent.executor import Executor
+from trading_agent.ibkr.market import MarketInfo
 from trading_agent.notify import messages
 from trading_agent.notify.telegram import Command, Notifier
 from trading_agent.portfolio import book as accounting

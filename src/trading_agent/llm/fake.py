@@ -1,7 +1,7 @@
 """Offline stand-in for the LLM providers (`LLM_FAKE=true`, compose.dev.yaml).
 
-Deterministic answers that follow each prompt's rules, so the whole chain (scan, agents, risk
-engine, simulator) runs on a laptop without API keys. Never for real decisions.
+Deterministic answers that follow each prompt's rules, so the whole chain (news, scan, agents,
+risk engine) runs on a laptop without API keys. Never for real decisions.
 """
 
 import json

@@ -9,12 +9,12 @@ from eventkit import Event
 from ib_async import IB, Contract, Stock
 from pydantic import SecretStr
 
-from trading_agent import broker
-from trading_agent.data import ibkr
 from trading_agent.domain.broker import BrokerPosition
 from trading_agent.domain.market import Instrument
-from trading_agent.execution.ibkr import IbkrBroker
 from trading_agent.execution.reconcile import reconcile
+from trading_agent.ibkr import link as gateway
+from trading_agent.ibkr import market as ibkr
+from trading_agent.ibkr.orders import IbkrBroker
 from trading_agent.settings import Settings
 
 US = Instrument(
@@ -217,10 +217,10 @@ async def test_link_alerts_once_after_ten_minutes_and_on_recovery() -> None:
     fake, inbox, now = FakeIB(), Inbox(), [0.0]
     connected: list[str] = []
 
-    async def on_connect(link: broker.BrokerLink) -> None:
+    async def on_connect(link: gateway.BrokerLink) -> None:
         connected.append(link.status())
 
-    link = broker.BrokerLink(
+    link = gateway.BrokerLink(
         Settings(db_password=SecretStr("x")),
         inbox,
         ib=_ib(fake),
@@ -237,20 +237,20 @@ async def test_link_alerts_once_after_ten_minutes_and_on_recovery() -> None:
     assert await link.step() == 300  # backoff capped
     now[0] = 900.0
     await link.step()
-    assert inbox.sent == [broker.messages.gateway_down_alert(11)]
+    assert inbox.sent == [gateway.messages.gateway_down_alert(11)]
 
     fake.connect_ok = True
     now[0] = 1260.0
     assert await link.step() == 30
     assert inbox.sent[-1] == "🔌 IB Gateway connected again after 21 min"
     assert connected == ["connected (ib-gateway:4004)"]
-    assert fake.data_type == broker.DELAYED
+    assert fake.data_type == gateway.DELAYED
     assert await link.step() == 30  # stays connected, no new messages
     assert len(inbox.sent) == 2
 
 
 async def test_reconcile_job_skips_without_a_connection() -> None:
-    assert await broker.reconcile_positions(None, Inbox()) is None
+    assert await gateway.reconcile_positions(None, Inbox()) is None
 
 
 @pytest.mark.parametrize(
@@ -269,5 +269,5 @@ def test_gateway_mode_from_the_account_type(
     fake = FakeIB()
     fake.connected = connected
     fake.accounts = accounts
-    link = broker.BrokerLink(Settings(db_password=SecretStr("x")), Inbox(), ib=_ib(fake))
+    link = gateway.BrokerLink(Settings(db_password=SecretStr("x")), Inbox(), ib=_ib(fake))
     assert link.mode() == mode

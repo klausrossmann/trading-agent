@@ -340,12 +340,12 @@ class RiskDecisionRow(Base):
 
 
 class EquityDailyRow(Base):
-    """A book sleeve's equity after a session close; loss limits and drawdown read it."""
+    """The account's equity after a session close; loss limits and drawdown read it."""
 
     __tablename__ = "equity_daily"
 
     book: Mapped[str] = mapped_column(Text, primary_key=True)
-    sleeve: Mapped[str] = mapped_column(Text, primary_key=True)  # markets, e.g. "US" or "EU"
+    sleeve: Mapped[str] = mapped_column(Text, primary_key=True)  # the account's markets, "US,EU"
     date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
     equity_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     cash_eur: Mapped[Decimal] = mapped_column(Numeric(12, 2))
@@ -353,7 +353,7 @@ class EquityDailyRow(Base):
 
 
 class ReportRow(Base):
-    """Rendered Markdown reports (weekly, tax); a re-run of the same period replaces it."""
+    """Rendered Markdown reports (tax); a re-run of the same period replaces it."""
 
     __tablename__ = "reports"
 

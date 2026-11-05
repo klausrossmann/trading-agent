@@ -1,1 +1,1 @@
-"""Outbound notifications: heartbeat now, Telegram from M4."""
+"""Heartbeat pings, the Telegram bot and all message texts."""

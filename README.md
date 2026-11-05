@@ -38,16 +38,16 @@ Details: [MAS-DESIGN.md](MAS-DESIGN.md) (architecture, communication, shared mem
 
 | Phase | What runs | Moves on when |
 |---|---|---|
-| Build (done in the repo) | Data, calculators, baseline strategy, AI agents, risk engine, simulator, Telegram, dashboard, reports | Each milestone's "done when" is met |
-| Paper trading (next) | Fully autonomous on the IBKR **paper** account, with a €1,000 budget (US) and a €5,000 notional budget (Germany), real fee modelling | ≥ 3 months, ≥ 50 closed trades, positive after all costs, beats the rule-based baseline |
+| Build (done in the repo) | Data, calculators, screen, AI agents, News agent, risk engine, IBKR orders, Telegram, dashboard | Each milestone's "done when" is met |
+| Paper trading (next) | Fully autonomous on the IBKR **paper** account, US and Germany, one notional budget of €15,000, real fee modelling | ≥ 3 months, ≥ 50 closed trades, positive after all costs (fees and AI) |
 | Live | Fully autonomous with **€1,000 of real money**, US stocks only, lean LLM budget | 3 months in line with paper results |
 | Scale | More capital, EU stocks live, later options (debit spreads) | Same KPIs hold |
 
 Paper and live use the same code, risk limits and fee model. Live mode needs three switches at once: `APP_MODE=live`, the gateway in live mode, and a confirmation code sent via Telegram.
 
-## Status (2026-10-05)
+## Status (2026-11-05)
 
-All milestones up to M9 and the M10 preparation are built and tested. The stack runs on the Zenbook with the market data loaded and the IBKR paper account connected (2026-10-05). The remaining checks are in [RUNNING.md](RUNNING.md) section 6.
+All milestones up to M9 and the M10 preparation are built and tested. In November 2026 the system was simplified: every order goes to IBKR or nowhere (no simulator, backtest or comparison books), the trading day lives in one `orchestrator.py`, a step log shows what happened to each stock, code ranks the proposals, and a News agent triggers buys and exits ([IMPLEMENTATION.md](IMPLEMENTATION.md) 19.4). The update on the Zenbook and the remaining checks are in [ZENBOOK.md](ZENBOOK.md) and [RUNNING.md](RUNNING.md) section 6. The milestone table below is the build history.
 
 | Milestone | State |
 |---|---|
@@ -66,8 +66,11 @@ All milestones up to M9 and the M10 preparation are built and tested. The stack 
 ## Documentation
 
 - [HOW-IT-WORKS.md](HOW-IT-WORKS.md): **start here**. The system in plain language: workflow, buy and sell rules, agents, safety nets, every setting.
-- [RUNNING.md](RUNNING.md): **operating the app**: where to find what (dashboard, Telegram, logs), starting, testing, updating, troubleshooting.
-- [MAS-DESIGN.md](MAS-DESIGN.md): the multi-agent system design: agent inventory, communication, shared memory, coordination, trust, evaluation, code map.
+- [RUNTIME.md](RUNTIME.md): **what happens once the agent runs, and when**: start-up, background tasks, the trading day hour by hour, each stage in detail, holidays, late starts, outages.
+- [ZENBOOK.md](ZENBOOK.md): **running it on the Zenbook**: accounts and keys, machine setup, installation, first start, daily use, updates, backups.
+- [RUNNING.md](RUNNING.md): **operating the app**: where to find what (dashboard, Telegram, logs), starting, testing, troubleshooting.
+- [CODE.md](CODE.md): **the code**: what each folder and file does, how one stock flows through it, the rules the code follows, where to change what.
+- [MAS-DESIGN.md](MAS-DESIGN.md): the multi-agent system design: agent inventory, communication, shared memory, coordination, trust, evaluation.
 - [OBSERVABILITY.md](OBSERVABILITY.md): LLM observability. Every call with its messages in Postgres; every run as an OpenTelemetry trace in Langfuse.
 - [CONCEPT.md](CONCEPT.md): why it's designed this way (broker choice, risk limits, costs, evaluation, roadmap, research).
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): how it's built (architecture, data model, risk engine, deployment, runbook, build plan).
@@ -83,7 +86,7 @@ make test                # unit tests
 make test-db             # DB tests against a throwaway Postgres container
 ```
 
-On the runtime host (step by step, with explanations: [RUNNING.md](RUNNING.md)):
+On the runtime host (step by step, with explanations: [ZENBOOK.md](ZENBOOK.md)):
 
 ```sh
 make secrets                              # create database password files in secrets/

@@ -1,4 +1,4 @@
-"""Risk decisions per proposal and daily equity per book sleeve."""
+"""Risk decisions per proposal and the account's daily equity."""
 
 from collections.abc import Sequence
 from datetime import date, datetime

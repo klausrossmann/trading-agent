@@ -327,12 +327,12 @@ Natural next steps for the showcase: a macro-regime agent (today the macro snaps
 | Role prompts | `prompts/<role>/v<N>.md` |
 | Model registry, budget | `config/models.yaml`, `src/trading_agent/llm/{models,budget}.py` |
 | Untrusted text | `src/trading_agent/llm/sanitize.py` |
-| Screen | `src/trading_agent/strategies/pullback.py` (rules), `src/trading_agent/screen.py` (every stock's verdict, selection), `src/trading_agent/jobs.py` (`screen_stocks`: drops blocked, blacklisted and held symbols) |
+| Screen | `src/trading_agent/strategies/pullback.py` (rules), `src/trading_agent/screen.py` (every stock's verdict, selection), `src/trading_agent/pipeline.py` (`screen_stocks`: drops blocked, blacklisted and held symbols) |
 | Step log | `src/trading_agent/domain/steps.py`, `src/trading_agent/db/steps.py`; written by `orchestrator.py` and `executor.py` |
 | Macro context | `src/trading_agent/calc/macro.py`, `src/trading_agent/pipeline.py` (`macro_context`) |
 | Risk engine | `src/trading_agent/risk/engine.py`, `config/risk.yaml` |
 | Executor | `src/trading_agent/executor.py`, `src/trading_agent/trading.py` (risk decision, book, IBKR sync) |
-| Reconciler | `src/trading_agent/execution/reconcile.py`, `src/trading_agent/broker.py` |
+| Reconciler | `src/trading_agent/execution/reconcile.py`, `src/trading_agent/ibkr/link.py` |
 | Shared control state | `src/trading_agent/controls.py`, `src/trading_agent/risk/kill_switch.py` |
 | Shared memory | `src/trading_agent/db/models.py` and the repositories in `src/trading_agent/db/` |
 | Human channel | `src/trading_agent/notify/telegram.py`, `src/trading_agent/journal.py` |

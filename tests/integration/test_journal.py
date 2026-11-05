@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from trading_agent import jobs, journal
+from trading_agent import journal
+from trading_agent.contexts import BookContext
 from trading_agent.data import ingest
 from trading_agent.data.ingest import Sessions
 from trading_agent.data.universe import Universe
@@ -183,7 +184,7 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
             ),
         )
         await book_repo.save_decision(s, aaa.id, rejected, datetime(2026, 10, 5, 14, tzinfo=UTC))
-    book = jobs.BookContext.load(ROOT / "config", sessions, universe)
+    book = BookContext.load(ROOT / "config", sessions, universe)
     text = messages.render_digest(await journal.build_digest(book, DAY))
     assert text.splitlines() == [
         "🌙 Evening digest Mon 5 Oct",

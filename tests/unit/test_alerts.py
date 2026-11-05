@@ -9,7 +9,8 @@ import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from trading_agent import jobs
+from trading_agent import briefing, jobs
+from trading_agent.contexts import DataContext, RuntimeState
 from trading_agent.data import ingest
 from trading_agent.data.quality import QualityIssue
 from trading_agent.data.series import EcbProvider
@@ -44,9 +45,9 @@ async def test_quality_alert_only_for_newly_blocked(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(ingest, "run_quality", fake_quality)
     notifier = FakeNotifier()
-    state = jobs.RuntimeState(mode="paper", started_at=datetime.now(UTC))
+    state = RuntimeState(mode="paper", started_at=datetime.now(UTC))
     async with httpx.AsyncClient() as http:
-        ctx = jobs.DataContext(
+        ctx = DataContext(
             sessions=None,  # pyright: ignore[reportArgumentType]
             cfg=load_data_config(ROOT / "config"),
             yahoo=YahooProvider(),
@@ -91,4 +92,4 @@ async def test_failed_job_sends_alert() -> None:
     ],
 )
 def test_trading_day(day: date, expected: bool) -> None:
-    assert jobs.is_trading_day(day) is expected
+    assert briefing.is_trading_day(day) is expected

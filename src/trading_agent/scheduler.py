@@ -14,16 +14,19 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import broker, jobs, journal, news, orchestrator, telemetry, trading
+from trading_agent import jobs, journal, news, orchestrator, telemetry, trading
+from trading_agent.briefing import briefing_text, budget_text, morning_briefing, status_text
+from trading_agent.contexts import AnalysisContext, BookContext, DataContext, RuntimeState
 from trading_agent.controls import ControlCenter
 from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import describe_error
+from trading_agent.data.ingest import Sessions, describe_error
 from trading_agent.data.news import FinnhubNews, NewsSource, YahooNews
 from trading_agent.data.universe import Universe
 from trading_agent.db import audit
 from trading_agent.db.session import create_engine, session_factory
 from trading_agent.domain.trading import book_for_mode
 from trading_agent.executor import Executor
+from trading_agent.ibkr import link as gateway
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.modules import news as news_module
 from trading_agent.modules.news import NewsAgent
@@ -45,7 +48,7 @@ JobFn = Callable[[], Awaitable[object]]
 
 
 async def _heartbeat(
-    http: httpx.AsyncClient, url: SecretStr | None, state: jobs.RuntimeState | None
+    http: httpx.AsyncClient, url: SecretStr | None, state: RuntimeState | None
 ) -> None:
     ok = await heartbeat.ping(http, url)
     if state is not None and url is not None and url.get_secret_value():
@@ -57,7 +60,7 @@ def build_scheduler(
     settings: Settings,
     http: httpx.AsyncClient,
     job_fns: Mapping[str, JobFn] | None = None,
-    state: jobs.RuntimeState | None = None,
+    state: RuntimeState | None = None,
 ) -> AsyncIOScheduler:
     job_fns = job_fns or {}
     if unknown := set(schedule.jobs) - set(job_fns):
@@ -131,14 +134,14 @@ def plan_session_jobs(
 
 
 def job_functions(
-    data: jobs.DataContext,
-    book: jobs.BookContext,
+    data: DataContext,
+    book: BookContext,
     notifier: Notifier,
-    analysis: jobs.AnalysisContext,
-    link: broker.BrokerLink | None = None,
+    analysis: AnalysisContext,
+    link: gateway.BrokerLink | None = None,
     center: ControlCenter | None = None,
     trade: trading.TradingContext | None = None,
-    expected: broker.Expected | None = None,
+    expected: gateway.Expected | None = None,
     news_ctx: news.NewsContext | None = None,
 ) -> dict[str, JobFn]:
     halt = center.halt if center else None
@@ -148,14 +151,14 @@ def job_functions(
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
         "evening_digest": partial(journal.evening_digest, book, notifier),
-        "briefing": partial(jobs.morning_briefing, book, data.state, notifier),
+        "briefing": partial(morning_briefing, book, data.state, notifier),
         "scan_eu": telemetry.traced(
             "scan_eu", partial(orchestrator.scheduled_scan, analysis, notifier, "EU")
         ),
         "scan_us": telemetry.traced(
             "scan_us", partial(orchestrator.scheduled_scan, analysis, notifier, "US")
         ),
-        "reconcile": partial(broker.reconcile_positions, link, notifier, expected, halt),
+        "reconcile": partial(gateway.reconcile_positions, link, notifier, expected, halt),
     }
     if trade is not None:
         fns |= {
@@ -188,7 +191,7 @@ def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
 def news_context(
     settings: Settings,
     trade: trading.TradingContext,
-    analysis: jobs.AnalysisContext,
+    analysis: AnalysisContext,
     http: httpx.AsyncClient,
 ) -> news.NewsContext:
     key = settings.finnhub_api_key
@@ -210,11 +213,11 @@ def news_context(
 
 def trading_context(
     settings: Settings,
-    sessions: jobs.Sessions,
-    book: jobs.BookContext,
+    sessions: Sessions,
+    book: BookContext,
     center: ControlCenter,
     notifier: Notifier,
-    link: broker.BrokerLink,
+    link: gateway.BrokerLink,
 ) -> trading.TradingContext:
     """Every order goes to IBKR through `link`; there is no other broker."""
     mode = settings.app_mode
@@ -256,16 +259,16 @@ def alert_on_job_failures(
 
 
 def commands(
-    state: jobs.RuntimeState,
-    sessions: jobs.Sessions,
-    book: jobs.BookContext,
-    analysis: jobs.AnalysisContext | None = None,
+    state: RuntimeState,
+    sessions: Sessions,
+    book: BookContext,
+    analysis: AnalysisContext | None = None,
 ) -> dict[str, Command]:
     async def status(_: list[str]) -> str:
-        return await jobs.status_text(state, sessions)
+        return await status_text(state, sessions)
 
     async def briefing(_: list[str]) -> str:
-        return await jobs.briefing_text(book, state, datetime.now(UTC).date())
+        return await briefing_text(book, state, datetime.now(UTC).date())
 
     out = {
         "status": Command("mode, heartbeat, data and next jobs", status),
@@ -274,7 +277,7 @@ def commands(
     if analysis is not None:
 
         async def budget(_: list[str]) -> str:
-            return await jobs.budget_text(analysis)
+            return await budget_text(analysis)
 
         out["budget"] = Command("LLM spend this month and the budget mode", budget)
     return out
@@ -301,18 +304,18 @@ async def serve(
             updated=sync.updated,
             deactivated=sync.removed,
         )
-        state = jobs.RuntimeState(
+        state = RuntimeState(
             mode=settings.app_mode,
             started_at=datetime.now(UTC),
             tracing=telemetry.state(),
             trace_ui_url=settings.trace_ui_url,
             dashboard_ui_url=settings.dashboard_ui_url,
         )
-        book = jobs.BookContext.load(settings.config_dir, sessions, universe, settings.app_mode)
-        analysis = jobs.AnalysisContext.build(settings, sessions, universe)
+        book = BookContext.load(settings.config_dir, sessions, universe, settings.app_mode)
+        analysis = AnalysisContext.build(settings, sessions, universe)
         review = journal.Review(sessions)
         center = ControlCenter(sessions, settings.app_mode)
-        link = broker.BrokerLink(settings, LogNotifier())
+        link = gateway.BrokerLink(settings, LogNotifier())
         center.gateway_mode = link.mode
         state.gateway = link.status
         trade = trading_context(settings, sessions, book, center, LogNotifier(), link)
@@ -337,7 +340,7 @@ async def serve(
         expected = partial(trading.expected_positions, trade)
         center.on_halt = partial(trading.cancel_entries, trade, "halted")
         link.on_connect = partial(
-            broker.on_connect,
+            gateway.on_connect,
             sessions=sessions,
             notifier=notifier,
             expected=expected,
@@ -345,7 +348,7 @@ async def serve(
         )
         link_task = asyncio.create_task(link.run(stop))
         async with httpx.AsyncClient() as http:
-            ctx = jobs.DataContext.build(settings, data_cfg, sessions, http, notifier, state)
+            ctx = DataContext.build(settings, data_cfg, sessions, http, notifier, state)
             ctx.ibkr = link.prices
             scheduler = build_scheduler(
                 schedule,

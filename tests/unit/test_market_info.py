@@ -7,8 +7,8 @@ from typing import Any, cast
 
 from ib_async import IB
 
-from trading_agent.data.ibkr import MarketInfo
 from trading_agent.domain.market import Instrument
+from trading_agent.ibkr.market import MarketInfo
 
 D = Decimal
 SAP = Instrument(

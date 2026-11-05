@@ -1,27 +1,169 @@
-"""Building blocks of the scan stage (the flow itself is in orchestrator.py): the inputs the
-agents get, how their answers become a proposal, the ranking, and each stock's steps."""
+"""Building blocks of the scan stage (the flow itself is in orchestrator.py): the screen and
+the two analysts per stock, the inputs the agents get, how their answers become a proposal,
+the ranking, and each stock's steps."""
 
 import uuid
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from trading_agent import jobs, screen
+import structlog
+
+from trading_agent import screen
 from trading_agent.agents.critic import CriticVerdict, PlanView
 from trading_agent.agents.proposer import Holding, ProposerInput, ProposerOutput
 from trading_agent.calc.indicators import bars_to_frame
 from trading_agent.calc.macro import FRED_SERIES, MacroSnapshot, macro_snapshot
+from trading_agent.contexts import AnalysisContext
+from trading_agent.data import ingest
 from trading_agent.db import market as market_repo
 from trading_agent.db import trades as trades_repo
 from trading_agent.domain.market import Market
 from trading_agent.domain.proposals import Proposal
 from trading_agent.domain.steps import Step, StepName, StepStatus
+from trading_agent.llm.budget import BudgetMode
 from trading_agent.llm.runner import Outcome
-from trading_agent.modules.technical import TechnicalAssessment
+from trading_agent.modules import earnings as earnings_module
+from trading_agent.modules import technical as technical_module
+from trading_agent.modules.earnings import EarningsAssessment, EarningsInput
+from trading_agent.modules.history import load_history
+from trading_agent.modules.technical import TechnicalAssessment, TechnicalInput
 from trading_agent.strategies import pullback
 
+log = structlog.get_logger(__name__)
+
 BUY_RATINGS = ("buy", "strong_buy")
+
+
+# --- screen and analysts ---
+
+
+@dataclass(frozen=True)
+class SymbolAnalysis:
+    symbol: str
+    instrument_id: int
+    technical_input: TechnicalInput
+    technical: Outcome[TechnicalAssessment]
+    earnings_input: EarningsInput
+    earnings: Outcome[EarningsAssessment]
+
+    @property
+    def outcomes(self) -> tuple[Outcome[Any], ...]:
+        return (self.technical, self.earnings)
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    mode: BudgetMode
+    items: list[SymbolAnalysis]
+    missing: list[str]  # requested symbols without stored bars
+
+    @property
+    def cost_usd(self) -> float:
+        return sum(o.cost_usd for i in self.items for o in i.outcomes)
+
+
+async def screen_stocks(
+    ctx: AnalysisContext,
+    market: Market | None,
+    top: int,
+    held: Collection[str] = (),
+    now: datetime | None = None,
+    signals: Mapping[int, float] | None = None,
+) -> list[screen.ScreenResult]:
+    """Every active stock with the screen's verdict; the passed ones (best relative strength
+    first, at most `top`) are analysed. Blocked by the quality checks, blacklisted in risk.yaml
+    or already held means stopped. Stocks with a news buy signal (`signals`: instrument id ->
+    confidence) only need the basic rules; at most `news.max_candidates` of them."""
+    data = await screen.load_market_data(ctx.sessions, ctx.benchmarks, ctx.pullback)
+    issues = await ingest.run_quality(
+        ctx.sessions, ctx.quality, now=now or datetime.now(UTC), market=market
+    )
+    excluded = {s: "blacklisted in risk.yaml" for s in ctx.blacklist}
+    for i in issues:
+        if i.blocking:
+            excluded[i.yahoo_symbol] = f"data quality: {i.check}"
+    found = screen.select(screen.check(data, ctx.pullback, market), excluded, held, top)
+    if not signals:
+        return found
+    from_news = screen.news_check(data, ctx.pullback, signals, market)
+    return screen.merge(found, screen.select(from_news, excluded, held, ctx.news.max_candidates))
+
+
+async def scan_size(ctx: AnalysisContext) -> int:
+    scan = ctx.models.scan
+    return scan.candidates_lean if await ctx.runner.mode() == "lean" else scan.candidates
+
+
+async def analyse(
+    ctx: AnalysisContext,
+    symbols: list[str] | None = None,
+    market: Market | None = None,
+    top: int | None = None,
+    today: date | None = None,
+) -> ScanResult:
+    """Technical and earnings analysis for the given symbols, or for today's top setups."""
+    mode = await ctx.runner.mode()
+    if symbols is None:
+        found = await screen_stocks(ctx, market, top or await scan_size(ctx))
+        symbols = [r.symbol for r in found if r.passed]
+    async with ctx.sessions() as s:
+        instruments = await market_repo.active_instruments(s)
+    by_symbol = {i.yahoo_symbol: k for k, i in instruments.items()}
+    today = today or datetime.now(UTC).date()
+    items: list[SymbolAnalysis] = []
+    missing: list[str] = []
+    for symbol in symbols:
+        inst_id = by_symbol.get(symbol)
+        history = (
+            await load_history(
+                ctx.sessions, inst_id, today, ctx.benchmarks.get(instruments[inst_id].market)
+            )
+            if inst_id is not None
+            else None
+        )
+        if history is None:
+            missing.append(symbol)
+            continue
+        t_in = technical_module.compute(
+            history.instrument, history.frame, history.benchmark_close, ctx.rules
+        )
+        t_out = await ctx.runner.run(
+            ctx.technical,
+            t_in,
+            instrument_id=history.instrument_id,
+            as_of=history.as_of,
+            subject=symbol,
+        )
+        e_in = earnings_module.compute(
+            history.instrument, history.frame, history.events, ctx.holding_sessions
+        )
+        e_out = await ctx.runner.run(
+            ctx.earnings,
+            e_in,
+            instrument_id=history.instrument_id,
+            as_of=history.as_of,
+            subject=symbol,
+        )
+        items.append(SymbolAnalysis(symbol, history.instrument_id, t_in, t_out, e_in, e_out))
+    result = ScanResult(mode, items, missing)
+    outcomes = [o for i in items for o in i.outcomes]
+    log.info(
+        "scan.done",
+        symbols=len(items),
+        analyses=len(outcomes),
+        cached=sum(1 for o in outcomes if o.cached),
+        statuses=dict(Counter(o.status for o in outcomes)),
+        cost_usd=round(result.cost_usd, 6),
+        budget_mode=mode,
+        missing=missing,
+    )
+    return result
+
+
+# --- proposals ---
 
 
 @dataclass(frozen=True)
@@ -32,7 +174,7 @@ class ProposalRun:
     cost_usd: float
 
 
-async def holdings(ctx: jobs.AnalysisContext) -> list[Holding]:
+async def holdings(ctx: AnalysisContext) -> list[Holding]:
     """Open positions of the agent's book; the proposer skips those symbols."""
     async with ctx.sessions() as s:
         rows = [r for r in await trades_repo.book_trades(s, ctx.book) if r.exit_date is None]
@@ -44,7 +186,7 @@ async def holdings(ctx: jobs.AnalysisContext) -> list[Holding]:
     ]
 
 
-async def macro_context(ctx: jobs.AnalysisContext, market: Market, as_of: date) -> MacroSnapshot:
+async def macro_context(ctx: AnalysisContext, market: Market, as_of: date) -> MacroSnapshot:
     benchmark = ctx.benchmarks.get(market)
     async with ctx.sessions() as s:
         bench = await market_repo.instrument_by_symbol(s, benchmark) if benchmark else None
@@ -59,7 +201,7 @@ async def macro_context(ctx: jobs.AnalysisContext, market: Market, as_of: date) 
 
 
 def proposer_input(
-    item: jobs.SymbolAnalysis,
+    item: SymbolAnalysis,
     tech: TechnicalAssessment,
     held: list[Holding],
     macro: MacroSnapshot | None = None,
@@ -116,7 +258,7 @@ def _ids(*outcomes: Outcome[Any]) -> dict[str, int]:
 
 
 def build_proposal(
-    item: jobs.SymbolAnalysis,
+    item: SymbolAnalysis,
     inp: ProposerInput,
     proposed: Outcome[ProposerOutput],
     out: ProposerOutput,
@@ -206,7 +348,7 @@ def screen_step(day: date, r: screen.ScreenResult) -> Step:
 
 def agent_step(
     day: date,
-    item: jobs.SymbolAnalysis,
+    item: SymbolAnalysis,
     name: StepName,
     outcome: Outcome[Any],
     status: StepStatus,
@@ -227,7 +369,7 @@ def agent_step(
     )
 
 
-def earnings_step(day: date, item: jobs.SymbolAnalysis) -> Step:
+def earnings_step(day: date, item: SymbolAnalysis) -> Step:
     """Never stops a stock by itself: the proposer must pass on `wait_until_after`."""
     e = item.earnings
     if e.status != "ok" or e.output is None:

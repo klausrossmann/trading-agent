@@ -130,6 +130,8 @@ The whole system is one Python program (the `agent` container) plus a database, 
 
 ## 4. A day in the life
 
+The short version; [RUNTIME.md](RUNTIME.md) has every job with its code, the start-up, late starts and outages.
+
 All times are Berlin time on a normal trading day. The jobs follow the exchange calendars, so holidays and half-days are handled automatically. For a few weeks in spring and autumn the US and Europe switch to summer time on different dates, and all US times move one hour earlier.
 
 | Time | What happens | AI? |

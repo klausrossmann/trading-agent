@@ -6,7 +6,7 @@ from uuid import UUID
 
 import structlog
 
-from trading_agent import jobs
+from trading_agent.contexts import BookContext
 from trading_agent.data.ingest import Sessions
 from trading_agent.db import book as book_repo
 from trading_agent.db import market as market_repo
@@ -125,7 +125,7 @@ def commands(sessions: Sessions, review: Review, trace_ui_url: str = "") -> dict
     }
 
 
-async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
+async def build_digest(book: BookContext, today: date) -> messages.Digest:
     sessions = book.sessions
     as_of, items, labels = await latest(sessions)
     name = book_for_mode(book.mode)
@@ -172,9 +172,7 @@ async def build_digest(book: jobs.BookContext, today: date) -> messages.Digest:
     )
 
 
-async def evening_digest(
-    book: jobs.BookContext, notifier: Notifier, today: date | None = None
-) -> str:
+async def evening_digest(book: BookContext, notifier: Notifier, today: date | None = None) -> str:
     """After the US close: the day's digest."""
     today = today or datetime.now(BERLIN).date()
     text = messages.render_digest(await build_digest(book, today))
