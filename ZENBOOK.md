@@ -6,14 +6,22 @@ Everything you need to run the trading agent on the Zenbook: what to have ready,
 
 **Contents**
 
-1. [What you need](#1-what-you-need)
-2. [Prepare the Zenbook (once)](#2-prepare-the-zenbook-once)
-3. [Install the app (once)](#3-install-the-app-once)
-4. [First start and checks](#4-first-start-and-checks)
-5. [Every day](#5-every-day)
-6. [Updating](#6-updating)
-7. [Backups](#7-backups)
-8. [Moving to another machine](#8-moving-to-another-machine)
+- [Running the agent on the Zenbook](#running-the-agent-on-the-zenbook)
+  - [1. What you need](#1-what-you-need)
+    - [1.1 The machine](#11-the-machine)
+    - [1.2 Accounts and keys](#12-accounts-and-keys)
+  - [2. Prepare the Zenbook (once)](#2-prepare-the-zenbook-once)
+  - [3. Install the app (once)](#3-install-the-app-once)
+    - [3.1 Code](#31-code)
+    - [3.2 Passwords](#32-passwords)
+    - [3.3 Settings: `.env`](#33-settings-env)
+    - [3.4 Build, database, history](#34-build-database-history)
+  - [4. First start and checks](#4-first-start-and-checks)
+  - [5. Every day](#5-every-day)
+  - [6. Updating](#6-updating)
+    - [6.1 The first update to the simplified version (November 2026)](#61-the-first-update-to-the-simplified-version-november-2026)
+  - [7. Backups](#7-backups)
+  - [8. Moving to another machine](#8-moving-to-another-machine)
 
 ---
 
