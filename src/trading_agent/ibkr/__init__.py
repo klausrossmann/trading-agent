@@ -1,2 +1,2 @@
-"""Everything that talks to IBKR through the IB Gateway: the connection (link), market data
-(market) and orders (orders)."""
+"""IBKR: the IB Gateway connection, market data, the order adapter, bracket orders, the order
+state machine, the executor and reconciliation."""

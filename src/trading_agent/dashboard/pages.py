@@ -16,10 +16,10 @@ import streamlit as st
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from trading_agent.core.settings import Settings
 from trading_agent.dashboard import frames, queries
-from trading_agent.domain.analysis import trace_url
-from trading_agent.domain.trading import Trade
-from trading_agent.settings import Settings
+from trading_agent.llm.types import trace_url
+from trading_agent.portfolio.types import Trade
 
 CACHE_TTL_S = 60
 ALL_MARKETS = "US and EU"
@@ -226,11 +226,23 @@ def day() -> None:
     st.altair_chart(chart)
     rows = frames.select_rows(table, show)
     st.subheader(f"Stocks ({len(rows)})")
-    _table(rows.drop(columns=["first", "proposal_id"]))
-    st.caption("✓ passed · ✗ stopped · ⚠ error · · information. Pick a stock for every step.")
+    clicked = st.dataframe(
+        rows.drop(columns=["first", "proposal_id"]),
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+    st.caption(
+        "✓ passed · ✗ stopped · ⚠ error · · information. Click a row (or pick below) for every "
+        "step of that stock with its input and output."
+    )
     if rows.empty:
         return
-    symbol = st.selectbox("What happened to", list(rows["symbol"]))
+    picked_rows = clicked.selection.rows if clicked is not None else []
+    symbol = st.selectbox(
+        "What happened to", list(rows["symbol"]), index=picked_rows[0] if picked_rows else 0
+    )
     if symbol is None:
         return
     _timeline(steps[steps["symbol"] == symbol])

@@ -6,93 +6,57 @@ A personal, self-hosted robot that **swing trades** large US and German stocks t
 
 > Personal project for a single account. Not financial or tax advice, and not a service for others.
 
-**New here? Read [HOW-IT-WORKS.md](HOW-IT-WORKS.md).** It explains the whole system in plain language: the daily workflow, when it buys and sells, how the AI agents work together, who has the final say, and every setting you can change. It also has a glossary of trading terms.
+## Documentation
+
+| Document | Read it for |
+|---|---|
+| [MANUAL.md](MANUAL.md) | **Running it**: setup on the Zenbook, `make up`, where the dashboard is, Telegram, the daily routine, every setting, tests, troubleshooting, backups. Section 1 is a one-page quick reference. |
+| [HOW-IT-WORKS.md](HOW-IT-WORKS.md) | **What it does and when**: the trading day hour by hour, from data to a trade, when it buys and sells, the agents, start-up, late starts, outages, safety nets. |
+| [CODE.md](CODE.md) | **The code**: one folder per component (market data, news, screen, analysts, proposer, critic, risk, IBKR, portfolio, Telegram, dashboard), what each file does, where to change what. |
+| [docs/design/](docs/design/) | Background: why it's designed this way ([CONCEPT.md](docs/design/CONCEPT.md)), how it was built ([IMPLEMENTATION.md](docs/design/IMPLEMENTATION.md)), the multi-agent design ([MAS-DESIGN.md](docs/design/MAS-DESIGN.md)), AI tracing ([OBSERVABILITY.md](docs/design/OBSERVABILITY.md)). |
 
 ## What it does
 
 Every trading day, without anyone pressing a button:
 
-1. **Collects data**: daily prices, earnings dates, exchange rates, macro data, and company news (Finnhub for US, Yahoo for EU stocks). Every number is stored with its source and time.
-2. **Finds candidates (code + AI)**: a fixed rule, "a stock in an uptrend that has dipped a little", screens about 140 stocks (S&P 100 and DAX 40). The 10 strongest setups per market go on. A News agent adds up to 3 stocks per market with a strong positive news catalyst (basic checks only; at most 1 such trade a day).
-3. **Analyses them (AI)**: code computes indicators and a menu of named price levels (moving averages, support, swing lows and so on). A technical analyst and an earnings analyst, both LLMs, judge the setup and pick entry, stop and target **from that menu**. They can't invent a price.
-4. **Proposes and challenges (AI)**: a proposer decides whether to trade and writes the reasoning. A critic, from a different AI vendor, looks for reasons not to and can veto. Code ranks what's left by confidence × R:R.
-5. **Decides in plain code**: a risk engine has the final say. It checks 9 groups of hard limits and decides how many shares to buy (fractions included): the more confident the agents, the bigger the position. At most €15 per €1,000 can be lost per trade, with at most 8 positions and a kill switch at a 15 % loss. AI output can't bypass it.
-6. **Trades**: approved trades go out as bracket orders, which combine a limit buy with a stop that limits the loss and a target that takes the profit. Stop and target sit at the broker, so they work even if the agent is down. Every order goes to IBKR (paper account first); without a gateway connection nothing is placed.
-7. **Manages positions**: moves the stop up to the buy price once a trade is 1R in profit, and sells after 15 sessions if neither stop nor target was hit. The News agent reads the news on held stocks every 30 minutes and sells at the market when it is at least 70 % sure the reason for the trade is gone; below that it only advises you (`/exit`).
-8. **Reports**: Telegram brings a morning briefing, the proposals, orders and fills, and an evening digest. A read-only dashboard is reachable over Tailscale. You can step in any time with `/pause`, `/stop` or `/exit`.
-9. **Measures itself**: the AI's trades are compared with the plain rule-based strategy and with buy and hold, after fees and AI costs. Real money only follows if the AI beats the rules.
+1. **Collects data**: daily prices, earnings dates, exchange rates, macro data, and company news (Finnhub for US, Yahoo for EU stocks).
+2. **Finds candidates (code + AI)**: a fixed rule, "a stock in an uptrend that has dipped a little", screens about 140 stocks (S&P 100 and DAX 40). The 10 strongest setups per market go on. A News agent adds up to 3 stocks per market with a strong positive news catalyst.
+3. **Analyses them (AI)**: a technical analyst and an earnings analyst judge each setup and pick entry, stop and target **from a menu of price levels** computed by code. They can't invent a price.
+4. **Proposes and challenges (AI)**: a proposer decides whether to trade; a critic from a different AI vendor looks for reasons not to and can veto. Code ranks what's left by confidence × R:R.
+5. **Decides in plain code**: a risk engine checks 9 groups of hard limits and decides how many shares to buy. AI output can't bypass it.
+6. **Trades at IBKR**: approved trades go out as bracket orders (limit buy + stop + target). Stop and target sit at the broker, so they work even if the agent is down. Without a gateway connection nothing is placed.
+7. **Manages positions**: stop to breakeven at +1R, time stop after 15 sessions, and a news exit when the News agent is at least 70 % sure the reason for the trade is gone.
+8. **Reports**: Telegram brings a morning briefing, proposals, orders, fills and an evening digest. The dashboard shows, for any day, every stock's path through every step with its inputs and outputs.
 
 ## A multi-agent system showcase
 
-The project is built as a **hybrid multi-agent system**. Five LLM agents (technical analyst, earnings analyst, proposer, critic, News agent) work with five deterministic agents (screen, risk engine, executor, reconciler, scheduler) and one human.
-
-- **Orchestrator–worker with a veto chain.** A code orchestrator (`orchestrator.py`, the whole day stage by stage) routes typed messages between the agents. Any agent can stop a trade, but only the deterministic risk engine can approve one.
-- **Generator–critic across vendors.** A Claude critic challenges the Gemini proposer, so their mistakes are less likely to overlap.
-- **Stateless agents, shared memory.** The database is the blackboard: agents that run hours or weeks apart communicate through it. Every agent run is memoised and stored with its input, prompt version and model.
-- **Contained by design.** Agents have no tools and no path to the broker, which CI enforces with import contracts. Every answer is validated before the next agent sees it.
-- **Evaluated against an ablation.** The same screen without agents trades alongside, and the agents must beat it after costs.
-
-Details: [MAS-DESIGN.md](MAS-DESIGN.md) (architecture, communication, shared memory, coordination, trust, observability, evaluation, code map).
+Five LLM agents (technical analyst, earnings analyst, proposer, critic, News agent) work with deterministic agents (screen, risk engine, executor, reconciler, scheduler) and one human. A code orchestrator (`orchestrator.py`) runs the day stage by stage; any agent can stop a trade, but only the deterministic risk engine can approve one. The agents have no tools and no path to the broker, which CI enforces with import contracts. Details: [MAS-DESIGN.md](docs/design/MAS-DESIGN.md).
 
 ## From paper to real money
 
 | Phase | What runs | Moves on when |
 |---|---|---|
-| Build (done in the repo) | Data, calculators, screen, AI agents, News agent, risk engine, IBKR orders, Telegram, dashboard | Each milestone's "done when" is met |
-| Paper trading (next) | Fully autonomous on the IBKR **paper** account, US and Germany, one notional budget of €15,000, real fee modelling | ≥ 3 months, ≥ 50 closed trades, positive after all costs (fees and AI) |
-| Live | Fully autonomous with **€1,000 of real money**, US stocks only, lean LLM budget | 3 months in line with paper results |
-| Scale | More capital, EU stocks live, later options (debit spreads) | Same KPIs hold |
+| Build (done in the repo) | Data, screen, AI agents, News agent, risk engine, IBKR orders, Telegram, dashboard | Each milestone's "done when" is met |
+| Paper trading (next) | Fully autonomous on the IBKR **paper** account, US and Germany, one notional budget of €15,000 | ≥ 3 months, ≥ 50 closed trades, positive after all costs (fees and AI) |
+| Live | Fully autonomous with **€1,000 of real money**, US stocks only | 3 months in line with paper results |
+| Scale | More capital, EU stocks live | Same KPIs hold |
 
 Paper and live use the same code, risk limits and fee model. Live mode needs three switches at once: `APP_MODE=live`, the gateway in live mode, and a confirmation code sent via Telegram.
 
 ## Status (2026-11-05)
 
-All milestones up to M9 and the M10 preparation are built and tested. In November 2026 the system was simplified: every order goes to IBKR or nowhere (no simulator, backtest or comparison books), the trading day lives in one `orchestrator.py`, a step log shows what happened to each stock, code ranks the proposals, and a News agent triggers buys and exits ([IMPLEMENTATION.md](IMPLEMENTATION.md) 19.4). The update on the Zenbook and the remaining checks are in [ZENBOOK.md](ZENBOOK.md) and [RUNNING.md](RUNNING.md) section 6. The milestone table below is the build history.
-
-| Milestone | State |
-|---|---|
-| M0 Bootstrap: project, Docker stack, database, heartbeat, CI | done; running on the Zenbook |
-| M1 Data foundation: universe, prices, FX, macro, earnings, quality checks | done; real data loaded on the Zenbook |
-| M2 Calculators: indicators, levels, level menu, fees, sizing | done |
-| M3 Baseline strategy, simulator, `baseline_sim` book, backtest report | done; no edge found, kept as the bar to beat ([IMPLEMENTATION.md](IMPLEMENTATION.md) 6.3) |
-| M4 Telegram: owner-only bot, alerts, morning briefing | done in the repo; bot token and chat id pending |
-| M5 LLM modules: technical and earnings analysts, budget guard, cache, validators, 30 eval cases | done in the repo; first real scan and evals pending |
-| M6 IBKR read side and dashboard | done; the paper account is connected, delayed quotes arrive; the overnight-restart check is pending |
-| M7 Agents: proposer, critic, portfolio manager, `/review` labels, evening digest | done in the repo; the week of labelled proposals is pending |
-| M8 Risk engine, kill switch, orders, simulator broker, daily trading cycle | done in the repo; `agent_paper` trades through the simulator. IBKR orders and the chaos tests follow after a few stable days. |
-| M9 Paper operations: weekly report and go-live gate, `/positions`, `/pnl`, news triage, position review, `/exit`, backups, dashboard Risk/Evaluation/Reports | done in the repo; the 3-month paper period hasn't started |
-| M10 Mini PC and go-live | tax report done; the rest follows after the paper phase |
-
-## Documentation
-
-- [HOW-IT-WORKS.md](HOW-IT-WORKS.md): **start here**. The system in plain language: workflow, buy and sell rules, agents, safety nets, every setting.
-- [RUNTIME.md](RUNTIME.md): **what happens once the agent runs, and when**: start-up, background tasks, the trading day hour by hour, each stage in detail, holidays, late starts, outages.
-- [ZENBOOK.md](ZENBOOK.md): **running it on the Zenbook**: accounts and keys, machine setup, installation, first start, daily use, updates, backups.
-- [RUNNING.md](RUNNING.md): **operating the app**: where to find what (dashboard, Telegram, logs), starting, testing, troubleshooting.
-- [CODE.md](CODE.md): **the code**: what each folder and file does, how one stock flows through it, the rules the code follows, where to change what.
-- [MAS-DESIGN.md](MAS-DESIGN.md): the multi-agent system design: agent inventory, communication, shared memory, coordination, trust, evaluation.
-- [OBSERVABILITY.md](OBSERVABILITY.md): LLM observability. Every call with its messages in Postgres; every run as an OpenTelemetry trace in Langfuse.
-- [CONCEPT.md](CONCEPT.md): why it's designed this way (broker choice, risk limits, costs, evaluation, roadmap, research).
-- [IMPLEMENTATION.md](IMPLEMENTATION.md): how it's built (architecture, data model, risk engine, deployment, runbook, build plan).
+Everything is built and tested. In November 2026 the system was simplified (every order goes to IBKR or nowhere, a step log shows what happened to each stock, a News agent triggers buys and exits) and the code was reorganised by component. Next: the update on the Zenbook ([MANUAL.md](MANUAL.md) 5.4) and the tests in [MANUAL.md](MANUAL.md) 10. The build history is in [IMPLEMENTATION.md](docs/design/IMPLEMENTATION.md) 17–19.
 
 ## Development
 
-Code is written on a development machine (no secrets) and runs on an always-on Linux host with Docker.
+Code is written on a development machine (no secrets) and runs on the Zenbook with Docker.
 
 ```sh
 uv sync                  # Python 3.13 environment
 make lint                # ruff, pyright, import-linter contracts
-make test                # unit tests
-make test-db             # DB tests against a throwaway Postgres container
+make test                # unit tests (100 % branch coverage on the risk engine and the order code)
+make test-db             # tests against a throwaway Postgres container
+make dev-up              # local stack with a fake AI model and no IBKR, dashboard on http://127.0.0.1:8502
 ```
 
-On the runtime host (step by step, with explanations: [ZENBOOK.md](ZENBOOK.md)):
-
-```sh
-make secrets                              # create database password files in secrets/
-cp .env.example .env && chmod 600 .env    # then fill in the values
-docker compose up -d db && make migrate && make up
-docker compose run --rm agent trading-agent backfill   # load 6 years of data
-docker compose run --rm agent trading-agent analyse    # LLM analysis of today's top setups
-uv run pytest -m llm tests/evals                       # golden-case evals with the real model
-```
+On the Zenbook: `git pull && make up` ([MANUAL.md](MANUAL.md)).

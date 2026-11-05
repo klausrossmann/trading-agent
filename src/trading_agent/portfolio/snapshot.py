@@ -7,11 +7,11 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import pandas as pd
 
-from trading_agent.calc.indicators import atr, bars_to_frame
-from trading_agent.domain.market import Bar, Increments, Instrument
-from trading_agent.domain.numbers import to_decimal
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import MarketSnapshot
+from trading_agent.core.numbers import to_decimal
+from trading_agent.marketdata.indicators import atr, bars_to_frame
+from trading_agent.marketdata.types import Bar, Increments, Instrument
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk.types import MarketSnapshot
 
 VALUE_SESSIONS = 20
 CORRELATION_SESSIONS = 60

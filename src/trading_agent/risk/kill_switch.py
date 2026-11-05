@@ -6,7 +6,7 @@ compare old and new to decide whether anything happened.
 
 from datetime import date, datetime, time, timedelta, tzinfo
 
-from trading_agent.domain.risk import KillSwitch, Trip
+from trading_agent.risk.types import KillSwitch, Trip
 
 
 def current(ks: KillSwitch, now: datetime) -> KillSwitch:

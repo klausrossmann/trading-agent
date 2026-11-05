@@ -9,18 +9,21 @@ import pytest
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
 
-from trading_agent import briefing, pipeline, screen
+from trading_agent.analysts import stage as analysts_stage
 from trading_agent.contexts import AnalysisContext
-from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import market as repo
-from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.db.models import LlmCallRow
-from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
-from trading_agent.domain.market import Bar, BarSeries, Instrument
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import Settings
+from trading_agent.core.tables import LlmCallRow
 from trading_agent.llm.runner import LlmRunner
-from trading_agent.settings import Settings
+from trading_agent.llm.store import DbAnalysisStore
+from trading_agent.llm.types import AnalysisRecord, LlmCall, ValidationIssue
+from trading_agent.marketdata import calendars, ingest
+from trading_agent.marketdata import store as repo
+from trading_agent.marketdata.types import Bar, BarSeries, Instrument
+from trading_agent.marketdata.universe import Universe
+from trading_agent.screen import screen
+from trading_agent.screen import stage as screen_stage
+from trading_agent.telegram import briefing
 
 pytestmark = pytest.mark.db
 
@@ -152,7 +155,7 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     ctx = AnalysisContext.build(cfg, sessions, universe)
     ctx.runner = LlmRunner(ctx.models, DbAnalysisStore(sessions), lambda _: TestModel())
 
-    result = await pipeline.analyse(ctx, ["AAA", "NOPE"], today=date(2026, 10, 6))
+    result = await analysts_stage.analyse(ctx, ["AAA", "NOPE"], today=date(2026, 10, 6))
     assert result.missing == ["NOPE"]
     (item,) = result.items
     assert item.technical_input.as_of == date(2026, 10, 5)
@@ -160,7 +163,7 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     assert all(o.analysis_id is not None and not o.cached for o in item.outcomes)
     assert result.cost_usd > 0
 
-    again = await pipeline.analyse(ctx, ["AAA"], today=date(2026, 10, 6))
+    again = await analysts_stage.analyse(ctx, ["AAA"], today=date(2026, 10, 6))
     assert all(o.cached for o in again.items[0].outcomes)
     assert again.cost_usd == 0
 
@@ -204,8 +207,8 @@ async def test_candidates_skip_blocked_and_blacklisted(
         return screen.ScreenResult(ids[symbol], symbol, "US", date(2026, 10, 5), True, "", {}, rs)
 
     found = [passed("CCC", 3.0), passed("BBB", 2.0), passed("AAA", 1.0)]
-    monkeypatch.setattr(pipeline.screen, "check", lambda data, p, market: found)
-    results = await pipeline.screen_stocks(ctx, "US", 5, now=NOW)
+    monkeypatch.setattr(screen_stage.screen, "check", lambda data, p, market: found)
+    results = await screen_stage.screen_stocks(ctx, "US", 5, now=NOW)
     assert [(r.symbol, r.passed, r.reason) for r in results] == [
         ("CCC", False, "blacklisted in risk.yaml"),
         ("BBB", False, "data quality: jump"),

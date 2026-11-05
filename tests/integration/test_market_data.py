@@ -6,19 +6,13 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
-from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import market as repo
-from trading_agent.db.models import BarDailyRow, EarningsEventRow
-from trading_agent.domain.market import (
-    Bar,
-    BarSeries,
-    EarningsEvent,
-    Instrument,
-    Observation,
-)
-from trading_agent.settings import PricesConfig, QualityConfig
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import PricesConfig, QualityConfig
+from trading_agent.core.tables import BarDailyRow, EarningsEventRow
+from trading_agent.marketdata import calendars, ingest
+from trading_agent.marketdata import store as repo
+from trading_agent.marketdata.types import Bar, BarSeries, EarningsEvent, Instrument, Observation
+from trading_agent.marketdata.universe import Universe
 
 pytestmark = pytest.mark.db
 

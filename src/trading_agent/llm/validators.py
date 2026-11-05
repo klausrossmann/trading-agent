@@ -3,7 +3,7 @@
 import re
 from collections.abc import Iterable, Mapping
 
-from trading_agent.domain.analysis import ValidationIssue
+from trading_agent.llm.types import ValidationIssue
 
 _NUMBER = re.compile(r"(?<![A-Za-z_\d.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")

@@ -3,7 +3,7 @@ import os
 import pytest
 from pydantic_ai import models
 
-from trading_agent.settings import Settings
+from trading_agent.core.settings import Settings
 
 # Tests never read a developer's .env; they set environment variables explicitly.
 Settings.model_config["env_file"] = None

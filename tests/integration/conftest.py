@@ -6,9 +6,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 
-from trading_agent.data.ingest import Sessions
-from trading_agent.db.session import create_engine, session_factory
-from trading_agent.settings import Settings
+from trading_agent.core.db import Sessions, create_engine, session_factory
+from trading_agent.core.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from trading_agent.domain.analysis import ValidationIssue
 from trading_agent.llm.budget import budget_mode, month_start
 from trading_agent.llm.models import (
     BudgetConfig,
@@ -15,6 +14,7 @@ from trading_agent.llm.models import (
 )
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.sanitize import clean, untrusted
+from trading_agent.llm.types import ValidationIssue
 from trading_agent.llm.validators import (
     check_data_gaps,
     check_grounded,

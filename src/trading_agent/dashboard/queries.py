@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from trading_agent.db.models import (
+from trading_agent.core.tables import (
     AnalysisRow,
     BarDailyRow,
     BracketRow,
@@ -29,7 +29,7 @@ from trading_agent.db.models import (
     StepRow,
     TradeRow,
 )
-from trading_agent.domain.trading import Book, Trade
+from trading_agent.portfolio.types import Book, Trade
 
 TZ = "Europe/Berlin"
 OPEN_STATES = ("approved", "submitted", "working", "filled", "exiting")

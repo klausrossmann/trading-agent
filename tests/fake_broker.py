@@ -12,8 +12,8 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from trading_agent.domain.numbers import to_decimal
-from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, OrderKind, OrderSpec
+from trading_agent.core.numbers import to_decimal
+from trading_agent.ibkr.types import BrokerFill, BrokerOrder, BrokerStatus, OrderKind, OrderSpec
 
 PRICE = Decimal("0.0001")
 ZERO = Decimal(0)

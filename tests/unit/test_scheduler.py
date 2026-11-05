@@ -11,17 +11,17 @@ from pydantic import SecretStr
 from typer.testing import CliRunner
 
 from trading_agent.__main__ import app
-from trading_agent.controls import ControlCenter
-from trading_agent.journal import Review
-from trading_agent.notify.telegram import Reply
-from trading_agent.scheduler import JobFn, build_scheduler, interaction, plan_session_jobs
-from trading_agent.settings import (
+from trading_agent.core.settings import (
     HeartbeatJob,
     ScheduleConfig,
     SessionJob,
     Settings,
     load_schedule,
 )
+from trading_agent.risk.controls import ControlCenter
+from trading_agent.scheduler import JobFn, build_scheduler, interaction, plan_session_jobs
+from trading_agent.telegram.bot import Reply
+from trading_agent.telegram.journal import Review
 
 ROOT = Path(__file__).resolve().parents[2]
 

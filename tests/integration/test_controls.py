@@ -5,12 +5,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select, text
 
-from trading_agent.controls import CANCEL_BUTTON, STOP_BUTTON, ControlCenter
-from trading_agent.data.ingest import Sessions
-from trading_agent.db.models import AuditLog
-from trading_agent.domain.risk import Mode
-from trading_agent.notify import messages
-from trading_agent.notify.telegram import Reply
+from trading_agent.core.db import Sessions
+from trading_agent.core.tables import AuditLog
+from trading_agent.risk.controls import CANCEL_BUTTON, STOP_BUTTON, ControlCenter
+from trading_agent.risk.types import Mode
+from trading_agent.telegram import messages
+from trading_agent.telegram.bot import Reply
 
 pytestmark = pytest.mark.db
 

@@ -6,10 +6,10 @@ from decimal import Decimal
 
 from ib_async import IB, Order, Trade
 
-from trading_agent.domain.broker import AccountSnapshot, BrokerPosition
-from trading_agent.domain.numbers import to_decimal
-from trading_agent.domain.orders import BrokerFill, BrokerOrder, BrokerStatus, OrderSpec
+from trading_agent.core.numbers import to_decimal
+from trading_agent.ibkr.account import AccountSnapshot, BrokerPosition
 from trading_agent.ibkr.market import contract_for
+from trading_agent.ibkr.types import BrokerFill, BrokerOrder, BrokerStatus, OrderSpec
 
 SUMMARY_TAGS = {
     "NetLiquidation": "net_liquidation",

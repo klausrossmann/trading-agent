@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING, Literal
 
 import typer
 
-from trading_agent.data.quality import QualityIssue
-from trading_agent.settings import Settings
+from trading_agent.core.settings import Settings
+from trading_agent.marketdata.quality import QualityIssue
 
 if TYPE_CHECKING:
-    from trading_agent.data.ingest import Sessions
-    from trading_agent.pipeline import SymbolAnalysis
+    from trading_agent.analysts.stage import SymbolAnalysis
+    from trading_agent.core.db import Sessions
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -28,8 +28,8 @@ def main() -> None:
 
 
 def _settings() -> Settings:
-    from trading_agent import telemetry
-    from trading_agent.log import configure_logging
+    from trading_agent.core import telemetry
+    from trading_agent.core.log import configure_logging
 
     settings = Settings()  # pyright: ignore[reportCallIssue]  # required fields come from env/secrets
     configure_logging(settings.log_level)
@@ -44,8 +44,8 @@ def _settings() -> Settings:
 def _with_db[T](settings: Settings, job: Callable[["Sessions"], Awaitable[T]]) -> T:
     """Runs `job` with a session factory on the configured database, then closes the pool
     and flushes the traces."""
-    from trading_agent import telemetry
-    from trading_agent.db.session import create_engine, session_factory
+    from trading_agent.core import telemetry
+    from trading_agent.core.db import create_engine, session_factory
 
     async def _run() -> T:
         engine = create_engine(settings.database_url)
@@ -63,10 +63,10 @@ def _with_db[T](settings: Settings, job: Callable[["Sessions"], Awaitable[T]]) -
 @app.command()
 def run() -> None:
     """Start the agent: scheduler and jobs, until SIGTERM/SIGINT."""
-    from trading_agent import telemetry
-    from trading_agent.data.universe import load_universe
+    from trading_agent.core import telemetry
+    from trading_agent.core.settings import load_data_config, load_schedule
+    from trading_agent.marketdata.universe import load_universe
     from trading_agent.scheduler import serve
-    from trading_agent.settings import load_data_config, load_schedule
 
     settings = _settings()
     cfg_dir = settings.config_dir
@@ -85,11 +85,11 @@ def backfill(market: Literal["US", "EU"] | None = MarketOption) -> None:
     """Load the universe and all market data. Idempotent and incremental: safe to re-run."""
     import httpx
 
-    from trading_agent import jobs
     from trading_agent.contexts import DataContext
-    from trading_agent.data.ingest import IngestResult
-    from trading_agent.data.universe import load_universe
-    from trading_agent.settings import load_data_config
+    from trading_agent.core.settings import load_data_config
+    from trading_agent.marketdata import jobs
+    from trading_agent.marketdata.ingest import IngestResult
+    from trading_agent.marketdata.universe import load_universe
 
     settings = _settings()
 
@@ -121,8 +121,8 @@ def quality(
     """Data quality report for stored bars. Exit code 1 if any symbol is blocked from scans."""
     from datetime import UTC, datetime
 
-    from trading_agent.data.ingest import run_quality
-    from trading_agent.settings import load_data_config
+    from trading_agent.core.settings import load_data_config
+    from trading_agent.marketdata.ingest import run_quality
 
     settings = _settings()
     cfg = load_data_config(settings.config_dir).quality
@@ -169,16 +169,17 @@ def analyse(
     top: int | None = TopOption,
 ) -> None:
     """LLM technical and earnings analysis of today's top screened setups (or given symbols)."""
-    from trading_agent import pipeline, telemetry
+    from trading_agent.analysts import stage as analysts_stage
     from trading_agent.contexts import AnalysisContext
-    from trading_agent.data.universe import load_universe
+    from trading_agent.core import telemetry
+    from trading_agent.marketdata.universe import load_universe
 
     settings = _settings()
 
-    async def _run(sessions: "Sessions") -> pipeline.ScanResult:
+    async def _run(sessions: "Sessions") -> analysts_stage.ScanResult:
         ctx = AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span("cli analyse", tags=("cli",)):
-            return await pipeline.analyse(ctx, symbols or None, market, top)
+            return await analysts_stage.analyse(ctx, symbols or None, market, top)
 
     result = _with_db(settings, _run)
     for item in result.items:
@@ -213,13 +214,15 @@ def propose(
     market: Literal["US", "EU"] | None = MarketOption,
 ) -> None:
     """Agent pipeline on today's top setups (or given symbols): proposals, no orders."""
-    from trading_agent import orchestrator, pipeline, telemetry
+    from trading_agent import orchestrator
     from trading_agent.contexts import AnalysisContext
-    from trading_agent.data.universe import load_universe
+    from trading_agent.core import telemetry
+    from trading_agent.marketdata.universe import load_universe
+    from trading_agent.proposer import stage as proposer_stage
 
     settings = _settings()
 
-    async def _run(sessions: "Sessions") -> pipeline.ProposalRun:
+    async def _run(sessions: "Sessions") -> proposer_stage.ProposalRun:
         ctx = AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span(f"cli propose {market or 'all'}", tags=("cli",)):
             return await orchestrator.scan(ctx, market, symbols or None)
@@ -254,10 +257,10 @@ def place(market: Literal["US", "EU"] = typer.Argument(..., help="US or EU")) ->
     are rejected as already pending, and no orderRef is sent twice."""
     from trading_agent import orchestrator, scheduler
     from trading_agent.contexts import BookContext
-    from trading_agent.controls import ControlCenter
-    from trading_agent.data.universe import load_universe
     from trading_agent.ibkr import link as gateway
-    from trading_agent.notify.telegram import LogNotifier
+    from trading_agent.marketdata.universe import load_universe
+    from trading_agent.risk.controls import ControlCenter
+    from trading_agent.telegram.bot import LogNotifier
 
     settings = _settings()
 
@@ -298,15 +301,15 @@ def tax_report(
     output: Path | None = OutputOption,
 ) -> None:
     """Yearly tax helper: share sales in EUR at trade-day ECB rates (not tax advice)."""
-    from trading_agent import jobs
     from trading_agent.contexts import BookContext
-    from trading_agent.data.universe import load_universe
+    from trading_agent.marketdata.universe import load_universe
+    from trading_agent.portfolio import manager as portfolio_manager
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> str:
         ctx = BookContext.load(settings.config_dir, sessions, load_universe(settings.config_dir))
-        return await jobs.tax_report(ctx, year, book)
+        return await portfolio_manager.tax_report(ctx, year, book)
 
     text = _with_db(settings, _run)
     typer.echo(text)
@@ -317,7 +320,7 @@ def tax_report(
 @app.command()
 def reset() -> None:
     """End a halt (kill switch): prints a code to confirm with /reset CODE in Telegram."""
-    from trading_agent.controls import RESET_CODE_TTL, ControlCenter
+    from trading_agent.risk.controls import RESET_CODE_TTL, ControlCenter
 
     settings = _settings()
     code = _with_db(settings, lambda s: ControlCenter(s, settings.app_mode).issue_reset_code())

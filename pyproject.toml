@@ -66,10 +66,24 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
 strict = [
-    "src/trading_agent/domain",
-    "src/trading_agent/calc",
-    "src/trading_agent/risk",
-    "src/trading_agent/execution",
+    "src/trading_agent/*/types.py",
+    "src/trading_agent/core/numbers.py",
+    "src/trading_agent/core/steps.py",
+    "src/trading_agent/marketdata/indicators.py",
+    "src/trading_agent/marketdata/trend.py",
+    "src/trading_agent/marketdata/macro.py",
+    "src/trading_agent/analysts/levels.py",
+    "src/trading_agent/analysts/level_refs.py",
+    "src/trading_agent/risk/engine.py",
+    "src/trading_agent/risk/config.py",
+    "src/trading_agent/risk/kill_switch.py",
+    "src/trading_agent/risk/sizing.py",
+    "src/trading_agent/portfolio/fees.py",
+    "src/trading_agent/portfolio/stops.py",
+    "src/trading_agent/ibkr/account.py",
+    "src/trading_agent/ibkr/brackets.py",
+    "src/trading_agent/ibkr/fsm.py",
+    "src/trading_agent/ibkr/reconcile.py",
     "src/trading_agent/ibkr/orders.py",
 ]
 
@@ -87,58 +101,119 @@ markers = [
 
 [tool.importlinter]
 root_package = "trading_agent"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "LLM code has no path to orders"
+name = "AI agents have no path to orders or the risk engine"
 type = "forbidden"
-source_modules = ["trading_agent.llm", "trading_agent.modules", "trading_agent.agents"]
-forbidden_modules = ["trading_agent.execution", "trading_agent.ibkr", "trading_agent.risk"]
+source_modules = [
+    "trading_agent.llm",
+    "trading_agent.analysts.technical",
+    "trading_agent.analysts.earnings",
+    "trading_agent.proposer.agent",
+    "trading_agent.critic.agent",
+    "trading_agent.news.agent",
+]
+forbidden_modules = ["trading_agent.ibkr", "trading_agent.risk", "ib_async"]
 
 [[tool.importlinter.contracts]]
 name = "Risk engine is deterministic"
 type = "forbidden"
-source_modules = ["trading_agent.risk"]
-forbidden_modules = ["trading_agent.llm", "trading_agent.modules", "trading_agent.agents"]
+source_modules = [
+    "trading_agent.risk.engine",
+    "trading_agent.risk.config",
+    "trading_agent.risk.kill_switch",
+    "trading_agent.risk.sizing",
+    "trading_agent.risk.types",
+]
+forbidden_modules = [
+    "trading_agent.llm",
+    "trading_agent.analysts",
+    "trading_agent.proposer.agent",
+    "trading_agent.critic",
+    "trading_agent.news.agent",
+    "pydantic_ai",
+]
 
 [[tool.importlinter.contracts]]
-name = "Only the orchestration layer calls execution and IBKR"
+name = "Only the stages and the orchestrator talk to IBKR"
 type = "forbidden"
 source_modules = [
-    "trading_agent.domain",
-    "trading_agent.db",
-    "trading_agent.data",
-    "trading_agent.calc",
-    "trading_agent.strategies",
-    "trading_agent.modules",
+    "trading_agent.core",
+    "trading_agent.marketdata.types",
+    "trading_agent.marketdata.yahoo",
+    "trading_agent.marketdata.series",
+    "trading_agent.marketdata.calendars",
+    "trading_agent.marketdata.universe",
+    "trading_agent.marketdata.quality",
+    "trading_agent.marketdata.ingest",
+    "trading_agent.marketdata.store",
+    "trading_agent.marketdata.indicators",
+    "trading_agent.marketdata.trend",
+    "trading_agent.marketdata.macro",
+    "trading_agent.news.types",
+    "trading_agent.news.sources",
+    "trading_agent.news.store",
+    "trading_agent.news.agent",
+    "trading_agent.news.rules",
+    "trading_agent.screen.rules",
+    "trading_agent.screen.screen",
+    "trading_agent.analysts.technical",
+    "trading_agent.analysts.earnings",
+    "trading_agent.analysts.history",
+    "trading_agent.analysts.levels",
+    "trading_agent.analysts.level_refs",
+    "trading_agent.proposer.agent",
+    "trading_agent.proposer.types",
+    "trading_agent.proposer.store",
+    "trading_agent.critic.agent",
     "trading_agent.llm",
-    "trading_agent.agents",
-    "trading_agent.risk",
-    "trading_agent.portfolio",
-    "trading_agent.notify",
+    "trading_agent.risk.engine",
+    "trading_agent.risk.config",
+    "trading_agent.risk.kill_switch",
+    "trading_agent.risk.sizing",
+    "trading_agent.risk.types",
+    "trading_agent.risk.store",
+    "trading_agent.portfolio.book",
+    "trading_agent.portfolio.snapshot",
+    "trading_agent.portfolio.tax",
+    "trading_agent.portfolio.kpi",
+    "trading_agent.portfolio.stops",
+    "trading_agent.portfolio.fees",
+    "trading_agent.portfolio.types",
+    "trading_agent.portfolio.store",
+    "trading_agent.telegram.messages",
+    "trading_agent.telegram.bot",
+    "trading_agent.telegram.heartbeat",
     "trading_agent.dashboard",
 ]
-forbidden_modules = ["trading_agent.execution", "trading_agent.ibkr"]
+forbidden_modules = [
+    "trading_agent.ibkr.link",
+    "trading_agent.ibkr.market",
+    "trading_agent.ibkr.orders",
+    "trading_agent.ibkr.executor",
+    "ib_async",
+]
 
 [[tool.importlinter.contracts]]
-name = "Domain is pure"
+name = "Types are plain data"
 type = "forbidden"
-source_modules = ["trading_agent.domain"]
+source_modules = [
+    "trading_agent.*.types",
+    "trading_agent.core.steps",
+    "trading_agent.core.numbers",
+    "trading_agent.ibkr.account",
+    "trading_agent.analysts.level_refs",
+]
 forbidden_modules = [
-    "trading_agent.settings",
-    "trading_agent.db",
-    "trading_agent.data",
-    "trading_agent.calc",
-    "trading_agent.strategies",
-    "trading_agent.modules",
-    "trading_agent.llm",
-    "trading_agent.agents",
-    "trading_agent.risk",
-    "trading_agent.execution",
-    "trading_agent.ibkr",
-    "trading_agent.portfolio",
-    "trading_agent.notify",
-    "trading_agent.dashboard",
-    "trading_agent.scheduler",
+    "sqlalchemy",
+    "httpx",
+    "ib_async",
+    "telegram",
+    "pydantic_ai",
+    "trading_agent.core.db",
+    "trading_agent.core.tables",
+    "trading_agent.core.settings",
 ]
 
 [[tool.importlinter.contracts]]
@@ -146,11 +221,16 @@ name = "Dashboard is read-only"
 type = "forbidden"
 source_modules = ["trading_agent.dashboard"]
 forbidden_modules = [
-    "trading_agent.risk",
-    "trading_agent.llm",
-    "trading_agent.agents",
-    "trading_agent.notify",
-    "trading_agent.scheduler",
-    "trading_agent.execution",
     "trading_agent.ibkr",
+    "trading_agent.llm.runner",
+    "trading_agent.risk.engine",
+    "trading_agent.risk.controls",
+    "trading_agent.risk.stage",
+    "trading_agent.risk.store",
+    "trading_agent.portfolio.manager",
+    "trading_agent.telegram",
+    "trading_agent.scheduler",
+    "trading_agent.orchestrator",
+    "ib_async",
+    "telegram",
 ]

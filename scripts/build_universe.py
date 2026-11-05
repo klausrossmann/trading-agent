@@ -14,8 +14,8 @@ import typer
 import yaml
 import yfinance as yf
 
-from trading_agent.data.universe import Universe
-from trading_agent.domain.market import Instrument
+from trading_agent.marketdata.types import Instrument
+from trading_agent.marketdata.universe import Universe
 
 SP100_URL = "https://en.wikipedia.org/wiki/S%26P_100"
 DAX_URL = "https://en.wikipedia.org/wiki/DAX"

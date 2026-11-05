@@ -7,12 +7,12 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import select
 
-from trading_agent.data.universe import load_universe
-from trading_agent.db import audit
-from trading_agent.db.models import AuditLog, Base
-from trading_agent.db.session import create_engine, session_factory
+from trading_agent.core import audit
+from trading_agent.core.db import create_engine, session_factory
+from trading_agent.core.settings import HeartbeatJob, ScheduleConfig, Settings, load_data_config
+from trading_agent.core.tables import AuditLog, Base
+from trading_agent.marketdata.universe import load_universe
 from trading_agent.scheduler import serve
-from trading_agent.settings import HeartbeatJob, ScheduleConfig, Settings, load_data_config
 
 pytestmark = pytest.mark.db
 

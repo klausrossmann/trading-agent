@@ -10,19 +10,13 @@ import pytest
 from hypothesis import find, given, settings
 from hypothesis import strategies as st
 
-from trading_agent.calc.fees import round_trip_fees
-from trading_agent.domain.market import Market
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import (
-    Controls,
-    Holding,
-    MarketSnapshot,
-    PortfolioState,
-    RiskDecision,
-)
+from trading_agent.core.settings import load_fees
+from trading_agent.marketdata.types import Market
+from trading_agent.portfolio.fees import round_trip_fees
+from trading_agent.proposer.types import Proposal
 from trading_agent.risk.config import RiskConfig, load_risk_config
 from trading_agent.risk.engine import CLUSTER_RHO, evaluate, loss_trips
-from trading_agent.settings import load_fees
+from trading_agent.risk.types import Controls, Holding, MarketSnapshot, PortfolioState, RiskDecision
 
 D = Decimal
 CONFIG = Path(__file__).resolve().parents[3] / "config"

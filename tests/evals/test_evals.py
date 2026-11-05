@@ -7,14 +7,14 @@ import pytest
 from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from trading_agent import telemetry
+from trading_agent.analysts.earnings import EarningsInput, EarningsModule
+from trading_agent.analysts.technical import TechnicalInput, TechnicalModule
+from trading_agent.core import telemetry
+from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import AnalysisModule, LlmRunner
-from trading_agent.llm.store import MemoryStore
-from trading_agent.modules.earnings import EarningsInput, EarningsModule
-from trading_agent.modules.news import NewsAgent, NewsInput
-from trading_agent.modules.technical import TechnicalInput, TechnicalModule
+from trading_agent.news.agent import NewsAgent, NewsInput
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = sorted((ROOT / "tests" / "evals" / "cases").glob("*/*.json"))

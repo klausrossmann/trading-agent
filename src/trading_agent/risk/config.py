@@ -7,8 +7,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from trading_agent.calc.sizing import SizingLimits
-from trading_agent.domain.market import Market
+from trading_agent.marketdata.types import Market
+from trading_agent.risk.sizing import SizingLimits
 
 
 class _Strict(BaseModel):

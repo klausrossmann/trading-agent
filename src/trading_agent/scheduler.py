@@ -14,24 +14,26 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
-from trading_agent import jobs, journal, news, orchestrator, telemetry, trading
-from trading_agent.briefing import briefing_text, budget_text, morning_briefing, status_text
+from trading_agent import orchestrator
 from trading_agent.contexts import AnalysisContext, BookContext, DataContext, RuntimeState
-from trading_agent.controls import ControlCenter
-from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import Sessions, describe_error
-from trading_agent.data.news import FinnhubNews, NewsSource, YahooNews
-from trading_agent.data.universe import Universe
-from trading_agent.db import audit
-from trading_agent.db.session import create_engine, session_factory
-from trading_agent.domain.trading import book_for_mode
-from trading_agent.executor import Executor
+from trading_agent.core import audit, telemetry
+from trading_agent.core.db import Sessions, create_engine, session_factory
+from trading_agent.core.log import describe_error
+from trading_agent.core.settings import CronJob, DataConfig, ScheduleConfig, SessionJob, Settings
 from trading_agent.ibkr import link as gateway
+from trading_agent.ibkr.executor import Executor
 from trading_agent.llm.prompts import load_prompt
-from trading_agent.modules import news as news_module
-from trading_agent.modules.news import NewsAgent
-from trading_agent.notify import heartbeat, messages
-from trading_agent.notify.telegram import (
+from trading_agent.marketdata import calendars, ingest, jobs
+from trading_agent.marketdata.universe import Universe
+from trading_agent.news import agent as news_module
+from trading_agent.news import stage as news
+from trading_agent.news.agent import NewsAgent
+from trading_agent.news.sources import FinnhubNews, NewsSource, YahooNews
+from trading_agent.portfolio import manager as portfolio_manager
+from trading_agent.portfolio.types import book_for_mode
+from trading_agent.risk.controls import ControlCenter
+from trading_agent.telegram import heartbeat, journal, messages
+from trading_agent.telegram.bot import (
     Command,
     Interaction,
     LogNotifier,
@@ -40,7 +42,12 @@ from trading_agent.notify.telegram import (
     TelegramBot,
     build_notifier,
 )
-from trading_agent.settings import CronJob, DataConfig, ScheduleConfig, SessionJob, Settings
+from trading_agent.telegram.briefing import (
+    briefing_text,
+    budget_text,
+    morning_briefing,
+    status_text,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -140,7 +147,7 @@ def job_functions(
     analysis: AnalysisContext,
     link: gateway.BrokerLink | None = None,
     center: ControlCenter | None = None,
-    trade: trading.TradingContext | None = None,
+    trade: portfolio_manager.TradingContext | None = None,
     expected: gateway.Expected | None = None,
     news_ctx: news.NewsContext | None = None,
 ) -> dict[str, JobFn]:
@@ -190,7 +197,7 @@ def interaction(review: journal.Review, center: ControlCenter) -> Interaction:
 
 def news_context(
     settings: Settings,
-    trade: trading.TradingContext,
+    trade: portfolio_manager.TradingContext,
     analysis: AnalysisContext,
     http: httpx.AsyncClient,
 ) -> news.NewsContext:
@@ -218,10 +225,10 @@ def trading_context(
     center: ControlCenter,
     notifier: Notifier,
     link: gateway.BrokerLink,
-) -> trading.TradingContext:
+) -> portfolio_manager.TradingContext:
     """Every order goes to IBKR through `link`; there is no other broker."""
     mode = settings.app_mode
-    return trading.TradingContext(
+    return portfolio_manager.TradingContext(
         sessions=sessions,
         executor=Executor(sessions, link.broker, book_for_mode(mode)),
         center=center,
@@ -325,7 +332,7 @@ async def serve(
             commands(state, sessions, book, analysis)
             | journal.commands(sessions, review, settings.trace_ui_url)
             | center.commands()
-            | trading.commands(trade),
+            | portfolio_manager.commands(trade),
             interaction(review, center),
         )
         center.notifier = trade.notifier = link.notifier = notifier
@@ -337,8 +344,8 @@ async def serve(
         state.kill_switch, state.interlock = kill_switch_line, center.interlock_line
         if isinstance(notifier, TelegramBot):
             notifier.start()
-        expected = partial(trading.expected_positions, trade)
-        center.on_halt = partial(trading.cancel_entries, trade, "halted")
+        expected = partial(portfolio_manager.expected_positions, trade)
+        center.on_halt = partial(portfolio_manager.cancel_entries, trade, "halted")
         link.on_connect = partial(
             gateway.on_connect,
             sessions=sessions,

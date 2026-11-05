@@ -3,9 +3,9 @@ import asyncio
 from alembic import context
 from sqlalchemy import Connection
 
-from trading_agent.db.models import Base
-from trading_agent.db.session import create_engine
-from trading_agent.settings import Settings
+from trading_agent.core.db import create_engine
+from trading_agent.core.settings import Settings
+from trading_agent.core.tables import Base
 
 target_metadata = Base.metadata
 

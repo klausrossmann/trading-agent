@@ -16,15 +16,15 @@ from typing import Any
 
 import pandas as pd
 
-from trading_agent import screen
-from trading_agent.data.universe import load_universe
-from trading_agent.db.session import create_engine, session_factory
-from trading_agent.domain.market import Market
-from trading_agent.modules import earnings, technical
-from trading_agent.modules.history import load_history
+from trading_agent.analysts import earnings, technical
+from trading_agent.analysts.history import load_history
+from trading_agent.core.db import create_engine, session_factory
+from trading_agent.core.settings import Settings
+from trading_agent.marketdata.types import Market
+from trading_agent.marketdata.universe import load_universe
 from trading_agent.risk.config import load_risk_config
-from trading_agent.settings import Settings
-from trading_agent.strategies import pullback
+from trading_agent.screen import rules as pullback
+from trading_agent.screen import screen
 
 OUT = Path(__file__).resolve().parents[1] / "tests" / "evals" / "cases"
 START = date(2022, 1, 1)

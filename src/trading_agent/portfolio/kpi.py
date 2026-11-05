@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from trading_agent.domain.trading import Trade
+from trading_agent.portfolio.types import Trade
 
 
 @dataclass(frozen=True)

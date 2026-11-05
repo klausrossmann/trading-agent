@@ -2,13 +2,13 @@ from datetime import date
 
 import pytest
 
-from trading_agent.data import ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import market as repo
-from trading_agent.db import trades as trades_repo
-from trading_agent.domain.market import Instrument
-from trading_agent.domain.trading import Trade
+from trading_agent.core.db import Sessions
+from trading_agent.marketdata import ingest
+from trading_agent.marketdata import store as repo
+from trading_agent.marketdata.types import Instrument
+from trading_agent.marketdata.universe import Universe
+from trading_agent.portfolio import store as portfolio_repo
+from trading_agent.portfolio.types import Trade
 
 pytestmark = pytest.mark.db
 
@@ -57,9 +57,9 @@ async def test_replace_book_is_idempotent(sessions: Sessions) -> None:
     )
     for _ in range(2):
         async with sessions.begin() as s:
-            await trades_repo.replace_book(s, "agent_paper", [trade, open_trade])
+            await portfolio_repo.replace_book(s, "agent_paper", [trade, open_trade])
     async with sessions() as s:
-        rows = await trades_repo.book_trades(s, "agent_paper")
+        rows = await portfolio_repo.book_trades(s, "agent_paper")
     assert len(rows) == 2
     assert str(rows[0].pnl_net_eur) in {"18.51", "None"}
     assert {str(r.exit_price) for r in rows} == {"54.0730", "None"}

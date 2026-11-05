@@ -4,22 +4,21 @@ from uuid import uuid4
 
 import pytest
 
-from trading_agent import journal
 from trading_agent.contexts import BookContext
-from trading_agent.data import ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import book as book_repo
-from trading_agent.db import market as market_repo
-from trading_agent.db import proposals as repo
-from trading_agent.db import trades as trades_repo
-from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.domain.analysis import AnalysisRecord
-from trading_agent.domain.market import Instrument
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import Check, RiskDecision
-from trading_agent.domain.trading import Trade
-from trading_agent.notify import messages
+from trading_agent.core.db import Sessions
+from trading_agent.llm.store import DbAnalysisStore
+from trading_agent.llm.types import AnalysisRecord
+from trading_agent.marketdata import ingest
+from trading_agent.marketdata import store as market_repo
+from trading_agent.marketdata.types import Instrument
+from trading_agent.marketdata.universe import Universe
+from trading_agent.portfolio import store as portfolio_repo
+from trading_agent.portfolio.types import Trade
+from trading_agent.proposer import store as repo
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk import store as risk_repo
+from trading_agent.risk.types import Check, RiskDecision
+from trading_agent.telegram import journal, messages
 
 pytestmark = pytest.mark.db
 
@@ -175,7 +174,7 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
         holding_sessions=2,
     )
     async with sessions.begin() as s:
-        await trades_repo.replace_book(s, "agent_paper", [trade])
+        await portfolio_repo.replace_book(s, "agent_paper", [trade])
         aaa = next(p for p in await repo.proposals(s, start=DAY) if p.yahoo_symbol == "AAA")
         rejected = RiskDecision(
             approved=False,
@@ -183,7 +182,7 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
                 Check(name="portfolio", outcome="fail", detail="4 positions and entries open"),
             ),
         )
-        await book_repo.save_decision(s, aaa.id, rejected, datetime(2026, 10, 5, 14, tzinfo=UTC))
+        await risk_repo.save_decision(s, aaa.id, rejected, datetime(2026, 10, 5, 14, tzinfo=UTC))
     book = BookContext.load(ROOT / "config", sessions, universe)
     text = messages.render_digest(await journal.build_digest(book, DAY))
     assert text.splitlines() == [

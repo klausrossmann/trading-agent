@@ -11,10 +11,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from trading_agent.domain.market import Instrument, Market
-from trading_agent.domain.orders import Bracket, OrderKind
-from trading_agent.domain.risk import Holding, PortfolioState
-from trading_agent.domain.trading import Book, Trade
+from trading_agent.ibkr.types import Bracket, OrderKind
+from trading_agent.marketdata.types import Instrument, Market
+from trading_agent.portfolio.types import Book, Trade
+from trading_agent.risk.types import Holding, PortfolioState
 
 CENT = Decimal("0.01")
 PENDING = ("approved", "submitted", "working")

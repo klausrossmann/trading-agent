@@ -7,7 +7,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_ai.models import Model
 
-from trading_agent.domain.analysis import Role
+from trading_agent.llm.types import Role
 
 
 class Price(BaseModel):

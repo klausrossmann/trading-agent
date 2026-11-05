@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from trading_agent.domain.risk import KillSwitch, Trip
 from trading_agent.risk import kill_switch as k
+from trading_agent.risk.types import KillSwitch, Trip
 
 BERLIN = ZoneInfo("Europe/Berlin")
 NOW = datetime(2026, 10, 7, 14, 0, tzinfo=UTC)  # Wednesday, 16:00 in Berlin

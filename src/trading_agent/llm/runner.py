@@ -20,7 +20,11 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import RunUsage
 
-from trading_agent.domain.analysis import (
+from trading_agent.llm import tracing
+from trading_agent.llm.budget import BudgetMode, budget_mode, month_start
+from trading_agent.llm.models import ModelsConfig, ModelUnavailableError
+from trading_agent.llm.prompts import Prompt
+from trading_agent.llm.types import (
     AnalysisRecord,
     AnalysisStatus,
     CallKind,
@@ -29,10 +33,6 @@ from trading_agent.domain.analysis import (
     StoredAnalysis,
     ValidationIssue,
 )
-from trading_agent.llm import tracing
-from trading_agent.llm.budget import BudgetMode, budget_mode, month_start
-from trading_agent.llm.models import ModelsConfig, ModelUnavailableError
-from trading_agent.llm.prompts import Prompt
 
 log = structlog.get_logger(__name__)
 

@@ -1,0 +1,60 @@
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from trading_agent.risk.config import RiskConfig, load_risk_config
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_repo_risk_config_matches_concept() -> None:
+    risk = load_risk_config(ROOT / "config")
+    assert risk.capital.agent_budget_eur == 1000
+    assert risk.per_trade.max_risk_pct == Decimal("1.5")
+    assert risk.per_trade.min_risk_pct < risk.per_trade.max_risk_pct
+    assert risk.per_trade.min_position_pct < risk.per_trade.max_position_pct
+    assert risk.portfolio.max_open_positions == 8
+    assert risk.loss_limits.max_drawdown_pct == 15
+    assert risk.markets.live == ["US"]
+
+
+def test_paper_budget_for_both_markets() -> None:
+    risk = load_risk_config(ROOT / "config")
+    assert risk.for_mode("paper").capital.agent_budget_eur == 15000
+    assert risk.for_mode("live").capital.agent_budget_eur == 1000
+    no_paper = risk.model_copy(
+        update={"capital": risk.capital.model_copy(update={"paper_budget_eur": None})}
+    )
+    assert no_paper.for_mode("paper").capital.agent_budget_eur == 1000
+
+
+def test_unknown_keys_are_rejected() -> None:
+    raw = yaml.safe_load((ROOT / "config" / "risk.yaml").read_text())
+    raw["per_trade"]["max_risk_pc"] = 2  # typo
+    with pytest.raises(ValidationError, match="max_risk_pc"):
+        RiskConfig.model_validate(raw)
+
+
+def test_stop_atr_bounds_must_be_ordered() -> None:
+    raw = yaml.safe_load((ROOT / "config" / "risk.yaml").read_text())
+    raw["per_trade"]["stop_atr_min"] = 4
+    with pytest.raises(ValidationError, match="stop_atr_min must be below stop_atr_max"):
+        RiskConfig.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("min_risk_pct", 2, "min_risk_pct must not exceed max_risk_pct"),
+        ("min_position_pct", 40, "min_position_pct must not exceed max_position_pct"),
+        ("min_confidence", 0.6, "min_confidence must be below max_confidence"),
+    ],
+)
+def test_size_ranges_must_be_ordered(key: str, value: float, message: str) -> None:
+    raw = yaml.safe_load((ROOT / "config" / "risk.yaml").read_text())
+    raw["per_trade"][key] = value
+    with pytest.raises(ValidationError, match=message):
+        RiskConfig.model_validate(raw)

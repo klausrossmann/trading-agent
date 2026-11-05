@@ -5,13 +5,13 @@ from typing import Any, cast
 import pytest
 from ib_async import Contract
 
-from trading_agent.data import ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import market as repo
-from trading_agent.domain.broker import BrokerPosition
-from trading_agent.domain.market import Instrument
+from trading_agent.core.db import Sessions
 from trading_agent.ibkr import link as gateway
+from trading_agent.ibkr.account import BrokerPosition
+from trading_agent.marketdata import ingest
+from trading_agent.marketdata import store as repo
+from trading_agent.marketdata.types import Instrument
+from trading_agent.marketdata.universe import Universe
 
 pytestmark = pytest.mark.db
 

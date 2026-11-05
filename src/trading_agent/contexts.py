@@ -11,33 +11,40 @@ from typing import Any
 import httpx
 from pydantic_ai.models import Model
 
-from trading_agent import telemetry
-from trading_agent.agents import critic, proposer
-from trading_agent.agents.critic import CriticAgent
-from trading_agent.agents.proposer import ProposerAgent
-from trading_agent.calc.fees import FeeSchedule
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.series import EcbProvider, FredProvider
-from trading_agent.data.universe import Universe
-from trading_agent.data.yahoo import YahooProvider
-from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.domain.market import Market
-from trading_agent.domain.risk import Mode
-from trading_agent.domain.trading import Book, book_for_mode
+from trading_agent.analysts import earnings as earnings_module
+from trading_agent.analysts import technical as technical_module
+from trading_agent.analysts.earnings import EarningsModule
+from trading_agent.analysts.technical import PlanRules, TechnicalModule
+from trading_agent.core import telemetry
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import (
+    DataConfig,
+    QualityConfig,
+    Settings,
+    load_data_config,
+    load_fees,
+)
+from trading_agent.critic import agent as critic
+from trading_agent.critic.agent import CriticAgent
 from trading_agent.ibkr.market import IbkrPriceProvider
 from trading_agent.llm.fake import fake_model
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import LlmRunner
-from trading_agent.modules import earnings as earnings_module
-from trading_agent.modules import technical as technical_module
-from trading_agent.modules.earnings import EarningsModule
-from trading_agent.modules.technical import PlanRules, TechnicalModule
-from trading_agent.notify.telegram import LogNotifier, Notifier
+from trading_agent.llm.store import DbAnalysisStore
+from trading_agent.marketdata.series import EcbProvider, FredProvider
+from trading_agent.marketdata.types import Market
+from trading_agent.marketdata.universe import Universe
+from trading_agent.marketdata.yahoo import YahooProvider
+from trading_agent.news.rules import NewsParams, load_news_params
+from trading_agent.portfolio.fees import FeeSchedule
+from trading_agent.portfolio.types import Book, book_for_mode
+from trading_agent.proposer import agent as proposer
+from trading_agent.proposer.agent import ProposerAgent
 from trading_agent.risk.config import RiskConfig, load_risk_config
-from trading_agent.settings import DataConfig, QualityConfig, Settings, load_data_config, load_fees
-from trading_agent.strategies.news import NewsParams, load_news_params
-from trading_agent.strategies.pullback import PullbackParams, load_params
+from trading_agent.risk.types import Mode
+from trading_agent.screen.rules import PullbackParams, load_params
+from trading_agent.telegram.bot import LogNotifier, Notifier
 
 
 @dataclass

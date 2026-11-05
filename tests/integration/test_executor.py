@@ -9,20 +9,20 @@ import pytest
 from fake_broker import Bar, SimBroker
 from sqlalchemy import func, select, text
 
-from trading_agent.data import ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import market as market_repo
-from trading_agent.db import orders as repo
-from trading_agent.db import proposals as proposals_repo
-from trading_agent.db import steps as steps_repo
-from trading_agent.db.models import AuditLog, FillRow, OrderRow
-from trading_agent.domain.market import Instrument
-from trading_agent.domain.orders import BracketRequest, BrokerOrder, OrderSpec
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import RiskDecision
-from trading_agent.execution.fsm import InvalidTransition
-from trading_agent.executor import Executor
+from trading_agent.core import step_store as steps_repo
+from trading_agent.core.db import Sessions
+from trading_agent.core.tables import AuditLog, FillRow, OrderRow
+from trading_agent.ibkr import store as repo
+from trading_agent.ibkr.executor import Executor
+from trading_agent.ibkr.fsm import InvalidTransition
+from trading_agent.ibkr.types import BracketRequest, BrokerOrder, OrderSpec
+from trading_agent.marketdata import ingest
+from trading_agent.marketdata import store as market_repo
+from trading_agent.marketdata.types import Instrument
+from trading_agent.marketdata.universe import Universe
+from trading_agent.proposer import store as proposals_repo
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk.types import RiskDecision
 
 pytestmark = pytest.mark.db
 

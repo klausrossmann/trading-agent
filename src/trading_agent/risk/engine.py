@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from trading_agent.calc.fees import FeeSchedule, round_trip_fees
-from trading_agent.calc.sizing import Sizing, position_size
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import (
+from trading_agent.portfolio.fees import FeeSchedule, round_trip_fees
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk.config import RiskConfig
+from trading_agent.risk.sizing import Sizing, position_size
+from trading_agent.risk.types import (
     Check,
     CheckName,
     Controls,
@@ -22,7 +23,6 @@ from trading_agent.domain.risk import (
     RiskDecision,
     Trip,
 )
-from trading_agent.risk.config import RiskConfig
 
 CLUSTER_RHO = 0.7  # holdings correlated above this count as one cluster (risk.yaml comment)
 

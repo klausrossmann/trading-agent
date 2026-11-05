@@ -6,7 +6,7 @@ from typing import cast, get_args
 
 import yaml
 
-from trading_agent.domain.analysis import Role
+from trading_agent.llm.types import Role
 
 
 @dataclass(frozen=True)

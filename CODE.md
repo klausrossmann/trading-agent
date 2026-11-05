@@ -1,222 +1,275 @@
 # Code map
 
-What each part of the code does, where to find it and how the parts work together. For what the system does in plain language, see [HOW-IT-WORKS.md](HOW-IT-WORKS.md); for what runs when, see [RUNTIME.md](RUNTIME.md); for the multi-agent design, see [MAS-DESIGN.md](MAS-DESIGN.md).
+What each part of the code does and where to find it. The code is organised **by component**: one folder per part of the system (market data, news, the screen, the analysts, the proposer, the critic, the risk engine, IBKR, the portfolio, Telegram, ...). What the system does is in [HOW-IT-WORKS.md](HOW-IT-WORKS.md); how to run it is in [MANUAL.md](MANUAL.md).
 
 **Contents**
 
-1. [The big picture](#1-the-big-picture)
-2. [One stock through the code](#2-one-stock-through-the-code)
-3. [Rules the code follows](#3-rules-the-code-follows)
-4. [`src/trading_agent`, file by file](#4-srctrading_agent-file-by-file)
-5. [Outside `src/`](#5-outside-src)
-6. [Where to change what](#6-where-to-change-what)
+1. [The layout](#1-the-layout)
+2. [The components](#2-the-components)
+3. [One stock through the code](#3-one-stock-through-the-code)
+4. [Rules the code follows](#4-rules-the-code-follows)
+5. [Each component, file by file](#5-each-component-file-by-file)
+6. [Outside `src/`](#6-outside-src)
+7. [Where to change what](#7-where-to-change-what)
 
 ---
 
-## 1. The big picture
+## 1. The layout
 
-About 13,600 lines of Python in `src/trading_agent` (plus 9,300 lines of tests), in two kinds of code:
+About 13,600 lines of Python in `src/trading_agent/` (plus 9,500 lines of tests).
 
-- **Orchestration** (the 17 files directly in `src/trading_agent/`, about 4,100 lines): decides *when* and *in which order* things happen, talks to the database, Telegram and the AI providers, and wires everything together.
-- **Building blocks** (the 14 folders): each does one kind of work. Most of them are **pure**: no database, no network, no clock, so they can be tested exactly.
-
-```mermaid
-flowchart TB
-    subgraph Orchestration["Orchestration (src/trading_agent/*.py)"]
-        MAIN[__main__ / scheduler / contexts]
-        ORCH[orchestrator / pipeline]
-        NEWS[news]
-        JOBS[jobs / briefing / journal]
-        TRAD[trading / executor / controls]
-    end
-    subgraph Pure["Pure building blocks (no I/O)"]
-        DOMAIN[domain]
-        CALC[calc]
-        STRAT[strategies]
-        RISK[risk]
-        PORT[portfolio]
-        EXEC[execution]
-    end
-    subgraph AI["AI"]
-        LLM[llm]
-        MOD[modules]
-        AG[agents]
-    end
-    subgraph IO["Outside world"]
-        DATA[data: Yahoo, ECB, FRED, news]
-        IBKR[ibkr: connection, market data, orders]
-        DB[db: PostgreSQL]
-        NOTIFY[notify: Telegram, heartbeat]
-    end
-    DASH[dashboard: read-only]
-
-    MAIN --> ORCH & NEWS & JOBS & TRAD
-    ORCH --> AG & MOD & RISK & TRAD
-    NEWS --> MOD & TRAD
-    MOD & AG --> LLM
-    TRAD --> EXEC & IBKR & RISK & PORT
-    JOBS --> DATA
-    Orchestration --> DB & NOTIFY
-    DASH --> DB
+```
+src/trading_agent/
+├── orchestrator.py   the trading day, stage by stage: scan, place, monitor, end of day
+├── scheduler.py      when each stage runs; starts everything (`trading-agent run`)
+├── contexts.py       the shared setup each stage gets (settings, data sources, agents, rules)
+├── __main__.py       the command line (`trading-agent ...`)
+│
+├── marketdata/       prices, FX, macro, earnings dates, calendars, universe, data quality
+├── news/             Finnhub and Yahoo headlines, the News agent, buy signals and news exits
+├── screen/           the pullback rules and the daily candidate list
+├── analysts/         the technical and earnings analysts (AI) and the price-level menu
+├── proposer/         the proposer (AI), the proposals and the ranking
+├── critic/           the critic (AI)
+├── risk/             the risk engine, position size, kill switch
+├── ibkr/             everything that talks to IBKR: connection, market data, orders, executor
+├── portfolio/        the agent's book: positions, P&L in EUR, stops, fees, trades, tax
+├── telegram/         the bot, every message, morning briefing, evening digest, heartbeat
+├── dashboard/        the read-only website
+├── llm/              shared AI plumbing: the runner every AI call goes through
+└── core/             shared plumbing: settings, database, step log, logging, tracing
 ```
 
-| Folder | Files / lines | In one sentence |
-|---|---|---|
-| `domain/` | 12 / 640 | The shared data types (instrument, bar, proposal, order, risk decision, step, news item). No logic, no I/O. |
-| `calc/` | 8 / 650 | Calculations: indicators, price levels, trend, macro snapshot, fees, position size, stop moves. |
-| `strategies/` | 3 / 160 | The screen's pullback rules and the thresholds for news trades. |
-| `data/` | 8 / 750 | Fetching data from outside (Yahoo, ECB, FRED, Finnhub/Yahoo news), loading it into the database, checking its quality, exchange calendars. |
-| `db/` | 14 / 1,650 | The database: table definitions and one file of reads/writes per topic. |
-| `llm/` | 10 / 870 | Running any AI call safely: model choice, budget, cache, pacing, validation, retry, recording, tracing, prompts. |
-| `modules/` | 5 / 680 | The three analysis agents that read data: technical analyst, earnings analyst, News agent. |
-| `agents/` | 3 / 220 | The two deciding agents: proposer and critic. |
-| `risk/` | 4 / 470 | The risk engine (9 checks, position size) and the kill switch. Never uses AI. |
-| `execution/` | 4 / 240 | Orders without I/O: how a bracket order looks, the broker interface, the order state machine, comparing IBKR's positions with the book. |
-| `ibkr/` | 4 / 660 | **Everything that talks to IBKR**: the gateway connection with reconnects and reconciliation, market data (contracts, tick sizes, quotes, bars) and the order adapter. |
-| `portfolio/` | 5 / 430 | Accounting: cash, positions, P&L in EUR, market facts for the risk engine, trade statistics, tax report. |
-| `notify/` | 4 / 780 | Telegram bot, every message text, heartbeat ping. |
-| `dashboard/` | 5 / 1,280 | The read-only Streamlit website. |
+Inside a component the files follow the same pattern, so you know where to look:
+
+| File | Holds |
+|---|---|
+| `types.py` | The component's data: plain types, no database, no network (e.g. `marketdata/types.py`: `Instrument`, `Bar`; `proposer/types.py`: `Proposal`) |
+| `store.py` | The component's database reads and writes (e.g. `proposer/store.py`: save and load proposals) |
+| `agent.py` | The AI agent, if the component has one: its input, its output, the code checks after every answer |
+| `stage.py` | What the component does in the trading day, called by `orchestrator.py` or the scheduler, including the steps it writes to the step log |
+| other files | The component's logic (e.g. `risk/engine.py`, `screen/screen.py`, `ibkr/link.py`) |
 
 ---
 
-## 2. One stock through the code
+## 2. The components
 
-What happens to one stock, say AAPL, on a normal day, with the file that does each step:
+| Component | Files / lines | In one sentence | AI? |
+|---|---|---|---|
+| `marketdata/` | 13 / 1,490 | Fetches daily prices (Yahoo), FX and the ECB rate, US macro (FRED) and earnings dates, stores them, checks their quality, knows the exchange calendars and computes indicators. | |
+| `news/` | 7 / 730 | Fetches company news (Finnhub for US, Yahoo for EU), lets the News agent read it, and turns its answers into buy signals and news exits. | ✓ |
+| `screen/` | 4 / 430 | Checks every stock against the pullback rules (or the basic rules for news candidates) and picks the day's candidates. | |
+| `analysts/` | 7 / 840 | The technical analyst and the earnings analyst, the facts they get (indicators, the level menu, past reports) and the analyst stage. | ✓ |
+| `proposer/` | 5 / 520 | The proposer: its input, turning its answer (and the critic's) into a proposal, ranking by confidence × R:R, storing proposals. | ✓ |
+| `critic/` | 3 / 110 | The critic: looks for reasons not to take a proposal. | ✓ |
+| `risk/` | 9 / 1,080 | The risk engine (9 checks, position size), its limits from `risk.yaml`, the kill switch with its Telegram commands, and the decision for each proposal. Never uses AI. | |
+| `ibkr/` | 11 / 1,660 | The IB Gateway connection, market data from IBKR, the order adapter, bracket orders, the order state machine, the executor and the reconciliation. The only component that talks to IBKR. | |
+| `portfolio/` | 10 / 1,100 | The agent's book from IBKR's fills: positions, cash, P&L in EUR, stop moves, fees, round trips, the tax report, and `/positions`, `/pnl`, `/exit`. | |
+| `telegram/` | 6 / 1,110 | The bot (only your chat), every message text, the morning briefing, `/proposals`, `/why`, `/review`, the evening digest, the heartbeat. | |
+| `dashboard/` | 5 / 1,280 | The read-only Streamlit website: Day, Portfolio, Costs, Risk. | |
+| `llm/` | 12 / 1,030 | Runs every AI call safely: model choice, budget, cache, pacing, validation, one retry, recording, tracing, prompts. | |
+| `core/` | 10 / 900 | Settings, database connection and tables, the step log, logging, tracing setup. | |
+| top level | 4 / 1,390 | `orchestrator.py`, `scheduler.py`, `contexts.py`, `__main__.py` | |
+
+```mermaid
+flowchart LR
+    SCHED[scheduler] --> ORCH[orchestrator]
+    SCHED --> NEWS[news]
+    SCHED --> MD[marketdata]
+    ORCH --> SCREEN[screen] --> AN[analysts] --> PROP[proposer] --> CRIT[critic]
+    ORCH --> RISK[risk] --> IBKR[ibkr]
+    ORCH --> PORT[portfolio]
+    NEWS -- buy signals --> SCREEN
+    NEWS -- news exits --> IBKR
+    PORT <--> IBKR
+    AN & PROP & CRIT & NEWS --> LLM[llm]
+    ORCH & NEWS & PORT --> TG[telegram]
+    DASH[dashboard] -. reads .-> DB[(database)]
+```
+
+---
+
+## 3. One stock through the code
+
+What happens to one stock, say AAPL, on a normal day:
 
 | Time (Berlin) | Step | Code |
 |---|---|---|
-| 14:15 | News on AAPL is fetched (Finnhub) and read by the News agent; a confident `buy` is stored as a signal | `news.scan_news` → `data/news.py` → `modules/news.py` (via `llm/runner.py`) → `db/steps.py` |
-| 14:45 | The screen checks AAPL against the pullback rules (or the basic rules, if it has a news signal) | `orchestrator.scan` → `pipeline.screen_stocks` → `screen.py` + `strategies/pullback.py` |
-| 14:45 | Technical and earnings analysts | `pipeline.analyse` → `modules/technical.py`, `modules/earnings.py` (indicators from `calc/`) |
-| 14:45 | Proposer decides: buy (at which levels) or pass; critic looks for reasons not to | `orchestrator.scan` → `pipeline.proposer_input` → `agents/proposer.py`, `agents/critic.py` |
-| 14:45 | Ranked by confidence × R:R and stored as a proposal; every step written to the step log | `pipeline.rank`, `db/proposals.py`, `db/steps.py` |
-| 15:45 | Risk engine: 9 checks and the number of shares | `orchestrator.place` → `trading.decide` → `risk/engine.py` (facts from `portfolio/`) |
-| 15:45 | Bracket order (buy limit + stop + target) sent to IBKR | `executor.submit` → `execution/orders.py` → `ibkr/orders.py` |
-| every 10 min | IBKR's order status and fills come back; 🟢 when bought | `orchestrator.monitor` → `trading.sync` → `executor.sync` → `execution/fsm.py` |
-| every 30 min | News on the held stock; a confident `exit` sells at the market | `news.watch_positions` → `modules/news.py` → `executor.request_exit` |
-| 22:35 | Stop to breakeven / trailing, time stop, book and loss limits | `orchestrator.end_of_day` → `calc/stops.py`, `executor.move_stop`, `trading.rebuild_book` → `portfolio/book.py` |
-| any time | You see it all on the dashboard (Day page) and in Telegram | `dashboard/`, `notify/messages.py` |
+| 22:30 the day before | Closing prices are stored and checked | `marketdata/jobs.eod` → `marketdata/ingest.py`, `marketdata/quality.py` |
+| 14:15 | News on AAPL is fetched and read by the News agent; a confident `buy` is stored as a buy signal | `news/stage.scan_news` → `news/sources.py` → `news/agent.py` (via `llm/runner.py`) → `core/step_store.py` |
+| 14:45 | The screen checks AAPL against the pullback rules (or the basic rules, with a news signal) | `orchestrator.scan` → `screen/stage.screen_stocks` → `screen/screen.py`, `screen/rules.py` |
+| 14:45 | Technical and earnings analysts | `analysts/stage.analyse` → `analysts/technical.py`, `analysts/earnings.py` (level menu from `analysts/levels.py`) |
+| 14:45 | Proposer: buy (at which levels) or pass | `proposer/stage.proposer_input` → `proposer/agent.py` |
+| 14:45 | Critic: reasons not to | `critic/agent.py`, `critic/stage.critic_step` |
+| 14:45 | Ranked by confidence × R:R and stored; every step written to the step log | `proposer/stage.rank`, `proposer/store.py`, `core/step_store.py` |
+| 15:45 | Risk engine: 9 checks and the number of shares | `orchestrator.place` → `risk/stage.decide` → `risk/engine.py` (facts from `portfolio/`) |
+| 15:45 | Bracket order (buy limit + stop + target) sent to IBKR | `ibkr/executor.submit` → `ibkr/brackets.py` → `ibkr/orders.py` |
+| every 10 min | IBKR's order status and fills come back; 🟢 when bought | `orchestrator.monitor` → `portfolio/manager.sync` → `ibkr/executor.sync` → `ibkr/fsm.py` |
+| every 30 min | News on the held stock; a confident `exit` sells at the market | `news/stage.watch_positions` → `news/agent.py` → `ibkr/executor.request_exit` |
+| 22:35 | Stop to breakeven / trailing, time stop, book and loss limits | `orchestrator.end_of_day` → `portfolio/stops.py`, `ibkr/executor.move_stop`, `portfolio/manager.rebuild_book` → `portfolio/book.py` |
+| any time | You see it all on the dashboard (Day page) and in Telegram | `dashboard/`, `telegram/messages.py` |
 
 ---
 
-## 3. Rules the code follows
+## 4. Rules the code follows
 
 Enforced by `import-linter` in CI (`pyproject.toml`, `[tool.importlinter]`), so breaking them fails the build:
 
 | Rule | Why |
 |---|---|
-| `llm`, `modules` and `agents` can't import `execution`, `ibkr` or `risk` | AI code has no path to an order; it can only return data |
-| `risk` can't import `llm`, `modules` or `agents` | The risk engine is deterministic |
-| Only the orchestration layer imports `execution` and `ibkr` | Orders are placed in one controlled place (`executor.py`) |
-| `domain` imports nothing of the app | The shared types stay plain |
-| `dashboard` can't import `risk`, `llm`, `agents`, `notify`, `scheduler`, `execution` or `ibkr` | The website can only read |
+| The AI agents (`llm`, `analysts/technical`, `analysts/earnings`, `proposer/agent`, `critic/agent`, `news/agent`) can't import `ibkr` or `risk` | AI code has no path to an order; it can only return data |
+| The risk engine (`risk/engine`, `config`, `kill_switch`, `sizing`, `types`) can't import any AI code | The risk engine is deterministic |
+| Data, AI, risk-engine, accounting, Telegram-message and dashboard modules can't import `ibkr/link`, `ibkr/market`, `ibkr/orders` or `ibkr/executor` | Only the stages, the orchestrator and the scheduler reach IBKR; orders are placed in one controlled place (`ibkr/executor.py`) |
+| Every `types.py` (and `core/steps`, `core/numbers`) imports no database, network or broker library | The shared types stay plain data |
+| `dashboard` can't import the IBKR code, the AI runner, the risk engine and its controls, Telegram, the scheduler or the orchestrator | The website can only read |
 
 Further conventions:
 
-- **Pure where possible.** `domain`, `calc`, `strategies`, `risk`, `portfolio`, `execution` and `dashboard/frames.py` have no I/O; the caller passes every fact in. `pyright` checks `domain`, `calc`, `risk`, `execution` and `ibkr/orders.py` in strict mode.
-- **100 % branch coverage** for `risk`, `execution` and `ibkr/orders.py` (`make test` fails below that).
+- **Pure where possible.** Types, the risk engine, the screen's rules, indicators, the level menu, the order state machine, the book accounting and `dashboard/frames.py` have no I/O; the caller passes every fact in. `pyright` checks every `types.py`, the risk engine, the order code and the calculations in strict mode (`[tool.pyright] strict` in `pyproject.toml`).
+- **100 % branch coverage** for `risk/engine.py`, `risk/config.py`, `risk/kill_switch.py`, `ibkr/brackets.py`, `ibkr/fsm.py`, `ibkr/reconcile.py` and `ibkr/orders.py` (`make test` fails below that).
 - **All IBKR code is in `ibkr/`**; everything else talks to IBKR only through it.
-- **Prices are `Decimal`** in domain types and the database; calculators convert to `float`.
+- **Prices are `Decimal`** in types and the database; calculations convert to `float`.
 - **Every AI call goes through `llm/runner.py`**: no other code calls a model.
 - **Untrusted text** (news) is wrapped by `llm/sanitize.py` before it reaches a prompt.
+- **Every stage writes steps** (`core/steps.py`) so the dashboard can show each stock's path with inputs and outputs.
 
 ---
 
-## 4. `src/trading_agent`, file by file
+## 5. Each component, file by file
 
-### 4.1 Orchestration (files directly in `src/trading_agent/`)
+### 5.1 Top level
 
 | File | What it does |
 |---|---|
-| `__main__.py` | The command line (`trading-agent ...`): `run` (starts the agent), `backfill`, `quality`, `analyse`, `propose`, `place`, `ibkr-check`, `tax-report`, `reset`, `dashboard`. Each command loads the settings, opens the database and calls the matching function below. |
-| `scheduler.py` | The agent's main loop (`serve`): builds the contexts, starts Telegram and the IBKR link, plans the jobs from `config/schedule.yaml` (`build_scheduler`, `plan_session_jobs`: session jobs are planned each day at 00:05 from the exchange calendars) and maps each job name to its function (`job_functions`). Alerts on failed or missed jobs. |
 | `orchestrator.py` | **The trading day, stage by stage**: `scan` (screen + news candidates → technical → earnings → proposer → critic → rank → proposals), `place` (risk engine → bracket at IBKR, at most 1 news trade a day), `monitor` (IBKR sync), `end_of_day` (stop moves, time stops, book, loss limits). Start reading here. |
-| `news.py` | **The news stages**: `scan_news` (before each scan: news on every stock not held → buy signals) and `watch_positions` (every 30 min: news on held stocks → exit at the market, or advice). Fetching, batching, acting on the News agent's answer. |
-| `pipeline.py` | Building blocks of the scan: `screen_stocks` (the screen with blocked, blacklisted and held stocks dropped, plus news candidates), `analyse` (technical and earnings analyst per stock), the proposer's input, turning the agents' answers into a `Proposal`, the ranking (confidence × R:R), the macro snapshot, and the step-log entries for each phase. |
-| `screen.py` | The screen: every stock's verdict against the pullback rules (or only the basic rules for news candidates), with the first rule it fails; selecting the top N; merging pullback and news candidates. |
-| `trading.py` | What `place`, `monitor` and `end_of_day` build on: `TradingContext`, loading the book from brackets and fills, the risk decision for one proposal (`decide`), the IBKR sync with 🟢 🔴 ⌛ alerts, rebuilding the book and checking loss limits at the close, and the Telegram commands `/positions`, `/pnl`, `/exit`. |
-| `executor.py` | The only code that creates orders: `submit` (bracket), `sync` (IBKR's order states and fills → state machine), `cancel_entry`, `request_exit`, `move_stop`. Writes the order, broker, fill, stop, exit and cancel steps, including IBKR's error text. Safe to repeat: orders are keyed by their `orderRef`. |
-| `controls.py` | The kill switch at runtime (`ControlCenter`): `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`, loss-limit trips, the live-mode interlock. |
-| `contexts.py` | The shared setup objects, built once at start or per CLI command: `RuntimeState` (what `/status` shows), `DataContext` (data providers), `BookContext` (rules, fees, benchmarks), `AnalysisContext` (AI runner, agents, screen rules). |
-| `jobs.py` | The data jobs: prices after each close (`eod`), macro, earnings, `backfill`, the quality check with its ⚠️ alert, and the yearly `tax_report`. |
-| `briefing.py` | The 📰 morning briefing and the answers to `/status` and `/budget`. |
-| `journal.py` | Telegram `/proposals`, `/why`, `/review` (your labels) and the 🌙 evening digest. |
-| `settings.py` | All settings: `.env` and Docker secrets (`Settings`), and typed views of `config/schedule.yaml`, `data.yaml`, `fees.yaml`. |
-| `telemetry.py` | AI tracing: OpenTelemetry setup and export to Langfuse ([OBSERVABILITY.md](OBSERVABILITY.md)). |
-| `log.py` | Structured JSON logging; adds the trace id to log lines written during an AI run. |
+| `scheduler.py` | The agent's main loop (`serve`): builds the contexts, starts Telegram and the IBKR link, plans the jobs from `config/schedule.yaml` (session jobs each day at 00:05 from the exchange calendars) and maps each job name to its function. Alerts on failed or missed jobs. |
+| `contexts.py` | The shared setup objects, built once at start or per CLI command: `RuntimeState` (what `/status` shows), `DataContext` (data sources), `BookContext` (rules, fees, benchmarks), `AnalysisContext` (AI runner, agents, screen rules). |
+| `__main__.py` | The command line: `run` (starts the agent), `backfill`, `quality`, `analyse`, `propose`, `ibkr-check`, `tax-report`, `reset`, `dashboard`. |
 
-### 4.2 `domain/`: shared types
+### 5.2 `marketdata/`
 
 | File | Contents |
 |---|---|
-| `market.py` | `Instrument`, `Bar`, `BarSeries`, `EarningsEvent`, `Observation` (FX, macro), `Market` (`US`/`EU`), tick increments |
-| `proposals.py` | `Proposal` (status, prices, confidence, rank, strategy, thesis) and your labels |
-| `orders.py` | `BracketRequest`, `OrderSpec`, `BrokerOrder`, `BrokerFill`, `Bracket` and its events; `order_ref` builds `TA-<symbol>-<kind>-<id>` |
-| `risk.py` | Risk engine input and output: `Controls`, `PortfolioState`, `MarketSnapshot`, `Check`, `RiskDecision` |
-| `steps.py` | `Step`: one phase of one stock on one day (the step log) |
-| `trading.py` | `Trade` (a round trip) and `Book` (`agent_paper`, `agent_live`) |
-| `news.py` | `NewsItem` with its relevance |
-| `analysis.py` | Records of AI runs and calls, validation issues |
-| `levels.py` | Named price levels (the menu the AI picks from) |
-| `broker.py` | Account values and positions as IBKR reports them |
-| `numbers.py` | Float → Decimal at fixed places |
-
-### 4.3 `calc/`: calculations
-
-| File | Contents |
-|---|---|
-| `indicators.py` | SMA, EMA, RSI, MACD, ATR, Bollinger |
-| `levels.py` | Swing points, support/resistance zones, Fibonacci, and the **level menu** (`close`, `ema20`, `atr_stop_2x`, `resistance_1`, ...) |
-| `trend.py` | Trend state (daily/weekly), relative strength, reactions after earnings |
-| `macro.py` | Macro snapshot for the proposer (benchmark trend, VIX, yields, credit spreads) |
-| `fees.py` | IBKR commissions per market (from `config/fees.yaml`) |
-| `sizing.py` | Position size: risk, position and cash limits, scaled by confidence |
-| `stops.py` | Breakeven and ATR trailing stop (stops only move up) |
-
-### 4.4 `strategies/`: rules
-
-| File | Contents |
-|---|---|
-| `pullback.py` | The pullback rules (price, liquidity, trend, dip, RSI, earnings buffer) and trade-management parameters (entry validity, breakeven, time stop, trailing); read from `config/strategies.yaml` |
-| `news.py` | `NewsParams`: confidence thresholds and limits for news trades (`config/strategies.yaml` → `news:`) |
-
-### 4.5 `data/`: the outside world, read side
-
-| File | Contents |
-|---|---|
-| `ingest.py` | Loading into the database, idempotent and incremental: prices (with restatement detection), FX, macro, earnings, universe sync, quality run |
+| `types.py` | `Instrument`, `Bar`, `BarSeries`, `EarningsEvent`, `Observation` (FX, macro), `Market` (`US`/`EU`), tick increments |
 | `yahoo.py` | Daily bars and earnings dates via yfinance |
 | `series.py` | ECB (EUR/USD, deposit rate) and FRED (US macro) |
-| `news.py` | Company news: `FinnhubNews` (US), `YahooNews` (EU) |
+| `ingest.py` | Loading into the database, idempotent and incremental: prices (with restatement detection), FX, macro, earnings, universe sync, quality run |
+| `store.py` | Tables `instruments`, `bars_daily`, `fx_daily`, `macro_series`, `earnings_events` |
+| `jobs.py` | The data jobs: prices after each close (`eod`), `macro`, `earnings`, `backfill`, the quality check with its ⚠️ alert |
 | `quality.py` | Data checks: missing sessions, bad prices, jumps, zero volume, stale data |
-| `calendars.py` | Exchange sessions (holidays, half-days, DST) for XETR and XNYS |
+| `calendars.py` | Exchange sessions (holidays, half-days, summer time) for XETR and XNYS |
 | `universe.py` | Reads `config/universe.yaml` |
+| `indicators.py` | SMA, EMA, RSI, MACD, ATR, Bollinger |
+| `trend.py` | Trend state (daily/weekly), relative strength, reactions after earnings |
+| `macro.py` | Macro snapshot for the proposer (benchmark trend, VIX, yields, credit spreads) |
 
-### 4.6 `db/`: the database
-
-`models.py` defines every table; `session.py` creates the connection. One file per topic for reads and writes:
-
-| File | Tables |
-|---|---|
-| `market.py` | `instruments`, `bars_daily`, `fx_daily`, `macro_series`, `earnings_events` |
-| `proposals.py` | `proposals`, `user_labels` |
-| `steps.py` | `steps` (the step log; also the news buy signals) |
-| `orders.py` | `brackets`, `orders`, `fills` |
-| `book.py` | `risk_decisions`, `equity_daily` |
-| `trades.py` | `trades` |
-| `analyses.py` | `analyses` (every AI answer, also the cache), `llm_calls` (every attempt with messages and cost) |
-| `news.py` | `news` |
-| `controls.py` | `kill_switch` |
-| `reports.py` | `reports` (tax) |
-| `audit.py` | `audit_log` |
-
-The schema changes only through Alembic migrations (`migrations/versions/`).
-
-### 4.7 `llm/`: running AI calls
+### 5.3 `news/`
 
 | File | Contents |
 |---|---|
-| `runner.py` | **Every AI call**: cache lookup → budget check → pacing → call → validators → one corrective retry → store (`analyses`, `llm_calls`) → trace |
+| `types.py` | `NewsItem` with its relevance |
+| `sources.py` | `FinnhubNews` (US, paced to 60 requests a minute), `YahooNews` (EU) |
+| `store.py` | Table `news` (each headline once) |
+| `agent.py` | The **News agent**: headlines (and, for held stocks, the position facts and thesis) in; importance per headline and `buy` / `exit` / `none` per stock out |
+| `rules.py` | `NewsParams`: the thresholds from `config/strategies.yaml` → `news:` |
+| `stage.py` | `scan_news` (before each scan: news on every stock not held → buy signals) and `watch_positions` (every 30 min: news on held stocks → exit at the market, or advice) |
+
+### 5.4 `screen/`
+
+| File | Contents |
+|---|---|
+| `rules.py` | The pullback rules (price, liquidity, trend, dip, RSI, earnings buffer) and trade-management parameters (entry validity, breakeven, time stop, trailing), from `config/strategies.yaml` |
+| `screen.py` | Every stock's verdict with the first rule it fails; the basic rules for news candidates; selecting the top N; merging both lists |
+| `stage.py` | `screen_stocks` (drops blocked, blacklisted and held stocks; adds news candidates) and the `screen` step |
+
+### 5.5 `analysts/`
+
+| File | Contents |
+|---|---|
+| `technical.py` | The **technical analyst**: indicators, trend and the level menu in; rating, setup quality and a draft plan out |
+| `earnings.py` | The **earnings analyst**: next report vs. the holding window, past surprises and price reactions |
+| `history.py` | Loads the data one analysis needs, cut at the scan date (no look-ahead) |
+| `levels.py` | Swing points, support/resistance, Fibonacci, and the **level menu** (`close`, `ema20`, `atr_stop_2x`, `resistance_1`, ...) |
+| `level_refs.py` | Named price levels: the only prices an agent may choose from |
+| `stage.py` | `analyse` (both analysts per candidate), the `technical` and `earnings` steps |
+
+### 5.6 `proposer/` and `critic/`
+
+| File | Contents |
+|---|---|
+| `proposer/agent.py` | The **proposer**: propose (entry, stop, target from the menu, thesis, invalidation, confidence) or pass |
+| `proposer/types.py` | `Proposal` (status, prices, confidence, rank, strategy, thesis) and your labels |
+| `proposer/store.py` | Tables `proposals`, `user_labels` |
+| `proposer/stage.py` | The proposer's input (incl. holdings and the macro snapshot), turning the answers into a `Proposal`, the ranking (confidence × R:R), the `rank` step |
+| `critic/agent.py` | The **critic**: objections with severity, a confidence change |
+| `critic/stage.py` | The `critic` step |
+
+### 5.7 `risk/`
+
+| File | Contents |
+|---|---|
+| `engine.py` | `evaluate`: the 9 checks and the number of shares; `loss_trips` at the close |
+| `config.py` | Typed `config/risk.yaml` (unknown keys stop the start) |
+| `sizing.py` | Position size: risk, position and cash limits, scaled by confidence |
+| `kill_switch.py` | Kill-switch transitions (active, paused, halted) |
+| `controls.py` | The kill switch at runtime: `/pause`, `/resume`, `/stop`, `/reset`, `/confirm_live`, loss-limit trips, the live interlock |
+| `types.py` | `Controls`, `PortfolioState`, `MarketSnapshot`, `Check`, `RiskDecision`, `KillSwitch` |
+| `store.py` | Tables `kill_switch`, `risk_decisions` |
+| `stage.py` | `decide`: the facts for one proposal (prices, ATR, correlations, earnings distance, the account) → the engine → the `risk` step |
+
+### 5.8 `ibkr/`
+
+| File | Contents |
+|---|---|
+| `link.py` | The IB Gateway connection (`BrokerLink`): connects, checks every 30 s, reconnects with backoff, 🔌 after 10 min down. On every (re)connect: contract ids and the reconciliation. Also `check` for `trading-agent ibkr-check`. |
+| `market.py` | Contract ids, tick increments (`MarketInfo`), quotes, daily bars (optional), request pacing |
+| `orders.py` | `IbkrBroker`: places, cancels and modifies orders, reads orders, fills, positions and account values, and IBKR's error messages |
+| `brackets.py` | What a bracket looks like (entry limit, stop, target; OCA group) and the `OrderBroker` interface |
+| `fsm.py` | The bracket's state machine: submitted → working → filled → exiting → closed (or expired, cancelled) |
+| `executor.py` | **The only code that creates orders**: `submit`, `sync`, `cancel_entry`, `request_exit`, `move_stop`. Writes the order, broker, fill, stop, exit and cancel steps, with IBKR's error text. Safe to repeat: orders are keyed by their `orderRef`. |
+| `reconcile.py` | IBKR positions vs. the book |
+| `types.py` | `BracketRequest`, `OrderSpec`, `BrokerOrder`, `BrokerFill`, `Bracket` and its events; `order_ref` builds `TA-<symbol>-<kind>-<id>` |
+| `account.py` | Account values and positions as IBKR reports them |
+| `store.py` | Tables `brackets`, `orders`, `fills` |
+
+### 5.9 `portfolio/`
+
+| File | Contents |
+|---|---|
+| `manager.py` | The book at work: `TradingContext`, loading the book, the IBKR sync with 🟢 🔴 ⌛ alerts, rebuilding the book and checking loss limits at the close, the expected positions for the reconciliation, the yearly tax report, `/positions`, `/pnl`, `/exit` |
+| `book.py` | The account from brackets and fills: cash (with settlement days), positions, equity, day/week P&L, drawdown, round trips |
+| `snapshot.py` | Market facts for the risk engine: mid price, ATR, liquidity, earnings distance, correlations; rounding to IBKR's tick sizes |
+| `stops.py` | Breakeven and ATR trailing stop (stops only move up) |
+| `fees.py` | IBKR commissions per market (`config/fees.yaml`) |
+| `kpi.py` | Trade statistics (win rate, expectancy, ...) |
+| `tax.py` | Realized gains and losses in EUR per sale, for Anlage KAP |
+| `types.py` | `Trade` (a round trip) and `Book` (`agent_paper`, `agent_live`) |
+| `store.py` | Tables `trades`, `equity_daily`, `reports` |
+
+### 5.10 `telegram/`
+
+| File | Contents |
+|---|---|
+| `bot.py` | The bot: long polling, only your chat, commands and buttons; a log-only fallback without a token |
+| `messages.py` | Every Telegram text (pure functions) |
+| `briefing.py` | The 📰 morning briefing, `/status`, `/budget` |
+| `journal.py` | `/proposals`, `/why`, `/review` (your labels) and the 🌙 evening digest |
+| `heartbeat.py` | The ping to healthchecks.io |
+
+### 5.11 `dashboard/`
+
+| File | Contents |
+|---|---|
+| `app.py` | Entry point (`trading-agent dashboard`) |
+| `pages.py` | The pages: **Day** (pick a day: stocks per phase, one row per stock, every step of a stock with input and output), **Portfolio**, **Costs**, **Risk** |
+| `queries.py` | Read-only SQL for the pages, on a read-only connection |
+| `frames.py` | Pure table transforms (day table, funnel, positions, sold trades, KPIs) |
+
+### 5.12 `llm/`
+
+| File | Contents |
+|---|---|
+| `runner.py` | **Every AI call**: cache lookup → budget check → pacing → call → validators → one corrective retry → store → trace |
 | `models.py` | `config/models.yaml`: role → model, prices, rate limits, scan size |
 | `budget.py` | Monthly budget: normal, lean (80 %), stopped (100 %) |
 | `prompts.py` | Loads `prompts/<agent>/v<N>.md` |
@@ -224,97 +277,56 @@ The schema changes only through Alembic migrations (`migrations/versions/`).
 | `sanitize.py` | Wraps and cleans untrusted text (news) |
 | `tracing.py` | Span names and attributes for Langfuse |
 | `fake.py` | The offline fake model (`LLM_FAKE=true`, dev stack only) |
-| `store.py` | In-memory store for the evals |
+| `types.py` | Records of AI runs and calls, validation issues, trace links |
+| `store.py` | Tables `analyses` (every AI answer, also the cache) and `llm_calls` (every attempt with messages and cost) |
+| `memory_store.py` | In-memory store for the evals |
 
-### 4.8 `modules/` and `agents/`: the AI agents
-
-Each agent is one file with its input type, output type, `validate` (code checks after every answer) and `finalize`. The prompt is in `prompts/`.
-
-| File | Agent | Model role |
-|---|---|---|
-| `modules/technical.py` | Technical analyst: indicators, trend and the level menu in; rating, setup quality and a draft plan out | `analysis` |
-| `modules/earnings.py` | Earnings analyst: next report vs. the holding window, past surprises and reactions | `analysis` |
-| `modules/news.py` | News agent: headlines (and position facts for held stocks) in; relevance per headline and `buy` / `exit` / `none` per stock out | `triage` |
-| `modules/history.py` | Loads the data one analysis needs, cut at the scan date (no look-ahead) | |
-| `agents/proposer.py` | Proposer: propose (entry, stop, target from the menu) or pass | `proposer` |
-| `agents/critic.py` | Critic: objections, severity, confidence change | `critic` |
-
-### 4.9 `risk/`: the risk engine
+### 5.13 `core/`
 
 | File | Contents |
 |---|---|
-| `engine.py` | `evaluate`: the 9 checks (global state, instrument, levels, sizing, fees, portfolio, loss limits, rate limits) and the number of shares; `loss_trips` at the close |
-| `config.py` | Typed `config/risk.yaml` |
-| `kill_switch.py` | Kill-switch transitions (active, paused, halted) |
-
-### 4.10 `execution/`: orders, without I/O
-
-| File | Contents |
-|---|---|
-| `orders.py` | What a bracket looks like (entry limit, stop, target; OCA group) and the `OrderBroker` interface every broker implements |
-| `fsm.py` | The bracket's state machine: submitted → working → filled → exiting → closed (or expired, cancelled) |
-| `reconcile.py` | IBKR positions vs. the book |
-
-### 4.11 `ibkr/`: everything that talks to IBKR
-
-| File | Contents |
-|---|---|
-| `link.py` | The IB Gateway connection (`BrokerLink`): connects, checks every 30 s, reconnects with backoff, 🔌 after 10 min down. On every (re)connect: contract ids (`sync_conids`) and reconciliation (`reconcile_positions`: IBKR positions vs. the book; any difference halts). Also `check` for `trading-agent ibkr-check`. |
-| `orders.py` | `IbkrBroker`, the `OrderBroker` for IBKR: places, cancels and modifies orders, reads orders, fills, positions and account values, and IBKR's error messages |
-| `market.py` | Market data: contract ids, tick increments (`MarketInfo`), quotes, daily bars (optional, `config/data.yaml`), request pacing |
-
-### 4.12 `portfolio/`: accounting
-
-| File | Contents |
-|---|---|
-| `portfolio/book.py` | The account from brackets and fills: cash (with settlement days), positions, equity, day/week P&L, drawdown, round-trip trades |
-| `portfolio/snapshot.py` | Market facts for the risk engine: mid price, ATR, liquidity, earnings distance, correlations; rounding to IBKR's tick sizes |
-| `portfolio/tax.py` | Realized gains and losses in EUR per sale, for Anlage KAP |
-| `portfolio/kpi.py` | Trade statistics for the dashboard (win rate, expectancy, ...) |
-
-### 4.13 `notify/` and `dashboard/`
-
-| File | Contents |
-|---|---|
-| `notify/telegram.py` | The bot: long polling, only your chat, commands and buttons; a log-only fallback without a token |
-| `notify/messages.py` | Every Telegram text (pure functions) |
-| `notify/heartbeat.py` | The ping to healthchecks.io |
-| `dashboard/app.py` | Entry point (`trading-agent dashboard`) |
-| `dashboard/pages.py` | The pages: Day, Portfolio, Costs, Risk |
-| `dashboard/queries.py` | Read-only SQL for the pages |
-| `dashboard/frames.py` | Pure table transforms (day table, funnel, positions, KPIs) |
+| `settings.py` | All settings: `.env` and Docker secrets (`Settings`), and typed views of `config/schedule.yaml`, `data.yaml`, `fees.yaml` |
+| `db.py` | Database connection and sessions |
+| `tables.py` | Every table definition; the schema changes only through Alembic migrations (`migrations/versions/`) |
+| `steps.py` | `Step`: one phase of one stock on one day (the step log) |
+| `step_store.py` | Table `steps`, also the news buy signals |
+| `audit.py` | Table `audit_log` |
+| `numbers.py` | Float → Decimal at fixed places |
+| `log.py` | Structured JSON logging with the trace id; `describe_error` (error text without URLs or keys) |
+| `telemetry.py` | AI tracing: OpenTelemetry setup and export to Langfuse ([OBSERVABILITY.md](docs/design/OBSERVABILITY.md)) |
 
 ---
 
-## 5. Outside `src/`
+## 6. Outside `src/`
 
 | Path | Contents |
 |---|---|
-| `config/` | Settings in YAML: `risk.yaml` (limits), `strategies.yaml` (screen, trade management, news), `models.yaml` (AI models, budget), `schedule.yaml` (when jobs run), `universe.yaml` (the stocks), `data.yaml` (sources, quality), `fees.yaml`. Every setting is explained in [HOW-IT-WORKS.md](HOW-IT-WORKS.md) section 12. |
-| `prompts/` | One folder per agent, one file per prompt version (`v1.md`, ...). Older versions stay for comparison; the code names the version in use (`PROMPT_VERSION`). |
-| `migrations/` | Alembic database migrations, `0001` to `0014`; `make migrate` applies them |
+| `config/` | Settings in YAML: `risk.yaml`, `strategies.yaml`, `models.yaml`, `schedule.yaml`, `universe.yaml`, `data.yaml`, `fees.yaml`. Every setting is explained in [MANUAL.md](MANUAL.md) section 9. |
+| `prompts/` | One folder per agent, one file per prompt version (`v1.md`, ...). The code names the version in use (`PROMPT_VERSION` in the agent's file). |
+| `migrations/` | Alembic database migrations, `0001` to `0014`; `make up` applies them |
 | `scripts/` | `build_universe.py` (refresh `universe.yaml`), `export_eval_cases.py` (record eval cases), `backup.sh`, `restore.sh` |
 | `docker/db/init/` | Creates the database roles (`agent`, read-only `dashboard`) on a fresh database |
-| `tests/unit/` | Fast tests without a database (`make test`) |
-| `tests/integration/` | Tests against a throwaway Postgres (`make test-db`); `tests/fake_broker.py` stands in for IBKR |
+| `tests/unit/<component>/` | Fast tests without a database, one folder per component (`make test`) |
+| `tests/integration/` | Tests across components against a throwaway Postgres (`make test-db`); `tests/fake_broker.py` stands in for IBKR |
 | `tests/evals/` | AI golden cases against the real models (`uv run pytest -m llm tests/evals`) |
-| `compose.yaml`, `Dockerfile`, `Makefile` | The containers and the commands to run them ([ZENBOOK.md](ZENBOOK.md)) |
+| `compose.yaml`, `Dockerfile`, `Makefile` | The containers and the commands to run them ([MANUAL.md](MANUAL.md)) |
 | `compose.dev.yaml` | Local stack with the fake model, no IBKR (`make dev-up`) |
+| `docs/design/` | Background: concept, implementation history, multi-agent design, observability |
 
 ---
 
-## 6. Where to change what
+## 7. Where to change what
 
 | You want to change | Change | Code that reads it |
 |---|---|---|
 | A limit (positions, risk per trade, loss limits) | `config/risk.yaml` | `risk/config.py`, `risk/engine.py` |
-| The screen rules, breakeven, time stop, trailing | `config/strategies.yaml` → `pullback:` | `strategies/pullback.py` |
-| News thresholds | `config/strategies.yaml` → `news:` | `strategies/news.py`, `news.py`, `orchestrator.py` |
+| The screen rules, breakeven, time stop, trailing | `config/strategies.yaml` → `pullback:` | `screen/rules.py` |
+| News thresholds | `config/strategies.yaml` → `news:` | `news/rules.py`, `news/stage.py`, `orchestrator.py` |
 | When a job runs | `config/schedule.yaml` | `scheduler.py` |
 | A model or the AI budget | `config/models.yaml` | `llm/models.py`, `llm/budget.py` |
 | What an agent is told | New file `prompts/<agent>/v<N+1>.md`, then `PROMPT_VERSION` in the agent's file | `llm/prompts.py` |
-| What an agent sees | The agent's input type in `modules/` or `agents/`, filled in `pipeline.py` or `news.py` | |
-| A Telegram text | `notify/messages.py` | |
+| What an agent sees | The agent's input type in its `agent.py` (or `analysts/technical.py`, `earnings.py`), filled in its `stage.py` | |
+| A Telegram text | `telegram/messages.py` | |
 | A dashboard page | `dashboard/pages.py` (+ `queries.py`, `frames.py`) | |
-| The stocks | `scripts/build_universe.py` → `config/universe.yaml` | `data/universe.py`, `data/ingest.py` |
-| A table | New migration in `migrations/versions/` and `db/models.py` | |
+| The stocks | `scripts/build_universe.py` → `config/universe.yaml` | `marketdata/universe.py`, `marketdata/ingest.py` |
+| A table | New migration in `migrations/versions/` and `core/tables.py` | |

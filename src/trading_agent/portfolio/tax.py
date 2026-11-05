@@ -12,8 +12,8 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from trading_agent.domain.market import Instrument
-from trading_agent.domain.orders import Bracket
+from trading_agent.ibkr.types import Bracket
+from trading_agent.marketdata.types import Instrument
 from trading_agent.portfolio.book import BookFill
 
 CENT = Decimal("0.01")

@@ -14,11 +14,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from trading_agent.domain.analysis import ValidationIssue
+from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import ModelsConfig, ModelUnavailableError
 from trading_agent.llm.prompts import Prompt
 from trading_agent.llm.runner import LlmRunner, input_hash
-from trading_agent.llm.store import MemoryStore
+from trading_agent.llm.types import ValidationIssue
 
 AS_OF = date(2026, 10, 2)
 NOW = datetime(2026, 10, 4, 12, tzinfo=UTC)

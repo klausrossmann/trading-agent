@@ -4,8 +4,8 @@ ZENBOOK ?= zenbook
 # Checkout on the Zenbook, relative to the SSH user's home
 ZENBOOK_DIR ?= projects/trading-agent
 TEST_DB := ta-test-db
-# Risk engine, execution and the IBKR order adapter need 100 % branch coverage (IMPLEMENTATION.md 16.2).
-RISK_COV := --cov=trading_agent.risk --cov=trading_agent.execution --cov=trading_agent.ibkr.orders --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
+# The risk engine and the order code need 100 % branch coverage (IMPLEMENTATION.md 16.2).
+RISK_COV := --cov=trading_agent.risk.engine --cov=trading_agent.risk.config --cov=trading_agent.risk.kill_switch --cov=trading_agent.ibkr.brackets --cov=trading_agent.ibkr.fsm --cov=trading_agent.ibkr.reconcile --cov=trading_agent.ibkr.orders --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
 
 sync:
 	uv sync
@@ -73,8 +73,14 @@ build: secrets/trace_headers
 migrate: secrets/trace_headers
 	docker compose run --rm agent alembic upgrade head
 
+# Builds the image from the checked-out code, migrates the database, (re)starts everything.
+# Use it for the first start and after every `git pull`.
 up: secrets/trace_headers
+	docker compose build
+	docker compose up -d --wait db
+	docker compose run --rm agent alembic upgrade head
 	docker compose up -d
+	@echo "dashboard: http://localhost:8501 (phone: the https://...ts.net address from 'tailscale serve status')"
 
 backup:
 	scripts/backup.sh

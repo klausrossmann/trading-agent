@@ -15,8 +15,8 @@ from decimal import Decimal
 import structlog
 from ib_async import IB, Contract, Stock
 
-from trading_agent.domain.market import Bar, BarSeries, Increments, Instrument
-from trading_agent.domain.numbers import to_decimal
+from trading_agent.core.numbers import to_decimal
+from trading_agent.marketdata.types import Bar, BarSeries, Increments, Instrument
 
 log = structlog.get_logger(__name__)
 

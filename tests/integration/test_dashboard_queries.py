@@ -9,26 +9,26 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from trading_agent.core import step_store as steps_repo
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import Settings
+from trading_agent.core.steps import Step
 from trading_agent.dashboard import queries
-from trading_agent.data import ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import book as book_repo
-from trading_agent.db import market as repo
-from trading_agent.db import proposals as proposals_repo
-from trading_agent.db import steps as steps_repo
-from trading_agent.db import trades as trades_repo
-from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.db.controls import save_kill_switch
-from trading_agent.domain.analysis import AnalysisRecord, LlmCall, ValidationIssue
-from trading_agent.domain.market import Bar, BarSeries, Instrument, Observation
-from trading_agent.domain.orders import BracketRequest
-from trading_agent.domain.proposals import Proposal
-from trading_agent.domain.risk import Check, KillSwitch, RiskDecision
-from trading_agent.domain.steps import Step
-from trading_agent.domain.trading import Trade
-from trading_agent.executor import Executor
-from trading_agent.settings import Settings
+from trading_agent.ibkr.executor import Executor
+from trading_agent.ibkr.types import BracketRequest
+from trading_agent.llm.store import DbAnalysisStore
+from trading_agent.llm.types import AnalysisRecord, LlmCall, ValidationIssue
+from trading_agent.marketdata import ingest
+from trading_agent.marketdata import store as repo
+from trading_agent.marketdata.types import Bar, BarSeries, Instrument, Observation
+from trading_agent.marketdata.universe import Universe
+from trading_agent.portfolio import store as portfolio_repo
+from trading_agent.portfolio.types import Trade
+from trading_agent.proposer import store as proposals_repo
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk import store as risk_repo
+from trading_agent.risk.store import save_kill_switch
+from trading_agent.risk.types import Check, KillSwitch, RiskDecision
 
 pytestmark = pytest.mark.db
 
@@ -116,7 +116,7 @@ async def _seed(sessions: Sessions) -> dict[str, int]:
                 "holding_sessions": 1,
             }
         )
-        await trades_repo.replace_book(s, "agent_paper", [trade, closed])
+        await portfolio_repo.replace_book(s, "agent_paper", [trade, closed])
         proposal = Proposal(
             id=uuid4(),
             source="agent",
@@ -300,8 +300,8 @@ async def test_risk_and_report_queries(sessions: Sessions, settings: Settings) -
                 Check(name="portfolio", outcome="fail", detail="4 open"),
             ),
         )
-        await book_repo.save_decision(s, proposal_id, decision, NOW)
-        await book_repo.upsert_equity(
+        await risk_repo.save_decision(s, proposal_id, decision, NOW)
+        await portfolio_repo.upsert_equity(
             s,
             "agent_paper",
             "US",

@@ -21,32 +21,33 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select, text
 
-from trading_agent import jobs, news, orchestrator, trading
+from trading_agent import orchestrator
 from trading_agent.contexts import BookContext
-from trading_agent.controls import ControlCenter
-from trading_agent.data import calendars, ingest
-from trading_agent.data.ingest import Sessions
-from trading_agent.data.universe import Universe
-from trading_agent.db import book as book_repo
-from trading_agent.db import market as market_repo
-from trading_agent.db import proposals as proposals_repo
-from trading_agent.db import reports as reports_repo
-from trading_agent.db import steps as steps_repo
-from trading_agent.db import trades as trades_repo
-from trading_agent.db.analyses import DbAnalysisStore
-from trading_agent.db.models import BracketRow
-from trading_agent.domain.market import BERLIN, Bar, BarSeries, Instrument, Observation
-from trading_agent.domain.news import NewsItem
-from trading_agent.domain.orders import BrokerOrder
-from trading_agent.domain.proposals import Proposal
-from trading_agent.executor import Executor
+from trading_agent.core import step_store as steps_repo
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import load_fees
+from trading_agent.core.tables import BracketRow
+from trading_agent.ibkr.executor import Executor
+from trading_agent.ibkr.types import BrokerOrder
 from trading_agent.llm.models import load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import LlmRunner
-from trading_agent.modules.news import NewsAgent
+from trading_agent.llm.store import DbAnalysisStore
+from trading_agent.marketdata import calendars, ingest
+from trading_agent.marketdata import store as market_repo
+from trading_agent.marketdata.types import BERLIN, Bar, BarSeries, Instrument, Observation
+from trading_agent.marketdata.universe import Universe
+from trading_agent.news import stage as news
+from trading_agent.news.agent import NewsAgent
+from trading_agent.news.types import NewsItem
+from trading_agent.portfolio import manager as portfolio_manager
+from trading_agent.portfolio import store as portfolio_repo
+from trading_agent.proposer import store as proposals_repo
+from trading_agent.proposer.types import Proposal
+from trading_agent.risk import store as risk_repo
 from trading_agent.risk.config import load_risk_config
-from trading_agent.settings import load_fees
-from trading_agent.strategies.pullback import load_params
+from trading_agent.risk.controls import ControlCenter
+from trading_agent.screen.rules import load_params
 
 pytestmark = pytest.mark.db
 
@@ -152,7 +153,7 @@ def _proposal(inst_id: int, symbol: str, target: float, rank: int) -> Proposal:
 
 async def _setup(
     sessions: Sessions, *, time_stop: int = 15, trail_atr: float | None = None
-) -> tuple[trading.TradingContext, Clock, Inbox, dict[str, int]]:
+) -> tuple[portfolio_manager.TradingContext, Clock, Inbox, dict[str, int]]:
     async with sessions.begin() as s:
         await s.execute(text("TRUNCATE kill_switch, equity_daily, audit_log"))
     universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA"), _inst("BBB")])
@@ -192,7 +193,7 @@ async def _setup(
     risk = risk.model_copy(
         update={"capital": risk.capital.model_copy(update={"paper_budget_eur": D(10000)})}
     )
-    ctx = trading.TradingContext(
+    ctx = portfolio_manager.TradingContext(
         sessions=sessions,
         executor=Executor(sessions, broker, "agent_paper", clock),
         center=center,
@@ -203,7 +204,7 @@ async def _setup(
         notifier=inbox,
         clock=clock,
     )
-    center.on_halt = lambda: trading.cancel_entries(ctx, "halted")
+    center.on_halt = lambda: portfolio_manager.cancel_entries(ctx, "halted")
     return ctx, clock, inbox, ids
 
 
@@ -213,7 +214,7 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     result = await orchestrator.place(ctx, "US")
     assert [p.symbol for p in result.placed] == ["AAA"]
     assert result.rejected == [("BBB", "levels: R:R 1.50 below 2.0")]
-    assert (await trading.positions_text(ctx)).endswith(
+    assert (await portfolio_manager.positions_text(ctx)).endswith(
         "pending AAA 11 limit 100.00 until Thu 08 Oct 22:00"
     )
     assert inbox.sent[-1].splitlines()[:2] == [
@@ -221,7 +222,7 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
         "  AAA 11 @ 100.00, stop 96.00, target 108.00",
     ]
     async with sessions() as s:
-        stored = await book_repo.decisions(s, [p.id for p in await proposals_repo.proposals(s)])
+        stored = await risk_repo.decisions(s, [p.id for p in await proposals_repo.proposals(s)])
     assert sorted(d.approved for d in stored.values()) == [False, True]
     async with sessions() as s:
         steps = {(x.symbol, x.step): x for x in await steps_repo.steps(s, day=TODAY)}
@@ -243,11 +244,11 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     await orchestrator.end_of_day(ctx, "US")
     assert inbox.sent[-1] == "🟢 Bought AAA 11 @ 100.05"
     async with sessions() as s:
-        [trade] = await trades_repo.book_trades(s, "agent_paper")
-        history = await book_repo.equity_history(s, "agent_paper", "US,EU")
+        [trade] = await portfolio_repo.book_trades(s, "agent_paper")
+        history = await portfolio_repo.equity_history(s, "agent_paper", "US,EU")
     assert (trade.quantity, trade.exit_date) == (11, None)
     assert history[0][0] == TODAY
-    cmds = trading.commands(ctx)
+    cmds = portfolio_manager.commands(ctx)
     positions = await cmds["positions"].run([])
     assert positions == (
         "📊 agent_paper\n  AAA 11 @ 100.05, stop 96.00, target 108.00, last 100.00: -0.01 R, "
@@ -270,8 +271,8 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
     await orchestrator.end_of_day(ctx, "US")
     assert inbox.sent[-1] == "🔴 Sold AAA 11 @ 100.00 (stop)"
     async with sessions() as s:
-        [trade] = await trades_repo.book_trades(s, "agent_paper")
-        history = await book_repo.equity_history(s, "agent_paper", "US,EU")
+        [trade] = await portfolio_repo.book_trades(s, "agent_paper")
+        history = await portfolio_repo.equity_history(s, "agent_paper", "US,EU")
     assert (trade.exit_date, trade.exit_reason) == (day3, "stop")
     assert trade.pnl_net_eur is not None
     assert trade.pnl_net_eur < 0  # breakeven minus fees and slippage
@@ -279,10 +280,10 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
 
     universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA")])
     book = BookContext.load(ROOT / "config", sessions, universe)
-    body = await jobs.tax_report(book, 2026, "agent_paper")
+    body = await portfolio_manager.tax_report(book, 2026, "agent_paper")
     assert "| 2026-10-09 | AAA | 11 | 2026-10-07 |" in body
     async with sessions() as s:
-        assert [d for d, _ in await reports_repo.reports(s, "tax:agent_paper")] == [
+        assert [d for d, _ in await portfolio_repo.reports(s, "tax:agent_paper")] == [
             date(2026, 12, 31)
         ]
 
@@ -380,7 +381,7 @@ async def test_nothing_is_placed_without_ibkr(sessions: Sessions) -> None:
     assert await ctx.executor.open_brackets() == []
     async with sessions() as s:
         steps = await steps_repo.steps(s, day=TODAY)
-        decisions = await book_repo.decisions(s, [p.id for p in await proposals_repo.proposals(s)])
+        decisions = await risk_repo.decisions(s, [p.id for p in await proposals_repo.proposals(s)])
     assert [(x.symbol, x.step, x.status, x.summary) for x in steps] == [
         ("AAA", "order", "error", not_placed),
         ("BBB", "order", "error", not_placed),
@@ -465,7 +466,9 @@ class Analyst:
 
 async def _news_setup(
     sessions: Sessions, exit_confidence: float
-) -> tuple[trading.TradingContext, Clock, Inbox, dict[str, int], news.NewsContext, Analyst]:
+) -> tuple[
+    portfolio_manager.TradingContext, Clock, Inbox, dict[str, int], news.NewsContext, Analyst
+]:
     """AAA bought and held; the next day at 14:00 UTC with fresh headlines for every stock."""
     ctx, clock, inbox, ids = await _setup(sessions)
     await orchestrator.place(ctx, "US")
@@ -515,7 +518,7 @@ async def test_news_advice_below_the_threshold_and_manual_exit(sessions: Session
     assert step.summary.startswith("exit, confidence 0.60: The company lowered its outlook")
     assert step.input == {"headlines": ["AAA changes its outlook", "Sector roundup"]}
 
-    cmds = trading.commands(ctx)
+    cmds = portfolio_manager.commands(ctx)
     assert await cmds["exit"].run([]) == "Usage: /exit SYMBOL, e.g. /exit AAPL"
     assert await cmds["exit"].run(["ZZZ"]) == "No open position in ZZZ."
     assert str(await cmds["exit"].run(["aaa"])).startswith("Exit order for AAA: sell 11 at the")
