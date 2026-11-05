@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 
 import httpx2
 import pytest
+from memory_store import MemoryStore
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -19,7 +20,6 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 
-from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import ModelsConfig
 from trading_agent.llm.prompts import Prompt
 from trading_agent.llm.runner import LlmRunner

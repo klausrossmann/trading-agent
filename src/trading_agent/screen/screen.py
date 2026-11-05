@@ -6,7 +6,7 @@ regime, earnings)."""
 import math
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -21,6 +21,8 @@ from trading_agent.screen import rules as pullback
 from trading_agent.screen.rules import PullbackParams
 
 VIX_SERIES = "VIXCLS"
+# About 410 sessions: SMA200, and as long again for the EMAs and RSI to settle.
+HISTORY_DAYS = 600
 BASIC_RULES = ("price", "liquidity")
 INDICATORS = (
     "close",
@@ -95,11 +97,12 @@ def prepare(
 
 
 async def load_market_data(
-    sessions: Sessions, benchmarks: Mapping[Market, str], p: PullbackParams
+    sessions: Sessions, benchmarks: Mapping[Market, str], p: PullbackParams, today: date
 ) -> MarketData:
+    since = today - timedelta(days=HISTORY_DAYS)
     async with sessions() as s:
         instruments = await repo.active_instruments(s)
-        bars = await repo.all_bars(s)
+        bars = await repo.all_bars(s, since)
         earnings = await repo.earnings_dates(s)
         vix = await repo.macro_series(s, VIX_SERIES) if p.regime_max_vix is not None else []
     vix_series = pd.Series(

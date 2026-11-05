@@ -92,11 +92,6 @@ def rules(ind: pd.DataFrame, p: PullbackParams) -> pd.DataFrame:
     ).fillna(False)
 
 
-def setup_mask(ind: pd.DataFrame, p: PullbackParams) -> pd.Series:
-    """True on bars where the setup is complete at the close (earnings are checked separately)."""
-    return rules(ind, p).all(axis=1).astype(bool)
-
-
 def rule_detail(rule: str, last: pd.Series, p: PullbackParams) -> str:
     """Why `rule` failed on the bar `last` (a row of `indicators`), in plain words."""
     close = float(last["close"])

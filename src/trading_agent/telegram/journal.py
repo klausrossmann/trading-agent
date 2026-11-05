@@ -17,7 +17,7 @@ from trading_agent.proposer import store as repo
 from trading_agent.proposer.types import Label, Proposal
 from trading_agent.risk import store as risk_repo
 from trading_agent.telegram import messages
-from trading_agent.telegram.bot import Command, Interaction, Notifier, Reply
+from trading_agent.telegram.bot import Command, Notifier, Reply
 
 log = structlog.get_logger(__name__)
 
@@ -89,9 +89,6 @@ class Review:
             await repo.set_reason(s, p.id, text.strip()[:500])
         self.awaiting = None
         return f"Reason saved for {p.yahoo_symbol}."
-
-    def interaction(self) -> Interaction:
-        return Interaction(self.on_button, self.on_text)
 
 
 def commands(sessions: Sessions, review: Review, trace_ui_url: str = "") -> dict[str, Command]:

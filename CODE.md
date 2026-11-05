@@ -67,7 +67,7 @@ Inside a component the files follow the same pattern, so you know where to look:
 | `portfolio/` | 10 / 1,100 | The agent's book from IBKR's fills: positions, cash, P&L in EUR, stop moves, fees, round trips, the tax report, and `/positions`, `/pnl`, `/exit`. | |
 | `telegram/` | 6 / 1,110 | The bot (only your chat), every message text, the morning briefing, `/proposals`, `/why`, `/review`, the evening digest, the heartbeat. | |
 | `dashboard/` | 5 / 1,280 | The read-only Streamlit website: Day, Portfolio, Costs, Risk. | |
-| `llm/` | 12 / 1,030 | Runs every AI call safely: model choice, budget, cache, pacing, validation, one retry, recording, tracing, prompts. | |
+| `llm/` | 11 / 1,000 | Runs every AI call safely: model choice, budget, cache, pacing, validation, one retry, recording, tracing, prompts. | |
 | `core/` | 10 / 900 | Settings, database connection and tables, the step log, logging, tracing setup. | |
 | top level | 4 / 1,390 | `orchestrator.py`, `scheduler.py`, `contexts.py`, `__main__.py` | |
 
@@ -280,7 +280,6 @@ Further conventions:
 | `fake.py` | The offline fake model (`LLM_FAKE=true`, dev stack only) |
 | `types.py` | Records of AI runs and calls, validation issues, trace links |
 | `store.py` | Tables `analyses` (every AI answer, also the cache) and `llm_calls` (every attempt with messages and cost) |
-| `memory_store.py` | In-memory store for the evals |
 
 ### 5.13 `core/`
 
@@ -308,7 +307,7 @@ Further conventions:
 | `scripts/` | `build_universe.py` (refresh `universe.yaml`), `export_eval_cases.py` (record eval cases), `backup.sh`, `restore.sh` |
 | `docker/db/init/` | Creates the database roles (`agent`, read-only `dashboard`) on a fresh database |
 | `tests/unit/<component>/` | Fast tests without a database, one folder per component (`make test`) |
-| `tests/integration/` | Tests across components against a throwaway Postgres (`make test-db`); `tests/fake_broker.py` stands in for IBKR |
+| `tests/integration/` | Tests across components against a throwaway Postgres (`make test-db`); `tests/fake_broker.py` stands in for IBKR, `tests/memory_store.py` for the AI answer store |
 | `tests/evals/` | AI golden cases against the real models (`uv run pytest -m llm tests/evals`) |
 | `compose.yaml`, `Dockerfile`, `Makefile` | The containers and the commands to run them ([MANUAL.md](MANUAL.md)) |
 | `compose.dev.yaml` | Local stack with the fake model, no IBKR (`make dev-up`) |

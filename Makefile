@@ -96,7 +96,7 @@ logs:
 	docker compose logs -f agent
 
 deploy:
-	ssh $(ZENBOOK) 'cd $(ZENBOOK_DIR) && git pull --ff-only && make secrets/trace_headers && docker compose build && docker compose run --rm agent alembic upgrade head && docker compose up -d'
+	ssh $(ZENBOOK) 'cd $(ZENBOOK_DIR) && git pull --ff-only && make up'
 
 # Local stack with the offline fake LLM and throwaway secrets (compose.dev.yaml).
 DEV := docker compose -f compose.yaml -f compose.dev.yaml

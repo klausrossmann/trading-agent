@@ -35,10 +35,9 @@ async def screen_stocks(
     first, at most `top`) are analysed. Blocked by the quality checks, blacklisted in risk.yaml
     or already held means stopped. Stocks with a news buy signal (`signals`: instrument id ->
     confidence) only need the basic rules; at most `max_news` of them."""
-    data = await screen.load_market_data(setup.sessions, setup.benchmarks, setup.rules)
-    issues = await ingest.run_quality(
-        setup.sessions, setup.quality, now=now or datetime.now(UTC), market=market
-    )
+    now = now or datetime.now(UTC)
+    data = await screen.load_market_data(setup.sessions, setup.benchmarks, setup.rules, now.date())
+    issues = await ingest.run_quality(setup.sessions, setup.quality, now=now, market=market)
     excluded = {s: "blacklisted in risk.yaml" for s in setup.blacklist}
     for i in issues:
         if i.blocking:

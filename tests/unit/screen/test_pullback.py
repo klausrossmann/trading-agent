@@ -10,10 +10,13 @@ from trading_agent.screen.rules import (
     load_params,
     rule_detail,
     rules,
-    setup_mask,
 )
 
 P = PullbackParams()
+
+
+def _passes(ind: pd.DataFrame) -> bool:
+    return bool(rules(ind, P).all(axis=1).iloc[0])
 
 
 def _ind(**overrides: float) -> pd.DataFrame:
@@ -33,7 +36,7 @@ def _ind(**overrides: float) -> pd.DataFrame:
 
 
 def test_setup_passes_when_all_rules_hold() -> None:
-    assert bool(setup_mask(_ind(), P).iloc[0])
+    assert _passes(_ind())
 
 
 @pytest.mark.parametrize(
@@ -53,11 +56,11 @@ def test_setup_passes_when_all_rules_hold() -> None:
     ],
 )
 def test_setup_fails_when_a_rule_breaks(overrides: dict[str, float]) -> None:
-    assert not bool(setup_mask(_ind(**overrides), P).iloc[0])
+    assert not _passes(_ind(**overrides))
 
 
 def test_close_near_sma50_is_enough() -> None:
-    assert bool(setup_mask(_ind(ema20=90.0, sma50=98.0), P).iloc[0])
+    assert _passes(_ind(ema20=90.0, sma50=98.0))
 
 
 def test_earnings_buffer_is_inclusive() -> None:

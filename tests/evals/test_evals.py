@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from memory_store import MemoryStore
 from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from trading_agent.analysts.earnings import EarningsInput, EarningsModule
 from trading_agent.analysts.technical import TechnicalInput, TechnicalModule
 from trading_agent.core import telemetry
-from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import AnalysisModule, LlmRunner

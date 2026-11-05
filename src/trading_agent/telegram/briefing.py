@@ -100,7 +100,7 @@ async def build_briefing(
         for i, d, timing in upcoming
         if i in instruments
     ]
-    data = await screen.load_market_data(sessions, setup.benchmarks, setup.rules)
+    data = await screen.load_market_data(sessions, setup.benchmarks, setup.rules, today)
     setups = [r.symbol for r in screen.check(data, setup.rules) if r.passed]
     held_back = sorted(s for symbols in blocked.values() for s in symbols) if blocked else None
     return messages.Briefing(

@@ -1,4 +1,4 @@
-"""The step log (domain/steps.py)."""
+"""The step log (core/steps.py)."""
 
 from collections.abc import Collection, Sequence
 from datetime import date, datetime

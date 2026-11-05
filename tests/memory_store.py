@@ -1,4 +1,4 @@
-"""In-memory analysis store for tests and evals (the agent uses `db.analyses.DbAnalysisStore`)."""
+"""In-memory analysis store for tests and evals (the agent uses `llm.store.DbAnalysisStore`)."""
 
 from collections.abc import Sequence
 from datetime import datetime

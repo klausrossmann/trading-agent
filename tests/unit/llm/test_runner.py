@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 import pytest
+from memory_store import MemoryStore
 from pydantic import BaseModel
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
@@ -14,7 +15,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import ModelsConfig, ModelUnavailableError
 from trading_agent.llm.prompts import Prompt
 from trading_agent.llm.runner import LlmRunner, input_hash

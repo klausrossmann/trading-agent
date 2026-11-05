@@ -383,7 +383,7 @@ class NewsRow(Base):
 
 
 class StepRow(Base):
-    """One phase of one stock on one day (domain/steps.py)."""
+    """One phase of one stock on one day (core/steps.py)."""
 
     __tablename__ = "steps"
 

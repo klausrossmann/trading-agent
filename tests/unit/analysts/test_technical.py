@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from memory_store import MemoryStore
 from pydantic import ValidationError
 from pydantic_ai.models.test import TestModel
 
@@ -16,7 +17,6 @@ from trading_agent.analysts.technical import (
     compute,
     technical_output_type,
 )
-from trading_agent.llm.memory_store import MemoryStore
 from trading_agent.llm.models import ModelsConfig
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import LlmRunner

@@ -209,8 +209,8 @@ async def rebuild_book(ctx: TradingContext, market: Market, day: date) -> None:
     the loss limits measured at that close (a breach pauses the next session)."""
     loaded = await load(ctx)
     async with ctx.sessions() as s:
-        found = await proposals_repo.proposals(s)
-    signals = {p.id: (p.as_of, p.strategy) for p in found}
+        found = await proposals_repo.by_ids(s, [b.id for b, _ in loaded.brackets])
+    signals = {p.id: (p.as_of, p.strategy) for p in found.values()}
 
     def sessions_between(m: Market, start: date, end: date) -> int:
         return len(calendars.sessions(calendars.CALENDAR_BY_MARKET[m], start, end)) - 1

@@ -228,9 +228,11 @@ async def bars_on(session: AsyncSession, ids: Iterable[int], day: date) -> dict[
     return {r.instrument_id: _bar(r) for r in await session.scalars(stmt)}
 
 
-async def all_bars(session: AsyncSession) -> dict[int, list[Bar]]:
-    """Every stored bar, grouped by instrument id, oldest first."""
+async def all_bars(session: AsyncSession, since: date | None = None) -> dict[int, list[Bar]]:
+    """Every stored bar (from `since` on), grouped by instrument id, oldest first."""
     stmt = select(BarDailyRow).order_by(BarDailyRow.instrument_id, BarDailyRow.date)
+    if since is not None:
+        stmt = stmt.where(BarDailyRow.date >= since)
     out: dict[int, list[Bar]] = {}
     for r in await session.scalars(stmt):
         out.setdefault(r.instrument_id, []).append(_bar(r))
