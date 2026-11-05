@@ -255,7 +255,7 @@ async def test_offline_fake_model_and_macro_context(sessions: Sessions, settings
     assert {p.status for p in run.proposals} == {"proposed"}
     assert all(p.risk_reward is not None and p.risk_reward >= 2 for p in run.proposals)
 
-    macro = await proposer_stage.macro_context(ctx, "US", date(2026, 10, 5))
+    macro = await proposer_stage.macro_context(ctx.sessions, "SPY", date(2026, 10, 5))
     assert macro.benchmark == "SPY"
     assert macro.benchmark_trend["daily"] == "up"
     assert macro.vix is None  # no FRED data stored

@@ -85,7 +85,6 @@ def backfill(market: Literal["US", "EU"] | None = MarketOption) -> None:
     """Load the universe and all market data. Idempotent and incremental: safe to re-run."""
     import httpx
 
-    from trading_agent.contexts import DataContext
     from trading_agent.core.settings import load_data_config
     from trading_agent.marketdata import jobs
     from trading_agent.marketdata.ingest import IngestResult
@@ -96,7 +95,7 @@ def backfill(market: Literal["US", "EU"] | None = MarketOption) -> None:
     async def _run(sessions: "Sessions") -> list[IngestResult]:
         async with httpx.AsyncClient() as http:
             cfg = load_data_config(settings.config_dir)
-            ctx = DataContext.build(settings, cfg, sessions, http)
+            ctx = jobs.DataContext.build(settings, cfg, sessions, http)
             return await jobs.backfill(ctx, load_universe(settings.config_dir), market)
 
     results = _with_db(settings, _run)
@@ -173,13 +172,20 @@ def analyse(
     from trading_agent.contexts import AnalysisContext
     from trading_agent.core import telemetry
     from trading_agent.marketdata.universe import load_universe
+    from trading_agent.screen import stage as screen_stage
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> analysts_stage.ScanResult:
         ctx = AnalysisContext.build(settings, sessions, load_universe(settings.config_dir))
         with telemetry.root_span("cli analyse", tags=("cli",)):
-            return await analysts_stage.analyse(ctx, symbols or None, market, top)
+            chosen = symbols
+            if not chosen:
+                found = await screen_stage.screen_stocks(
+                    ctx.screen, market, top or await ctx.scan_size()
+                )
+                chosen = [r.symbol for r in found if r.passed]
+            return await analysts_stage.analyse(ctx.analysts, chosen)
 
     result = _with_db(settings, _run)
     for item in result.items:
@@ -301,15 +307,14 @@ def tax_report(
     output: Path | None = OutputOption,
 ) -> None:
     """Yearly tax helper: share sales in EUR at trade-day ECB rates (not tax advice)."""
-    from trading_agent.contexts import BookContext
-    from trading_agent.marketdata.universe import load_universe
+    from trading_agent.core.settings import load_fees
     from trading_agent.portfolio import manager as portfolio_manager
 
     settings = _settings()
 
     async def _run(sessions: "Sessions") -> str:
-        ctx = BookContext.load(settings.config_dir, sessions, load_universe(settings.config_dir))
-        return await portfolio_manager.tax_report(ctx, year, book)
+        fees = load_fees(settings.config_dir)
+        return await portfolio_manager.tax_report(sessions, fees, year, book)
 
     text = _with_db(settings, _run)
     typer.echo(text)

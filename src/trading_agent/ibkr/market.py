@@ -78,6 +78,9 @@ class IbkrPriceProvider:
         self.ib = ib
         self.pacer = pacer or Pacer()
 
+    def connected(self) -> bool:
+        return self.ib.isConnected()
+
     async def daily_bars_async(self, instrument: Instrument, start: date, end: date) -> BarSeries:
         days = (end - start).days + 7  # the request ends now; bars after `end` are dropped
         duration = f"{math.ceil(days / 365)} Y" if days > 365 else f"{days} D"

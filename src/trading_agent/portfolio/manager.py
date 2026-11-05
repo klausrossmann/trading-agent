@@ -15,7 +15,6 @@ from uuid import UUID
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trading_agent.contexts import BookContext
 from trading_agent.core.db import Sessions
 from trading_agent.ibkr import store as orders_repo
 from trading_agent.ibkr.executor import Executor
@@ -274,11 +273,13 @@ async def expected_positions(ctx: TradingContext) -> dict[int, tuple[str, float]
     return out
 
 
-async def tax_report(ctx: BookContext, year: int, book: Book = "agent_live") -> str:
+async def tax_report(
+    sessions: Sessions, fees: FeeSchedule, year: int, book: Book = "agent_live"
+) -> str:
     """The yearly tax helper for one book, stored as report `tax:<book>` at 31 Dec."""
-    brackets, fills, instruments = await load_book(ctx.sessions, book, ctx.fees)
+    brackets, fills, instruments = await load_book(sessions, book, fees)
     body = tax.render(year, book, tax.sales([b for b, _ in brackets], fills, instruments, year))
-    async with ctx.sessions.begin() as s:
+    async with sessions.begin() as s:
         await portfolio_repo.save_report(s, f"tax:{book}", date(year, 12, 31), body)
     return body
 

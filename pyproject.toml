@@ -151,6 +151,7 @@ source_modules = [
     "trading_agent.marketdata.indicators",
     "trading_agent.marketdata.trend",
     "trading_agent.marketdata.macro",
+    "trading_agent.marketdata.jobs",
     "trading_agent.news.types",
     "trading_agent.news.sources",
     "trading_agent.news.store",
@@ -185,6 +186,12 @@ source_modules = [
     "trading_agent.telegram.messages",
     "trading_agent.telegram.bot",
     "trading_agent.telegram.heartbeat",
+    "trading_agent.telegram.briefing",
+    "trading_agent.telegram.journal",
+    "trading_agent.screen.stage",
+    "trading_agent.analysts.stage",
+    "trading_agent.proposer.stage",
+    "trading_agent.critic.stage",
     "trading_agent.dashboard",
 ]
 forbidden_modules = [
@@ -214,6 +221,31 @@ forbidden_modules = [
     "trading_agent.core.db",
     "trading_agent.core.tables",
     "trading_agent.core.settings",
+]
+
+[[tool.importlinter.contracts]]
+name = "Components never import the wiring"
+type = "forbidden"
+source_modules = [
+    "trading_agent.core",
+    "trading_agent.marketdata",
+    "trading_agent.news",
+    "trading_agent.screen",
+    "trading_agent.analysts",
+    "trading_agent.proposer",
+    "trading_agent.critic",
+    "trading_agent.risk",
+    "trading_agent.ibkr",
+    "trading_agent.portfolio",
+    "trading_agent.telegram",
+    "trading_agent.llm",
+    "trading_agent.dashboard",
+]
+forbidden_modules = [
+    "trading_agent.contexts",
+    "trading_agent.orchestrator",
+    "trading_agent.scheduler",
+    "trading_agent.__main__",
 ]
 
 [[tool.importlinter.contracts]]

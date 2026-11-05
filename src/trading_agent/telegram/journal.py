@@ -6,14 +6,13 @@ from uuid import UUID
 
 import structlog
 
-from trading_agent.contexts import BookContext
 from trading_agent.core.db import Sessions
 from trading_agent.llm.store import DbAnalysisStore
 from trading_agent.llm.types import trace_url
 from trading_agent.marketdata import store as market_repo
 from trading_agent.marketdata.types import BERLIN
 from trading_agent.portfolio import store as portfolio_repo
-from trading_agent.portfolio.types import book_for_mode
+from trading_agent.portfolio.types import Book
 from trading_agent.proposer import store as repo
 from trading_agent.proposer.types import Label, Proposal
 from trading_agent.risk import store as risk_repo
@@ -125,11 +124,12 @@ def commands(sessions: Sessions, review: Review, trace_ui_url: str = "") -> dict
     }
 
 
-async def build_digest(book: BookContext, today: date) -> messages.Digest:
-    sessions = book.sessions
+async def build_digest(
+    sessions: Sessions, name: Book, budget_eur: float, today: date
+) -> messages.Digest:
+    """`budget_eur`: the book's budget, to show results as a share of it."""
     as_of, items, labels = await latest(sessions)
-    name = book_for_mode(book.mode)
-    budget = float(book.risk.for_mode(book.mode).capital.agent_budget_eur)
+    budget = budget_eur
     async with sessions() as s:
         rows = await portfolio_repo.book_trades(s, name)
         # By id, active or not: a trade may outlive its instrument's universe membership.
@@ -172,9 +172,15 @@ async def build_digest(book: BookContext, today: date) -> messages.Digest:
     )
 
 
-async def evening_digest(book: BookContext, notifier: Notifier, today: date | None = None) -> str:
+async def evening_digest(
+    sessions: Sessions,
+    name: Book,
+    budget_eur: float,
+    notifier: Notifier,
+    today: date | None = None,
+) -> str:
     """After the US close: the day's digest."""
     today = today or datetime.now(BERLIN).date()
-    text = messages.render_digest(await build_digest(book, today))
+    text = messages.render_digest(await build_digest(sessions, name, budget_eur, today))
     await notifier.send(text)
     return text

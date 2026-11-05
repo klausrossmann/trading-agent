@@ -9,9 +9,9 @@ import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from trading_agent.contexts import DataContext, RuntimeState
 from trading_agent.core.settings import load_data_config
 from trading_agent.marketdata import ingest, jobs
+from trading_agent.marketdata.jobs import DataContext
 from trading_agent.marketdata.quality import QualityIssue
 from trading_agent.marketdata.series import EcbProvider
 from trading_agent.marketdata.yahoo import YahooProvider
@@ -45,7 +45,6 @@ async def test_quality_alert_only_for_newly_blocked(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(ingest, "run_quality", fake_quality)
     notifier = FakeNotifier()
-    state = RuntimeState(mode="paper", started_at=datetime.now(UTC))
     async with httpx.AsyncClient() as http:
         ctx = DataContext(
             sessions=None,  # pyright: ignore[reportArgumentType]
@@ -54,7 +53,6 @@ async def test_quality_alert_only_for_newly_blocked(monkeypatch: pytest.MonkeyPa
             ecb=EcbProvider(http),
             fred=None,
             notifier=notifier,
-            state=state,
         )
         for _ in range(3):
             await jobs._check_quality(ctx, "EU", datetime.now(UTC))  # pyright: ignore[reportPrivateUsage]
@@ -62,7 +60,7 @@ async def test_quality_alert_only_for_newly_blocked(monkeypatch: pytest.MonkeyPa
         "⚠️ Data quality EU: excluded from today's scan: A.DE (stale), B.DE (jump)",
         "⚠️ Data quality EU: excluded from today's scan: D.DE (stale)",
     ]
-    assert state.blocked == {"EU": ["A.DE", "D.DE"]}
+    assert ctx.blocked == {"EU": ["A.DE", "D.DE"]}
 
 
 async def test_failed_job_sends_alert() -> None:

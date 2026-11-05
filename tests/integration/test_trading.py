@@ -280,7 +280,7 @@ async def test_place_fill_breakeven_and_stop(sessions: Sessions) -> None:
 
     universe = Universe(generated=TODAY, benchmarks={}, instruments=[_inst("AAA")])
     book = BookContext.load(ROOT / "config", sessions, universe)
-    body = await portfolio_manager.tax_report(book, 2026, "agent_paper")
+    body = await portfolio_manager.tax_report(sessions, book.fees, 2026, "agent_paper")
     assert "| 2026-10-09 | AAA | 11 | 2026-10-07 |" in body
     async with sessions() as s:
         assert [d for d, _ in await portfolio_repo.reports(s, "tax:agent_paper")] == [

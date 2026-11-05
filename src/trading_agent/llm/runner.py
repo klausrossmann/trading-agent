@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Literal, Protocol
 
@@ -203,8 +203,8 @@ class LlmRunner:
         as_of: date,
         span: Span,
     ) -> Outcome[O]:
-        role = module.prompt.role
-        model_name = self.cfg.model_for(role, dev=self._dev)
+        """Cache -> price and budget -> the call with at most one corrective retry -> store."""
+        model_name = self.cfg.model_for(module.prompt.role, dev=self._dev)
         out_type = module.output_type(inp)
         text = inp.model_dump_json()
         key = input_hash(module.name, module.prompt.version, model_name, as_of, text)
@@ -216,63 +216,32 @@ class LlmRunner:
                 "module": module.name,
                 "prompt_version": module.prompt.version,
                 "model": model_name,
-                "role": role,
+                "role": module.prompt.role,
                 "instrument_id": instrument_id,
                 "as_of": as_of.isoformat(),
                 "input_hash": key,
             },
         )
-
         if (hit := await self.store.cached(key)) is not None:
             tracing.observe(span, metadata={"cached_from_trace": hit.trace_id})
+            output = out_type.model_validate(hit.output)
             return Outcome(
-                module.name,
-                hit.status,
-                model_name,
-                out_type.model_validate(hit.output),
-                hit.issues,
-                hit.id,
-                cached=True,
+                module.name, hit.status, model_name, output, hit.issues, hit.id, cached=True
             )
-
-        def skipped(reason: str) -> Outcome[O]:
+        if (reason := await self._may_not_call(model_name, span)) is not None:
             log.warning("llm.skipped", module=module.name, model=model_name, reason=reason)
             return Outcome(module.name, "skipped", model_name, reason=reason)
 
-        if self.cfg.price(model_name, self._clock().date()) is None:
-            return skipped(f"no price for {model_name} in config/models.yaml")
-        mode = await self.mode()
-        tracing.observe(span, metadata={"budget_mode": mode})
-        if mode == "stopped":
-            return skipped("monthly LLM budget used up")
-        try:
-            model = self._model_factory(model_name)
-        except ModelUnavailableError as exc:
-            return skipped(str(exc))
-
-        agent = Agent(
-            model,
-            output_type=out_type,
-            instructions=module.prompt.text,
-            name=module.name,
-            retries=2,
-            capabilities=self._instrumentation,
-        )
         calls: list[LlmCall] = []
         trace_id, span_id = tracing.ids(span)
-
-        async def call(prompt: str, history: list[ModelMessage] | None, kind: CallKind) -> Any:
-            call_ctx = _CallContext(model_name, module.name, role, kind, trace_id, span_id)
-            return await self._call(agent, prompt, history, calls, call_ctx)
-
+        ctx = _CallContext(
+            model_name, module.name, module.prompt.role, "initial", trace_id, span_id
+        )
         try:
-            result = await call(user_prompt(text), None, "initial")
-            out: O = result.output
-            issues = module.validate(inp, out)
-            if _errors(issues):
-                result = await call(feedback(issues), result.all_messages(), "corrective")
-                out = result.output
-                issues = module.validate(inp, out)
+            out, issues = await self._ask(module, inp, out_type, text, calls, ctx)
+        except ModelUnavailableError as exc:
+            log.warning("llm.skipped", module=module.name, model=model_name, reason=str(exc))
+            return Outcome(module.name, "skipped", model_name, reason=str(exc))
         except AgentRunError as exc:
             await self.store.save(None, calls)
             reason = f"{type(exc).__name__}: {exc}"[:300]
@@ -281,8 +250,6 @@ class LlmRunner:
             return Outcome(module.name, "failed", model_name, cost_usd=cost, reason=reason)
 
         out = module.finalize(inp, out, issues)
-        status: AnalysisStatus = "rejected" if _errors(issues) else "ok"
-        cost = sum(c.cost_usd for c in calls)
         record = AnalysisRecord(
             module=module.name,
             prompt_version=module.prompt.version,
@@ -293,23 +260,67 @@ class LlmRunner:
             input=inp.model_dump(mode="json"),
             output=out.model_dump(mode="json"),
             issues=tuple(issues),
-            status=status,
-            cost_usd=cost,
+            status="rejected" if _errors(issues) else "ok",
+            cost_usd=sum(c.cost_usd for c in calls),
             trace_id=trace_id,
         )
         analysis_id = await self.store.save(record, calls)
+        self._log_analysis(record, calls)
+        return Outcome(
+            module.name, record.status, model_name, out, record.issues, analysis_id, record.cost_usd
+        )
+
+    async def _may_not_call(self, model_name: str, span: Span) -> str | None:
+        """Why the model must not be called now, or None."""
+        if self.cfg.price(model_name, self._clock().date()) is None:
+            return f"no price for {model_name} in config/models.yaml"
+        mode = await self.mode()
+        tracing.observe(span, metadata={"budget_mode": mode})
+        if mode == "stopped":
+            return "monthly LLM budget used up"
+        return None
+
+    async def _ask[I: BaseModel, O: BaseModel](
+        self,
+        module: AnalysisModule[I, O],
+        inp: I,
+        out_type: type[O],
+        text: str,
+        calls: list[LlmCall],
+        ctx: _CallContext,
+    ) -> tuple[O, list[ValidationIssue]]:
+        """The answer and its validation issues; one corrective retry if a check failed."""
+        agent = Agent(
+            self._model_factory(ctx.model),
+            output_type=out_type,
+            instructions=module.prompt.text,
+            name=module.name,
+            retries=2,
+            capabilities=self._instrumentation,
+        )
+        result = await self._call(agent, user_prompt(text), None, calls, ctx)
+        out: O = result.output
+        issues = module.validate(inp, out)
+        if _errors(issues):
+            retry = replace(ctx, kind="corrective")
+            result = await self._call(agent, feedback(issues), result.all_messages(), calls, retry)
+            out = result.output
+            issues = module.validate(inp, out)
+        return out, issues
+
+    @staticmethod
+    def _log_analysis(record: AnalysisRecord, calls: Sequence[LlmCall]) -> None:
         log.info(
             "llm.analysis",
-            module=module.name,
-            model=model_name,
-            status=status,
+            module=record.module,
+            model=record.model,
+            status=record.status,
             calls=len(calls),
             tokens_in=sum(c.tokens_in for c in calls),
             tokens_out=sum(c.tokens_out for c in calls),
-            cost_usd=round(cost, 6),
-            issues=[i.code for i in issues],
+            cost_usd=round(record.cost_usd, 6),
+            issues=[i.code for i in record.issues],
         )
-        return Outcome(module.name, status, model_name, out, tuple(issues), analysis_id, cost)
 
     async def _pace(self, model_name: str) -> None:
         interval = self.cfg.min_interval_s(model_name)

@@ -16,7 +16,7 @@ and syncs it with IBKR, `ibkr/executor.py` places the orders.
 """
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -25,12 +25,14 @@ from functools import partial
 import structlog
 
 from trading_agent.analysts import stage as analysts_stage
+from trading_agent.analysts.stage import SymbolAnalysis
+from trading_agent.analysts.technical import TechnicalAssessment
 from trading_agent.contexts import AnalysisContext
 from trading_agent.core import step_store as steps_repo
 from trading_agent.core.log import describe_error
 from trading_agent.core.steps import SCAN_STEPS, Step
 from trading_agent.critic import stage as critic_stage
-from trading_agent.critic.agent import CriticInput, CriticVerdict
+from trading_agent.critic.agent import CriticInput, CriticVerdict, PlanView
 from trading_agent.ibkr.types import Bracket, BracketRequest
 from trading_agent.llm.runner import Outcome
 from trading_agent.llm.sanitize import untrusted
@@ -46,6 +48,7 @@ from trading_agent.portfolio.snapshot import to_tick
 from trading_agent.portfolio.stops import breakeven_stop, chandelier_stop
 from trading_agent.proposer import stage as proposer_stage
 from trading_agent.proposer import store as proposals_repo
+from trading_agent.proposer.agent import Holding, ProposerInput
 from trading_agent.proposer.types import Proposal
 from trading_agent.risk import stage as risk_stage
 from trading_agent.risk import store as risk_repo
@@ -57,8 +60,27 @@ from trading_agent.telegram.bot import Notifier
 
 log = structlog.get_logger(__name__)
 
+AgentStep = Callable[..., Step]  # (step name, outcome, status, summary) -> Step of one stock
+
 
 # --- scan: which stocks are worth buying, and at which prices ---
+
+
+@dataclass
+class _Scan:
+    """What one scan collects while it walks through the stocks."""
+
+    today: date
+    held: list[Holding]
+    catalysts: dict[str, str]  # symbol -> the news behind a news candidate
+    sources: dict[str, str] = field(default_factory=dict[str, str])  # symbol -> pullback | news
+    steps: list[Step] = field(default_factory=list[Step])
+    proposals: list[Proposal] = field(default_factory=list[Proposal])
+    skipped: dict[str, str] = field(default_factory=dict[str, str])  # symbol -> why
+    macros: dict[tuple[Market, date], MacroSnapshot] = field(
+        default_factory=dict[tuple[Market, date], MacroSnapshot]
+    )
+    cost: float = 0.0
 
 
 def _catalyst(signal: Step) -> str:
@@ -89,123 +111,166 @@ async def scan(
     stock's steps. No orders here."""
     now = now or datetime.now(UTC)
     today = today or now.astimezone(BERLIN).date()
-    held = await proposer_stage.holdings(ctx)
-    held_symbols = {h.symbol for h in held}
     signals = await news_signals(ctx, market, now)
-    catalysts = {x.symbol: _catalyst(x) for x in signals.values()}
-    sources: dict[str, str] = {}
-    steps: list[Step] = []
+    run = _Scan(
+        today=today,
+        held=await proposer_stage.holdings(ctx.sessions, ctx.book),
+        catalysts={x.symbol: _catalyst(x) for x in signals.values()},
+    )
     if symbols is None:
-        confidence = {k: float((x.output or {})["confidence"]) for k, x in signals.items()}
-        found = await screen_stage.screen_stocks(
-            ctx, market, await analysts_stage.scan_size(ctx), held_symbols, now, confidence
-        )
-        steps += [screen_stage.screen_step(today, r) for r in found]
-        symbols = [r.symbol for r in found if r.passed]
-        sources = {r.symbol: r.source for r in found if r.passed}
-    analysed = await analysts_stage.analyse(ctx, symbols, market, today=today)
-    items: list[Proposal] = []
-    skipped: dict[str, str] = {}
-    macros: dict[tuple[Market, date], MacroSnapshot] = {}
-    cost = analysed.cost_usd
+        symbols = await _screen(ctx, run, market, signals, now)
+    analysed = await analysts_stage.analyse(ctx.analysts, symbols, today)
+    run.cost += analysed.cost_usd
+    held = {h.symbol for h in run.held}
     for item in analysed.items:
-        tech = item.technical.output
-        step = partial(analysts_stage.agent_step, today, item)
-        if item.symbol in held_symbols:
-            skipped[item.symbol] = "already held"
-            continue
-        # technical analyst: only buy and strong_buy go on
-        if item.technical.status != "ok" or tech is None:
-            skipped[item.symbol] = f"technical {item.technical.status}"
-            steps.append(step("technical", item.technical, "error", skipped[item.symbol]))
-            continue
-        if tech.rating not in analysts_stage.BUY_RATINGS:
-            skipped[item.symbol] = f"technical rating {tech.rating}"
-            summary = f"rating {tech.rating}, needs buy or strong_buy"
-            steps.append(step("technical", item.technical, "stopped", summary))
-            continue
-        summary = f"rating {tech.rating}, setup quality {tech.setup_quality:.2f}"
-        steps.append(step("technical", item.technical, "passed", summary))
-        # earnings analyst: advice for the proposer, never a stop by itself
-        steps.append(analysts_stage.earnings_step(today, item))
-        # proposer: propose (with levels from the menu) or no_trade
-        t_in = item.technical_input
-        key = (t_in.market, t_in.as_of)
-        if key not in macros:
-            macros[key] = await proposer_stage.macro_context(ctx, *key)
-        inp = proposer_stage.proposer_input(
-            item,
-            tech,
-            held,
-            macros[key],
-            sources.get(item.symbol, pullback.NAME),
-            catalysts.get(item.symbol),
-        )
-        proposed = await ctx.runner.run(
-            ctx.proposer,
-            inp,
-            instrument_id=item.instrument_id,
-            as_of=inp.as_of,
-            subject=item.symbol,
-        )
-        cost += proposed.cost_usd
-        out = proposed.output
-        if proposed.status != "ok" or out is None:
-            skipped[item.symbol] = f"proposer {proposed.status}: {proposed.reason or 'invalid'}"
-            steps.append(step("proposer", proposed, "error", skipped[item.symbol]))
-            continue
-        critique: Outcome[CriticVerdict] | None = None
-        if out.decision == "no_trade":
-            steps.append(step("proposer", proposed, "stopped", f"no trade: {out.no_trade_reason}"))
+        if item.symbol in held:
+            run.skipped[item.symbol] = "already held"
         else:
-            plan = proposer_stage.plan_view(inp, out)
-            summary = (
-                f"buy at {plan.entry_ref} {plan.entry:g}, stop {plan.stop_ref} {plan.stop:g}, "
-                f"target {plan.target_ref} {plan.target:g}, R:R {plan.risk_reward:g}, "
-                f"confidence {out.confidence:.2f}"
-            )
-            steps.append(step("proposer", proposed, "passed", summary))
-            # critic: blocking stops the trade, otherwise it adjusts the confidence
-            critique = await ctx.runner.run(
-                ctx.critic,
-                CriticInput(facts=inp, proposal=plan),
-                instrument_id=item.instrument_id,
-                as_of=inp.as_of,
-                subject=item.symbol,
-            )
-            cost += critique.cost_usd
-            if critique.status != "ok":
-                critique = Outcome(
-                    critique.module,
-                    critique.status,
-                    critique.model,
-                    analysis_id=critique.analysis_id,
-                    cost_usd=critique.cost_usd,
-                    reason=critique.reason or "critic answer failed validation",
-                )
-            steps.append(critic_stage.critic_step(step, critique))
-        items.append(proposer_stage.build_proposal(item, inp, proposed, out, critique))
-
-    ranked = proposer_stage.rank(items)
-    if ranked:
-        async with ctx.sessions.begin() as s:
-            stored = await proposals_repo.save_proposals(s, ranked)
-        ranked = [p.model_copy(update={"id": i}) for p, i in zip(ranked, stored, strict=True)]
-    steps += [proposer_stage.rank_step(today, p) for p in ranked if p.rank is not None]
-    ids = {p.yahoo_symbol: p.id for p in ranked}
-    steps = [s.model_copy(update={"proposal_id": ids.get(s.symbol)}) for s in steps]
-    async with ctx.sessions.begin() as s:
-        await steps_repo.replace_steps(s, today, SCAN_STEPS, steps)
+            await _decide(ctx, run, item)
+    ranked = await _rank_and_store(ctx, run)
     log.info(
         "proposals.done",
         market=market,
         candidates=len(analysed.items),
         statuses=dict(Counter(p.status for p in ranked)),
-        skipped=skipped,
-        cost_usd=round(cost, 6),
+        skipped=run.skipped,
+        cost_usd=round(run.cost, 6),
     )
     as_of = max((i.technical_input.as_of for i in analysed.items), default=None)
-    return proposer_stage.ProposalRun(as_of, ranked, skipped, cost)
+    return proposer_stage.ProposalRun(as_of, ranked, run.skipped, run.cost)
+
+
+async def _screen(
+    ctx: AnalysisContext, run: _Scan, market: Market | None, signals: dict[int, Step], now: datetime
+) -> list[str]:
+    """The screen plus the news candidates; returns the symbols that passed."""
+    confidence = {k: float((x.output or {})["confidence"]) for k, x in signals.items()}
+    held = {h.symbol for h in run.held}
+    top = await ctx.scan_size()
+    found = await screen_stage.screen_stocks(ctx.screen, market, top, held, now, confidence)
+    run.steps += [screen_stage.screen_step(run.today, r) for r in found]
+    passed = [r for r in found if r.passed]
+    run.sources = {r.symbol: r.source for r in passed}
+    return [r.symbol for r in passed]
+
+
+async def _decide(ctx: AnalysisContext, run: _Scan, item: SymbolAnalysis) -> None:
+    """One stock through the agents: technical (a gate), earnings (advice), proposer, critic."""
+    step = partial(analysts_stage.agent_step, run.today, item)
+    tech = _technical_gate(run, item, step)
+    if tech is None:
+        return
+    run.steps.append(analysts_stage.earnings_step(run.today, item))
+    inp = await _proposer_input(ctx, run, item, tech)
+    proposed = await ctx.runner.run(
+        ctx.proposer, inp, instrument_id=item.instrument_id, as_of=inp.as_of, subject=item.symbol
+    )
+    run.cost += proposed.cost_usd
+    out = proposed.output
+    if proposed.status != "ok" or out is None:
+        run.skipped[item.symbol] = f"proposer {proposed.status}: {proposed.reason or 'invalid'}"
+        run.steps.append(step("proposer", proposed, "error", run.skipped[item.symbol]))
+        return
+    critique: Outcome[CriticVerdict] | None = None
+    if out.decision == "no_trade":
+        run.steps.append(step("proposer", proposed, "stopped", f"no trade: {out.no_trade_reason}"))
+    else:
+        plan = proposer_stage.plan_view(inp, out)
+        run.steps.append(step("proposer", proposed, "passed", _plan_summary(plan)))
+        critique = await _critique(ctx, run, item, inp, plan, step)
+    run.proposals.append(proposer_stage.build_proposal(item, inp, proposed, out, critique))
+
+
+def _technical_gate(
+    run: _Scan, item: SymbolAnalysis, step: AgentStep
+) -> TechnicalAssessment | None:
+    """Only `buy` and `strong_buy` go on."""
+    tech = item.technical.output
+    if item.technical.status != "ok" or tech is None:
+        run.skipped[item.symbol] = f"technical {item.technical.status}"
+        run.steps.append(step("technical", item.technical, "error", run.skipped[item.symbol]))
+        return None
+    if tech.rating not in analysts_stage.BUY_RATINGS:
+        run.skipped[item.symbol] = f"technical rating {tech.rating}"
+        summary = f"rating {tech.rating}, needs buy or strong_buy"
+        run.steps.append(step("technical", item.technical, "stopped", summary))
+        return None
+    summary = f"rating {tech.rating}, setup quality {tech.setup_quality:.2f}"
+    run.steps.append(step("technical", item.technical, "passed", summary))
+    return tech
+
+
+async def _proposer_input(
+    ctx: AnalysisContext, run: _Scan, item: SymbolAnalysis, tech: TechnicalAssessment
+) -> ProposerInput:
+    t = item.technical_input
+    key = (t.market, t.as_of)
+    if key not in run.macros:
+        benchmark = ctx.benchmarks.get(t.market)
+        run.macros[key] = await proposer_stage.macro_context(ctx.sessions, benchmark, t.as_of)
+    return proposer_stage.proposer_input(
+        item,
+        tech,
+        run.held,
+        run.macros[key],
+        run.sources.get(item.symbol, pullback.NAME),
+        run.catalysts.get(item.symbol),
+    )
+
+
+def _plan_summary(plan: PlanView) -> str:
+    return (
+        f"buy at {plan.entry_ref} {plan.entry:g}, stop {plan.stop_ref} {plan.stop:g}, "
+        f"target {plan.target_ref} {plan.target:g}, R:R {plan.risk_reward:g}, "
+        f"confidence {plan.confidence:.2f}"
+    )
+
+
+async def _critique(
+    ctx: AnalysisContext,
+    run: _Scan,
+    item: SymbolAnalysis,
+    inp: ProposerInput,
+    plan: PlanView,
+    step: AgentStep,
+) -> Outcome[CriticVerdict]:
+    """`blocking` stops the trade; otherwise the critic adjusts the confidence."""
+    critique = await ctx.runner.run(
+        ctx.critic,
+        CriticInput(facts=inp, proposal=plan),
+        instrument_id=item.instrument_id,
+        as_of=inp.as_of,
+        subject=item.symbol,
+    )
+    run.cost += critique.cost_usd
+    if critique.status != "ok":
+        critique = Outcome(
+            critique.module,
+            critique.status,
+            critique.model,
+            analysis_id=critique.analysis_id,
+            cost_usd=critique.cost_usd,
+            reason=critique.reason or "critic answer failed validation",
+        )
+    run.steps.append(critic_stage.critic_step(step, critique))
+    return critique
+
+
+async def _rank_and_store(ctx: AnalysisContext, run: _Scan) -> list[Proposal]:
+    """Rank the proposals, store them, and replace the day's scan steps."""
+    ranked = proposer_stage.rank(run.proposals)
+    if ranked:
+        async with ctx.sessions.begin() as s:
+            stored = await proposals_repo.save_proposals(s, ranked)
+        ranked = [p.model_copy(update={"id": i}) for p, i in zip(ranked, stored, strict=True)]
+    steps = run.steps + [
+        proposer_stage.rank_step(run.today, p) for p in ranked if p.rank is not None
+    ]
+    ids = {p.yahoo_symbol: p.id for p in ranked}
+    steps = [s.model_copy(update={"proposal_id": ids.get(s.symbol)}) for s in steps]
+    async with ctx.sessions.begin() as s:
+        await steps_repo.replace_steps(s, run.today, SCAN_STEPS, steps)
+    return ranked
 
 
 def summary(run: proposer_stage.ProposalRun, market: Market | None) -> str:
@@ -234,6 +299,104 @@ class Placement:
 
 
 NOT_CONNECTED = "not placed: IBKR not connected"
+
+
+async def place(ctx: TradingContext, market: Market) -> Placement:
+    """After the open: today's proposals (as_of = previous session) in rank order, each through
+    the risk engine; approved ones go to IBKR as bracket orders."""
+    now = ctx.clock()
+    cal = calendars.CALENDAR_BY_MARKET[market]
+    today = now.astimezone(calendars.calendar(cal).tz).date()
+    todo = await _todays_proposals(ctx, market, cal, today)
+    if not todo:
+        return Placement()
+    if not ctx.connected():
+        return await _not_connected(ctx, market, todo, now)
+    await ctx.executor.sync()
+    expires = _entry_expiry(ctx, cal, today)
+    news_placed = await news_trades_today(ctx, now)
+    result = Placement()
+    for p in todo:
+        is_news = p.strategy == news.NAME
+        if is_news and news_placed >= ctx.news.max_trades_per_day:
+            outcome = await _news_limit(ctx, p, now)
+        else:
+            outcome = await _place_one(ctx, p, now, today, expires)
+        if isinstance(outcome, str):
+            result.rejected.append((p.yahoo_symbol, outcome))
+            continue
+        result.placed.append(outcome)
+        if is_news:
+            news_placed += 1
+    broker = ctx.executor.broker.name
+    await ctx.notifier.send(
+        messages.placement_summary(market, result.placed, result.rejected, broker)
+    )
+    log.info("place.done", market=market, placed=len(result.placed), rejected=len(result.rejected))
+    return result
+
+
+async def _todays_proposals(
+    ctx: TradingContext, market: Market, cal: str, today: date
+) -> list[Proposal]:
+    """This morning's `proposed` items for `market`, best rank first; none without a session."""
+    if calendars.session_time(cal, today, "open") is None:
+        log.info("place.skipped", market=market, reason="no session today")
+        return []
+    as_of = calendars.session_offset(cal, today, -1)
+    async with ctx.sessions() as s:
+        found = await proposals_repo.proposals(s, start=as_of, end=as_of)
+    todo = sorted(
+        (p for p in found if p.market == market and p.status == "proposed"),
+        key=lambda p: (p.rank is None, p.rank or 0),
+    )
+    if not todo:
+        log.info("place.nothing", market=market, as_of=as_of.isoformat())
+    return todo
+
+
+def _entry_expiry(ctx: TradingContext, cal: str, today: date) -> datetime:
+    """The buy limit is valid until the close of the last of `entry_valid_sessions`."""
+    expires_day = calendars.session_offset(cal, today, ctx.rules.entry_valid_sessions - 1)
+    expires = calendars.session_time(cal, expires_day, "close")
+    if expires is None:
+        raise LookupError(f"no close for {expires_day}")
+    return expires
+
+
+async def _place_one(
+    ctx: TradingContext, p: Proposal, now: datetime, today: date, expires: datetime
+) -> messages.PlacedLine | str:
+    """Risk decision, then the bracket at IBKR; returns the placed order or why not."""
+    loaded = await portfolio_manager.load(ctx)
+    decision, inst, inputs = await risk_stage.decide(ctx, loaded, p, now, today)
+    async with ctx.sessions.begin() as s:
+        await risk_repo.save_decision(s, p.id, decision, now)
+        await steps_repo.add_steps(s, [risk_stage.risk_step(p, decision, inputs, now)])
+    if decision.trip is not None:
+        await ctx.center.apply_trip(decision.trip)
+    entry, stop, target = decision.entry, decision.stop, decision.target
+    if not decision.approved or entry is None or stop is None or target is None:
+        first = decision.failures[0]
+        return f"{first.name}: {first.detail}"
+    request = BracketRequest(
+        id=p.id,
+        instrument=inst,
+        quantity=decision.quantity,
+        entry=entry,
+        stop=stop,
+        target=target,
+        expires=expires,
+    )
+    try:
+        await ctx.executor.submit(request, decision)
+    except Exception as exc:
+        # the order step holds the error; the other proposals still get their turn
+        log.exception("place.order_failed", symbol=p.yahoo_symbol)
+        return f"order error: {describe_error(exc)}"
+    return messages.PlacedLine(
+        p.yahoo_symbol, decision.quantity, float(entry), float(stop), float(target)
+    )
 
 
 async def _not_connected(
@@ -272,8 +435,10 @@ async def news_trades_today(ctx: TradingContext, now: datetime) -> int:
     return sum(1 for p in found.values() if p.strategy == news.NAME)
 
 
-def _news_limit_step(p: Proposal, reason: str, now: datetime) -> Step:
-    return Step(
+async def _news_limit(ctx: TradingContext, p: Proposal, now: datetime) -> str:
+    """A news trade over the day's limit: a stopped risk step, no decision, no order."""
+    reason = f"news: at most {ctx.news.max_trades_per_day} news trade a day"
+    step = Step(
         day=now.astimezone(BERLIN).date(),
         market=p.market,
         instrument_id=p.instrument_id,
@@ -283,84 +448,9 @@ def _news_limit_step(p: Proposal, reason: str, now: datetime) -> Step:
         summary=reason,
         proposal_id=p.id,
     )
-
-
-async def place(ctx: TradingContext, market: Market) -> Placement:
-    """After the open: today's proposals (as_of = previous session) in rank order, each through
-    the risk engine; approved ones go to IBKR as bracket orders."""
-    now = ctx.clock()
-    cal = calendars.CALENDAR_BY_MARKET[market]
-    today = now.astimezone(calendars.calendar(cal).tz).date()
-    result = Placement()
-    if calendars.session_time(cal, today, "open") is None:
-        log.info("place.skipped", market=market, reason="no session today")
-        return result
-    as_of = calendars.session_offset(cal, today, -1)
-    async with ctx.sessions() as s:
-        found = await proposals_repo.proposals(s, start=as_of, end=as_of)
-    todo = sorted(
-        (p for p in found if p.market == market and p.status == "proposed"),
-        key=lambda p: (p.rank is None, p.rank or 0),
-    )
-    if not todo:
-        log.info("place.nothing", market=market, as_of=as_of.isoformat())
-        return result
-    if not ctx.connected():
-        return await _not_connected(ctx, market, todo, now)
-    await ctx.executor.sync()
-    expires_day = calendars.session_offset(cal, today, ctx.rules.entry_valid_sessions - 1)
-    expires = calendars.session_time(cal, expires_day, "close")
-    if expires is None:
-        raise LookupError(f"no close for {expires_day}")
-    news_placed = await news_trades_today(ctx, now)
-    for p in todo:
-        if p.strategy == news.NAME and news_placed >= ctx.news.max_trades_per_day:
-            reason = f"news: at most {ctx.news.max_trades_per_day} news trade a day"
-            async with ctx.sessions.begin() as s:
-                await steps_repo.add_steps(s, [_news_limit_step(p, reason, now)])
-            result.rejected.append((p.yahoo_symbol, reason))
-            continue
-        loaded = await portfolio_manager.load(ctx)
-        decision, inst, inputs = await risk_stage.decide(ctx, loaded, p, now, today)
-        async with ctx.sessions.begin() as s:
-            await risk_repo.save_decision(s, p.id, decision, now)
-            await steps_repo.add_steps(s, [risk_stage.risk_step(p, decision, inputs, now)])
-        if decision.trip is not None:
-            await ctx.center.apply_trip(decision.trip)
-        entry, stop, target = decision.entry, decision.stop, decision.target
-        if not decision.approved or entry is None or stop is None or target is None:
-            first = decision.failures[0]
-            result.rejected.append((p.yahoo_symbol, f"{first.name}: {first.detail}"))
-            continue
-        request = BracketRequest(
-            id=p.id,
-            instrument=inst,
-            quantity=decision.quantity,
-            entry=entry,
-            stop=stop,
-            target=target,
-            expires=expires,
-        )
-        try:
-            await ctx.executor.submit(request, decision)
-        except Exception as exc:
-            # the order step holds the error; the other proposals still get their turn
-            log.exception("place.order_failed", symbol=p.yahoo_symbol)
-            result.rejected.append((p.yahoo_symbol, f"order error: {describe_error(exc)}"))
-            continue
-        if p.strategy == news.NAME:
-            news_placed += 1
-        result.placed.append(
-            messages.PlacedLine(
-                p.yahoo_symbol, decision.quantity, float(entry), float(stop), float(target)
-            )
-        )
-    broker = ctx.executor.broker.name
-    await ctx.notifier.send(
-        messages.placement_summary(market, result.placed, result.rejected, broker)
-    )
-    log.info("place.done", market=market, placed=len(result.placed), rejected=len(result.rejected))
-    return result
+    async with ctx.sessions.begin() as s:
+        await steps_repo.add_steps(s, [step])
+    return reason
 
 
 # --- monitor and end of day: what IBKR did, and managing what is held ---

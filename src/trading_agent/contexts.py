@@ -1,41 +1,31 @@
-"""The shared setup objects every stage works with: settings, providers, rules and agents,
-built once at start (scheduler.serve) or per CLI command."""
+"""The wiring: builds each component's setup from settings and config files, once at start
+(scheduler.serve) or per CLI command. Components never import this module; they get only
+the small setup they need (e.g. `ScreenSetup`, `AnalystSetup`, `BriefingSetup`)."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
 
-import httpx
 from pydantic_ai.models import Model
 
 from trading_agent.analysts import earnings as earnings_module
 from trading_agent.analysts import technical as technical_module
 from trading_agent.analysts.earnings import EarningsModule
+from trading_agent.analysts.stage import AnalystSetup
 from trading_agent.analysts.technical import PlanRules, TechnicalModule
 from trading_agent.core import telemetry
 from trading_agent.core.db import Sessions
-from trading_agent.core.settings import (
-    DataConfig,
-    QualityConfig,
-    Settings,
-    load_data_config,
-    load_fees,
-)
+from trading_agent.core.settings import QualityConfig, Settings, load_data_config, load_fees
 from trading_agent.critic import agent as critic
 from trading_agent.critic.agent import CriticAgent
-from trading_agent.ibkr.market import IbkrPriceProvider
 from trading_agent.llm.fake import fake_model
 from trading_agent.llm.models import ModelsConfig, build_model, load_models_config
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.llm.runner import LlmRunner
 from trading_agent.llm.store import DbAnalysisStore
-from trading_agent.marketdata.series import EcbProvider, FredProvider
 from trading_agent.marketdata.types import Market
 from trading_agent.marketdata.universe import Universe
-from trading_agent.marketdata.yahoo import YahooProvider
 from trading_agent.news.rules import NewsParams, load_news_params
 from trading_agent.portfolio.fees import FeeSchedule
 from trading_agent.portfolio.types import Book, book_for_mode
@@ -44,66 +34,13 @@ from trading_agent.proposer.agent import ProposerAgent
 from trading_agent.risk.config import RiskConfig, load_risk_config
 from trading_agent.risk.types import Mode
 from trading_agent.screen.rules import PullbackParams, load_params
-from trading_agent.telegram.bot import LogNotifier, Notifier
-
-
-@dataclass
-class RuntimeState:
-    """What /status reports; updated by the running jobs."""
-
-    mode: str
-    started_at: datetime
-    heartbeat_at: datetime | None = None
-    heartbeat_ok: bool | None = None
-    blocked: dict[str, list[str]] = field(default_factory=dict[str, list[str]])  # market -> symbols
-    scheduler: Any = None  # AsyncIOScheduler, set once built
-    gateway: Callable[[], str] | None = None  # IB Gateway status, when enabled
-    kill_switch: Callable[[], Awaitable[str]] | None = None
-    interlock: Callable[[], str | None] | None = None
-    tracing: str = "off"
-    trace_ui_url: str = ""
-    dashboard_ui_url: str = ""
-
-
-@dataclass
-class DataContext:
-    """For the data jobs (jobs.py): the market-data providers."""
-
-    sessions: Sessions
-    cfg: DataConfig
-    yahoo: YahooProvider
-    ecb: EcbProvider
-    fred: FredProvider | None
-    notifier: Notifier = field(default_factory=LogNotifier)
-    state: RuntimeState | None = None
-    ibkr: IbkrPriceProvider | None = None
-
-    @classmethod
-    def build(
-        cls,
-        settings: Settings,
-        cfg: DataConfig,
-        sessions: Sessions,
-        http: httpx.AsyncClient,
-        notifier: Notifier | None = None,
-        state: RuntimeState | None = None,
-    ) -> "DataContext":
-        key = settings.fred_api_key
-        fred = FredProvider(http, key) if key is not None and key.get_secret_value() else None
-        return cls(
-            sessions,
-            cfg,
-            YahooProvider(),
-            EcbProvider(http),
-            fred,
-            notifier or LogNotifier(),
-            state,
-        )
+from trading_agent.screen.stage import ScreenSetup
+from trading_agent.telegram.briefing import BriefingSetup
 
 
 @dataclass
 class BookContext:
-    """For the briefing, the digest and reports: the rules and the book's settings."""
+    """The book's rules and settings: for trading, the briefing, the digest and reports."""
 
     sessions: Sessions
     pullback: PullbackParams
@@ -127,10 +64,22 @@ class BookContext:
             load_news_params(config_dir),
         )
 
+    @property
+    def book(self) -> Book:
+        return book_for_mode(self.mode)
+
+    @property
+    def budget_eur(self) -> float:
+        return float(self.risk.for_mode(self.mode).capital.agent_budget_eur)
+
+    @property
+    def briefing(self) -> BriefingSetup:
+        return BriefingSetup(self.sessions, self.benchmarks, self.pullback)
+
 
 @dataclass
 class AnalysisContext:
-    """For the scan and the news stages: the AI runner, the agents and the screen's rules."""
+    """For the scan: the AI runner, the agents and the screen's rules."""
 
     sessions: Sessions
     book: Book  # the agent's own book: its open positions are not proposed again
@@ -147,6 +96,34 @@ class AnalysisContext:
     quality: QualityConfig
     blacklist: frozenset[str]
     news: NewsParams = field(default_factory=NewsParams)
+
+    @property
+    def screen(self) -> ScreenSetup:
+        return ScreenSetup(
+            self.sessions,
+            self.pullback,
+            self.benchmarks,
+            self.quality,
+            self.blacklist,
+            self.news.max_candidates,
+        )
+
+    @property
+    def analysts(self) -> AnalystSetup:
+        return AnalystSetup(
+            self.sessions,
+            self.runner,
+            self.technical,
+            self.earnings,
+            self.rules,
+            self.holding_sessions,
+            self.benchmarks,
+        )
+
+    async def scan_size(self) -> int:
+        """Candidates per market and scan; fewer once the AI budget is in lean mode."""
+        scan = self.models.scan
+        return scan.candidates_lean if await self.runner.mode() == "lean" else scan.candidates
 
     @classmethod
     def build(cls, settings: Settings, sessions: Sessions, universe: Universe) -> "AnalysisContext":

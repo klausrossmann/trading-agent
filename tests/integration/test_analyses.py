@@ -155,7 +155,7 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     ctx = AnalysisContext.build(cfg, sessions, universe)
     ctx.runner = LlmRunner(ctx.models, DbAnalysisStore(sessions), lambda _: TestModel())
 
-    result = await analysts_stage.analyse(ctx, ["AAA", "NOPE"], today=date(2026, 10, 6))
+    result = await analysts_stage.analyse(ctx.analysts, ["AAA", "NOPE"], date(2026, 10, 6))
     assert result.missing == ["NOPE"]
     (item,) = result.items
     assert item.technical_input.as_of == date(2026, 10, 5)
@@ -163,11 +163,11 @@ async def test_scan_with_test_model(sessions: Sessions, settings: Settings) -> N
     assert all(o.analysis_id is not None and not o.cached for o in item.outcomes)
     assert result.cost_usd > 0
 
-    again = await analysts_stage.analyse(ctx, ["AAA"], today=date(2026, 10, 6))
+    again = await analysts_stage.analyse(ctx.analysts, ["AAA"], date(2026, 10, 6))
     assert all(o.cached for o in again.items[0].outcomes)
     assert again.cost_usd == 0
 
-    text = await briefing.budget_text(ctx)
+    text = await briefing.budget_text(ctx.sessions, ctx.runner, ctx.models.budget.monthly_usd)
     assert text.startswith("💸 LLM budget")
     assert "google:gemini-3.8-flash: " in text
 
@@ -208,7 +208,7 @@ async def test_candidates_skip_blocked_and_blacklisted(
 
     found = [passed("CCC", 3.0), passed("BBB", 2.0), passed("AAA", 1.0)]
     monkeypatch.setattr(screen_stage.screen, "check", lambda data, p, market: found)
-    results = await screen_stage.screen_stocks(ctx, "US", 5, now=NOW)
+    results = await screen_stage.screen_stocks(ctx.screen, "US", 5, now=NOW)
     assert [(r.symbol, r.passed, r.reason) for r in results] == [
         ("CCC", False, "blacklisted in risk.yaml"),
         ("BBB", False, "data quality: jump"),

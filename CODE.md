@@ -22,7 +22,7 @@ About 13,600 lines of Python in `src/trading_agent/` (plus 9,500 lines of tests)
 src/trading_agent/
 ├── orchestrator.py   the trading day, stage by stage: scan, place, monitor, end of day
 ├── scheduler.py      when each stage runs; starts everything (`trading-agent run`)
-├── contexts.py       the shared setup each stage gets (settings, data sources, agents, rules)
+├── contexts.py       the wiring: builds each component's small setup from settings and config
 ├── __main__.py       the command line (`trading-agent ...`)
 │
 ├── marketdata/       prices, FX, macro, earnings dates, calendars, universe, data quality
@@ -47,7 +47,7 @@ Inside a component the files follow the same pattern, so you know where to look:
 | `types.py` | The component's data: plain types, no database, no network (e.g. `marketdata/types.py`: `Instrument`, `Bar`; `proposer/types.py`: `Proposal`) |
 | `store.py` | The component's database reads and writes (e.g. `proposer/store.py`: save and load proposals) |
 | `agent.py` | The AI agent, if the component has one: its input, its output, the code checks after every answer |
-| `stage.py` | What the component does in the trading day, called by `orchestrator.py` or the scheduler, including the steps it writes to the step log |
+| `stage.py` | What the component does in the trading day, called by `orchestrator.py` or the scheduler, including the steps it writes to the step log. It gets a small setup with exactly what it needs (e.g. `ScreenSetup`, `AnalystSetup`), never the whole configuration. |
 | other files | The component's logic (e.g. `risk/engine.py`, `screen/screen.py`, `ibkr/link.py`) |
 
 ---
@@ -122,6 +122,7 @@ Enforced by `import-linter` in CI (`pyproject.toml`, `[tool.importlinter]`), so 
 | Data, AI, risk-engine, accounting, Telegram-message and dashboard modules can't import `ibkr/link`, `ibkr/market`, `ibkr/orders` or `ibkr/executor` | Only the stages, the orchestrator and the scheduler reach IBKR; orders are placed in one controlled place (`ibkr/executor.py`) |
 | Every `types.py` (and `core/steps`, `core/numbers`) imports no database, network or broker library | The shared types stay plain data |
 | `dashboard` can't import the IBKR code, the AI runner, the risk engine and its controls, Telegram, the scheduler or the orchestrator | The website can only read |
+| No component imports `contexts.py`, `orchestrator.py`, `scheduler.py` or `__main__.py` | Each component stands on its own; its inputs are in its function signatures |
 
 Further conventions:
 
@@ -141,9 +142,9 @@ Further conventions:
 
 | File | What it does |
 |---|---|
-| `orchestrator.py` | **The trading day, stage by stage**: `scan` (screen + news candidates → technical → earnings → proposer → critic → rank → proposals), `place` (risk engine → bracket at IBKR, at most 1 news trade a day), `monitor` (IBKR sync), `end_of_day` (stop moves, time stops, book, loss limits). Start reading here. |
-| `scheduler.py` | The agent's main loop (`serve`): builds the contexts, starts Telegram and the IBKR link, plans the jobs from `config/schedule.yaml` (session jobs each day at 00:05 from the exchange calendars) and maps each job name to its function. Alerts on failed or missed jobs. |
-| `contexts.py` | The shared setup objects, built once at start or per CLI command: `RuntimeState` (what `/status` shows), `DataContext` (data sources), `BookContext` (rules, fees, benchmarks), `AnalysisContext` (AI runner, agents, screen rules). |
+| `orchestrator.py` | **The trading day, stage by stage**: `scan` (screen + news candidates → for each stock `_decide`: technical gate → earnings → proposer → critic → then rank and store), `place` (for each proposal `_place_one`: risk engine → bracket at IBKR; at most 1 news trade a day), `monitor` (IBKR sync), `end_of_day` (stop moves, time stops, book, loss limits). Start reading here. |
+| `scheduler.py` | The agent's main loop. `serve` runs the start-up in order: `build_agent` (contexts, kill switch, IBKR link, Telegram, and how they call each other), `schedule_jobs` (every job of `config/schedule.yaml` bound to its stage; session jobs planned each day at 00:05 from the exchange calendars), then runs until stopped. Alerts on failed or missed jobs. |
+| `contexts.py` | The wiring: `BookContext` (the book's rules, fees, benchmarks) and `AnalysisContext` (AI runner, agents, screen rules), built once at start or per CLI command. They hand each component only its setup (`.screen`, `.analysts`, `.briefing`). Components never import this file. |
 | `__main__.py` | The command line: `run` (starts the agent), `backfill`, `quality`, `analyse`, `propose`, `ibkr-check`, `tax-report`, `reset`, `dashboard`. |
 
 ### 5.2 `marketdata/`
@@ -155,7 +156,7 @@ Further conventions:
 | `series.py` | ECB (EUR/USD, deposit rate) and FRED (US macro) |
 | `ingest.py` | Loading into the database, idempotent and incremental: prices (with restatement detection), FX, macro, earnings, universe sync, quality run |
 | `store.py` | Tables `instruments`, `bars_daily`, `fx_daily`, `macro_series`, `earnings_events` |
-| `jobs.py` | The data jobs: prices after each close (`eod`), `macro`, `earnings`, `backfill`, the quality check with its ⚠️ alert |
+| `jobs.py` | The data jobs with their setup (`DataContext`): prices after each close (`eod`), `macro`, `earnings`, `backfill`, the quality check with its ⚠️ alert |
 | `quality.py` | Data checks: missing sessions, bad prices, jumps, zero volume, stale data |
 | `calendars.py` | Exchange sessions (holidays, half-days, summer time) for XETR and XNYS |
 | `universe.py` | Reads `config/universe.yaml` |
@@ -252,7 +253,7 @@ Further conventions:
 |---|---|
 | `bot.py` | The bot: long polling, only your chat, commands and buttons; a log-only fallback without a token |
 | `messages.py` | Every Telegram text (pure functions) |
-| `briefing.py` | The 📰 morning briefing, `/status`, `/budget` |
+| `briefing.py` | The 📰 morning briefing, `/status` (with `RuntimeState`, what it reports), `/budget` |
 | `journal.py` | `/proposals`, `/why`, `/review` (your labels) and the 🌙 evening digest |
 | `heartbeat.py` | The ping to healthchecks.io |
 
@@ -269,7 +270,7 @@ Further conventions:
 
 | File | Contents |
 |---|---|
-| `runner.py` | **Every AI call**: cache lookup → budget check → pacing → call → validators → one corrective retry → store → trace |
+| `runner.py` | **Every AI call**, one step per method: `_run` (cache lookup → `_may_not_call`: price and budget → `_ask`: call and at most one corrective retry → store) and `_call` (pacing, HTTP retries, recording every attempt) |
 | `models.py` | `config/models.yaml`: role → model, prices, rate limits, scan size |
 | `budget.py` | Monthly budget: normal, lean (80 %), stopped (100 %) |
 | `prompts.py` | Loads `prompts/<agent>/v<N>.md` |

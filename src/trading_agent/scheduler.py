@@ -1,8 +1,9 @@
-"""Job wiring and the agent's main loop (orchestration layer)."""
+"""The agent's main loop: builds everything, plans the jobs, runs until stopped."""
 
 import asyncio
 import signal
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from zoneinfo import ZoneInfo
@@ -15,7 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
 from trading_agent import orchestrator
-from trading_agent.contexts import AnalysisContext, BookContext, DataContext, RuntimeState
+from trading_agent.contexts import AnalysisContext, BookContext
 from trading_agent.core import audit, telemetry
 from trading_agent.core.db import Sessions, create_engine, session_factory
 from trading_agent.core.log import describe_error
@@ -24,6 +25,7 @@ from trading_agent.ibkr import link as gateway
 from trading_agent.ibkr.executor import Executor
 from trading_agent.llm.prompts import load_prompt
 from trading_agent.marketdata import calendars, ingest, jobs
+from trading_agent.marketdata.jobs import DataContext
 from trading_agent.marketdata.universe import Universe
 from trading_agent.news import agent as news_module
 from trading_agent.news import stage as news
@@ -43,6 +45,7 @@ from trading_agent.telegram.bot import (
     build_notifier,
 )
 from trading_agent.telegram.briefing import (
+    RuntimeState,
     briefing_text,
     budget_text,
     morning_briefing,
@@ -157,8 +160,10 @@ def job_functions(
         "ingest_earnings": partial(jobs.earnings, data),
         "ingest_eod_eu": partial(jobs.eod, data, "EU"),
         "ingest_eod_us": partial(jobs.eod, data, "US"),
-        "evening_digest": partial(journal.evening_digest, book, notifier),
-        "briefing": partial(morning_briefing, book, data.state, notifier),
+        "evening_digest": partial(
+            journal.evening_digest, book.sessions, book.book, book.budget_eur, notifier
+        ),
+        "briefing": partial(morning_briefing, book.briefing, data.blocked, notifier),
         "scan_eu": telemetry.traced(
             "scan_eu", partial(orchestrator.scheduled_scan, analysis, notifier, "EU")
         ),
@@ -275,120 +280,157 @@ def commands(
         return await status_text(state, sessions)
 
     async def briefing(_: list[str]) -> str:
-        return await briefing_text(book, state, datetime.now(UTC).date())
+        return await briefing_text(book.briefing, state.blocked, datetime.now(UTC).date())
 
     out = {
         "status": Command("mode, heartbeat, data and next jobs", status),
         "briefing": Command("the morning briefing, now", briefing),
     }
     if analysis is not None:
+        monthly_usd = analysis.models.budget.monthly_usd
 
         async def budget(_: list[str]) -> str:
-            return await budget_text(analysis)
+            return await budget_text(analysis.sessions, analysis.runner, monthly_usd)
 
         out["budget"] = Command("LLM spend this month and the budget mode", budget)
     return out
 
 
-async def serve(
-    settings: Settings, schedule: ScheduleConfig, data_cfg: DataConfig, universe: Universe
-) -> None:
+@dataclass
+class Agent:
+    """Everything the running agent is made of, built once at start."""
+
+    state: RuntimeState
+    book: BookContext
+    analysis: AnalysisContext
+    center: ControlCenter
+    link: gateway.BrokerLink
+    trade: portfolio_manager.TradingContext
+    notifier: Notifier
+    expected: gateway.Expected  # the book's positions, for the reconciliation
+    live: bool  # live mode: orders wait for /confirm_live
+
+
+def build_agent(settings: Settings, sessions: Sessions, universe: Universe) -> Agent:
+    """Contexts, kill switch, IBKR link (not yet running), Telegram, and how they call
+    each other: the link reconciles on connect, a halt cancels unfilled entries."""
+    state = RuntimeState(
+        mode=settings.app_mode,
+        started_at=datetime.now(UTC),
+        tracing=telemetry.state(),
+        trace_ui_url=settings.trace_ui_url,
+        dashboard_ui_url=settings.dashboard_ui_url,
+    )
+    book = BookContext.load(settings.config_dir, sessions, universe, settings.app_mode)
+    analysis = AnalysisContext.build(settings, sessions, universe)
+    review = journal.Review(sessions)
+    center = ControlCenter(sessions, settings.app_mode)
+    link = gateway.BrokerLink(settings, LogNotifier())
+    center.gateway_mode = link.mode
+    state.gateway = link.status
+    trade = trading_context(settings, sessions, book, center, LogNotifier(), link)
+    notifier = build_notifier(
+        settings.telegram_bot_token,
+        settings.telegram_owner_chat_id,
+        commands(state, sessions, book, analysis)
+        | journal.commands(sessions, review, settings.trace_ui_url)
+        | center.commands()
+        | portfolio_manager.commands(trade),
+        interaction(review, center),
+    )
+    center.notifier = trade.notifier = link.notifier = notifier
+    live = center.start_live_interlock()
+
+    async def kill_switch_line() -> str:
+        return messages.kill_switch_line(await center.kill_switch())
+
+    state.kill_switch, state.interlock = kill_switch_line, center.interlock_line
+    expected = partial(portfolio_manager.expected_positions, trade)
+    center.on_halt = partial(portfolio_manager.cancel_entries, trade, "halted")
+    link.on_connect = partial(
+        gateway.on_connect,
+        sessions=sessions,
+        notifier=notifier,
+        expected=expected,
+        halt=center.halt,
+    )
+    return Agent(state, book, analysis, center, link, trade, notifier, expected, live)
+
+
+def schedule_jobs(
+    agent: Agent,
+    settings: Settings,
+    schedule: ScheduleConfig,
+    data_cfg: DataConfig,
+    http: httpx.AsyncClient,
+) -> AsyncIOScheduler:
+    """Every job of config/schedule.yaml, bound to its stage function."""
+    data = DataContext.build(settings, data_cfg, agent.book.sessions, http, agent.notifier)
+    data.blocked = agent.state.blocked  # the quality check's result shows in /status
+    data.ibkr = agent.link.prices
+    fns = job_functions(
+        data,
+        agent.book,
+        agent.notifier,
+        agent.analysis,
+        agent.link,
+        agent.center,
+        agent.trade,
+        agent.expected,
+        news_context(settings, agent.trade, agent.analysis, http),
+    )
+    scheduler = build_scheduler(schedule, settings, http, fns, agent.state)
+    agent.state.scheduler = scheduler
+    return scheduler
+
+
+def _stop_on_signals() -> asyncio.Event:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
+    return stop
 
+
+async def _sync_universe(sessions: Sessions, universe: Universe) -> None:
+    sync = await ingest.sync_universe(sessions, universe)
+    log.info(
+        "universe.synced", inserted=sync.inserted, updated=sync.updated, deactivated=sync.removed
+    )
+
+
+async def serve(
+    settings: Settings, schedule: ScheduleConfig, data_cfg: DataConfig, universe: Universe
+) -> None:
+    """`trading-agent run`: start-up (HOW-IT-WORKS.md 9.1), then the jobs until SIGTERM."""
+    stop = _stop_on_signals()
     engine = create_engine(settings.database_url)
     sessions = session_factory(engine)
     try:
         await audit.record(
             sessions, actor="agent", event="agent.started", payload={"mode": settings.app_mode}
         )
-        sync = await ingest.sync_universe(sessions, universe)
-        log.info(
-            "universe.synced",
-            inserted=sync.inserted,
-            updated=sync.updated,
-            deactivated=sync.removed,
-        )
-        state = RuntimeState(
-            mode=settings.app_mode,
-            started_at=datetime.now(UTC),
-            tracing=telemetry.state(),
-            trace_ui_url=settings.trace_ui_url,
-            dashboard_ui_url=settings.dashboard_ui_url,
-        )
-        book = BookContext.load(settings.config_dir, sessions, universe, settings.app_mode)
-        analysis = AnalysisContext.build(settings, sessions, universe)
-        review = journal.Review(sessions)
-        center = ControlCenter(sessions, settings.app_mode)
-        link = gateway.BrokerLink(settings, LogNotifier())
-        center.gateway_mode = link.mode
-        state.gateway = link.status
-        trade = trading_context(settings, sessions, book, center, LogNotifier(), link)
-        notifier = build_notifier(
-            settings.telegram_bot_token,
-            settings.telegram_owner_chat_id,
-            commands(state, sessions, book, analysis)
-            | journal.commands(sessions, review, settings.trace_ui_url)
-            | center.commands()
-            | portfolio_manager.commands(trade),
-            interaction(review, center),
-        )
-        center.notifier = trade.notifier = link.notifier = notifier
-        live = center.start_live_interlock()
-
-        async def kill_switch_line() -> str:
-            return messages.kill_switch_line(await center.kill_switch())
-
-        state.kill_switch, state.interlock = kill_switch_line, center.interlock_line
+        await _sync_universe(sessions, universe)
+        agent = build_agent(settings, sessions, universe)
+        notifier = agent.notifier
         if isinstance(notifier, TelegramBot):
             notifier.start()
-        expected = partial(portfolio_manager.expected_positions, trade)
-        center.on_halt = partial(portfolio_manager.cancel_entries, trade, "halted")
-        link.on_connect = partial(
-            gateway.on_connect,
-            sessions=sessions,
-            notifier=notifier,
-            expected=expected,
-            halt=center.halt,
-        )
-        link_task = asyncio.create_task(link.run(stop))
+        link_task = asyncio.create_task(agent.link.run(stop))
         async with httpx.AsyncClient() as http:
-            ctx = DataContext.build(settings, data_cfg, sessions, http, notifier, state)
-            ctx.ibkr = link.prices
-            scheduler = build_scheduler(
-                schedule,
-                settings,
-                http,
-                job_functions(
-                    ctx,
-                    book,
-                    notifier,
-                    analysis,
-                    link,
-                    center,
-                    trade,
-                    expected,
-                    news_context(settings, trade, analysis, http),
-                ),
-                state,
-            )
-            state.scheduler = scheduler
+            scheduler = schedule_jobs(agent, settings, schedule, data_cfg, http)
             pending_alerts = alert_on_job_failures(scheduler, notifier)
             scheduler.start()
             log.info(
                 "agent.started",
                 mode=settings.app_mode,
                 jobs=[j.id for j in scheduler.get_jobs()],
-                tracing=state.tracing,
+                tracing=agent.state.tracing,
             )
             if isinstance(notifier, TelegramBot):
                 await notifier.wait_ready(within_s=30)
-            await notifier.send(
-                f"▶️ Agent started ({settings.app_mode}), kill switch {await kill_switch_line()}"
-            )
-            if live:
+            kill_switch = await agent.state.kill_switch() if agent.state.kill_switch else ""
+            await notifier.send(f"▶️ Agent started ({settings.app_mode}), kill switch {kill_switch}")
+            if agent.live:
                 await notifier.send(messages.live_confirm_alert())
             try:
                 await stop.wait()

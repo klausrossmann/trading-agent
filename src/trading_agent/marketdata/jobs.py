@@ -1,19 +1,61 @@
 """The data jobs: prices after each close, macro, earnings, backfill, quality checks."""
 
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol
 
+import httpx
 import structlog
 
-from trading_agent.contexts import DataContext
+from trading_agent.core.db import Sessions
+from trading_agent.core.settings import DataConfig, Settings
 from trading_agent.marketdata import ingest
 from trading_agent.marketdata.ingest import AsyncPriceProvider, IngestResult, PriceProvider
 from trading_agent.marketdata.quality import QualityIssue
+from trading_agent.marketdata.series import EcbProvider, FredProvider
 from trading_agent.marketdata.types import Market
 from trading_agent.marketdata.universe import Universe
+from trading_agent.marketdata.yahoo import YahooProvider
 from trading_agent.telegram import messages
+from trading_agent.telegram.bot import LogNotifier, Notifier
 
 log = structlog.get_logger(__name__)
+
+
+class LivePrices(AsyncPriceProvider, Protocol):
+    """Bars from the broker (IBKR), usable only while connected."""
+
+    def connected(self) -> bool: ...
+
+
+@dataclass
+class DataContext:
+    """What the data jobs need: the database, config/data.yaml and the data sources."""
+
+    sessions: Sessions
+    cfg: DataConfig
+    yahoo: YahooProvider
+    ecb: EcbProvider
+    fred: FredProvider | None
+    notifier: Notifier = field(default_factory=LogNotifier)
+    blocked: dict[str, list[str]] = field(default_factory=dict[str, list[str]])  # for /status
+    ibkr: LivePrices | None = None
+
+    @classmethod
+    def build(
+        cls,
+        settings: Settings,
+        cfg: DataConfig,
+        sessions: Sessions,
+        http: httpx.AsyncClient,
+        notifier: Notifier | None = None,
+    ) -> "DataContext":
+        key = settings.fred_api_key
+        fred = FredProvider(http, key) if key is not None and key.get_secret_value() else None
+        return cls(
+            sessions, cfg, YahooProvider(), EcbProvider(http), fred, notifier or LogNotifier()
+        )
 
 
 def _log_result(result: IngestResult) -> None:
@@ -50,9 +92,8 @@ async def _check_quality(ctx: DataContext, market: Market, now: datetime) -> Non
     for issue in issues:
         if issue.blocking:
             blocked.setdefault(issue.yahoo_symbol, []).append(issue.check)
-    previous = set(ctx.state.blocked.get(market, [])) if ctx.state else set[str]()
-    if ctx.state is not None:
-        ctx.state.blocked[market] = sorted(blocked)
+    previous = set(ctx.blocked.get(market, []))
+    ctx.blocked[market] = sorted(blocked)
     new = {k: v for k, v in blocked.items() if k not in previous}  # alert once per symbol
     if alert := messages.quality_alert(market, new):
         await ctx.notifier.send(alert)
@@ -62,7 +103,7 @@ def price_source(ctx: DataContext, market: Market) -> PriceProvider | AsyncPrice
     """config/data.yaml prices.sources; Yahoo whenever the gateway isn't connected."""
     if ctx.cfg.prices.sources.get(market) != "ibkr":
         return ctx.yahoo
-    if ctx.ibkr is None or not ctx.ibkr.ib.isConnected():
+    if ctx.ibkr is None or not ctx.ibkr.connected():
         log.warning("prices.ibkr_unavailable", market=market, fallback="yahoo")
         return ctx.yahoo
     return ctx.ibkr

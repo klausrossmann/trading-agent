@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from trading_agent.contexts import BookContext, RuntimeState
+from trading_agent.contexts import BookContext
 from trading_agent.core.db import Sessions
 from trading_agent.core.settings import load_fees
 from trading_agent.marketdata import ingest
@@ -17,6 +17,7 @@ from trading_agent.marketdata.universe import Universe
 from trading_agent.risk.config import load_risk_config
 from trading_agent.screen.rules import load_params
 from trading_agent.telegram import briefing
+from trading_agent.telegram.briefing import RuntimeState
 
 pytestmark = pytest.mark.db
 
@@ -98,7 +99,7 @@ async def book(sessions: Sessions) -> BookContext:
 
 async def test_briefing_from_database(book: BookContext) -> None:
     state = RuntimeState(mode="paper", started_at=NOW, blocked={"US": []})
-    b = await briefing.build_briefing(book, state, TODAY)
+    b = await briefing.build_briefing(book.briefing, state.blocked, TODAY)
     assert [(m.name, m.last_date) for m in b.markets] == [("SPY", date(2026, 10, 5))]
     assert b.markets[0].change_pct == pytest.approx((259.5 / 259.0 - 1) * 100)
     assert b.markets[0].trend == {"daily": "up", "weekly": "up"}
@@ -107,7 +108,7 @@ async def test_briefing_from_database(book: BookContext) -> None:
     assert b.last_bars == {"US": date(2026, 10, 5), "EU": None}
     assert b.blocked == []
 
-    text = await briefing.briefing_text(book, state, TODAY)
+    text = await briefing.briefing_text(book.briefing, state.blocked, TODAY)
     assert "AAA Thu 8 Oct amc" in text
 
 

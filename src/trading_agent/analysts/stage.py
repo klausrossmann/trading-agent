@@ -1,6 +1,7 @@
 """The analyst stage: technical and earnings analyst per candidate, and their steps."""
 
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -9,20 +10,35 @@ import structlog
 
 from trading_agent.analysts import earnings as earnings_module
 from trading_agent.analysts import technical as technical_module
-from trading_agent.analysts.earnings import EarningsAssessment, EarningsInput
+from trading_agent.analysts.earnings import EarningsAssessment, EarningsInput, EarningsModule
 from trading_agent.analysts.history import load_history
-from trading_agent.analysts.technical import TechnicalAssessment, TechnicalInput
-from trading_agent.contexts import AnalysisContext
+from trading_agent.analysts.technical import (
+    PlanRules,
+    TechnicalAssessment,
+    TechnicalInput,
+    TechnicalModule,
+)
+from trading_agent.core.db import Sessions
 from trading_agent.core.steps import Step, StepName, StepStatus
 from trading_agent.llm.budget import BudgetMode
-from trading_agent.llm.runner import Outcome
+from trading_agent.llm.runner import LlmRunner, Outcome
 from trading_agent.marketdata import store as market_repo
 from trading_agent.marketdata.types import Market
-from trading_agent.screen import stage as screen_stage
 
 log = structlog.get_logger(__name__)
 
 BUY_RATINGS = ("buy", "strong_buy")
+
+
+@dataclass(frozen=True)
+class AnalystSetup:
+    sessions: Sessions
+    runner: LlmRunner
+    technical: TechnicalModule
+    earnings: EarningsModule
+    rules: PlanRules  # risk.yaml limits the plan must meet
+    holding_sessions: int  # entry validity + time stop: the window the earnings analyst checks
+    benchmarks: Mapping[Market, str]
 
 
 @dataclass(frozen=True)
@@ -50,24 +66,12 @@ class ScanResult:
         return sum(o.cost_usd for i in self.items for o in i.outcomes)
 
 
-async def scan_size(ctx: AnalysisContext) -> int:
-    scan = ctx.models.scan
-    return scan.candidates_lean if await ctx.runner.mode() == "lean" else scan.candidates
-
-
 async def analyse(
-    ctx: AnalysisContext,
-    symbols: list[str] | None = None,
-    market: Market | None = None,
-    top: int | None = None,
-    today: date | None = None,
+    setup: AnalystSetup, symbols: Sequence[str], today: date | None = None
 ) -> ScanResult:
-    """Technical and earnings analysis for the given symbols, or for today's top setups."""
-    mode = await ctx.runner.mode()
-    if symbols is None:
-        found = await screen_stage.screen_stocks(ctx, market, top or await scan_size(ctx))
-        symbols = [r.symbol for r in found if r.passed]
-    async with ctx.sessions() as s:
+    """Technical and earnings analysis for each symbol."""
+    mode = await setup.runner.mode()
+    async with setup.sessions() as s:
         instruments = await market_repo.active_instruments(s)
     by_symbol = {i.yahoo_symbol: k for k, i in instruments.items()}
     today = today or datetime.now(UTC).date()
@@ -77,7 +81,7 @@ async def analyse(
         inst_id = by_symbol.get(symbol)
         history = (
             await load_history(
-                ctx.sessions, inst_id, today, ctx.benchmarks.get(instruments[inst_id].market)
+                setup.sessions, inst_id, today, setup.benchmarks.get(instruments[inst_id].market)
             )
             if inst_id is not None
             else None
@@ -86,20 +90,20 @@ async def analyse(
             missing.append(symbol)
             continue
         t_in = technical_module.compute(
-            history.instrument, history.frame, history.benchmark_close, ctx.rules
+            history.instrument, history.frame, history.benchmark_close, setup.rules
         )
-        t_out = await ctx.runner.run(
-            ctx.technical,
+        t_out = await setup.runner.run(
+            setup.technical,
             t_in,
             instrument_id=history.instrument_id,
             as_of=history.as_of,
             subject=symbol,
         )
         e_in = earnings_module.compute(
-            history.instrument, history.frame, history.events, ctx.holding_sessions
+            history.instrument, history.frame, history.events, setup.holding_sessions
         )
-        e_out = await ctx.runner.run(
-            ctx.earnings,
+        e_out = await setup.runner.run(
+            setup.earnings,
             e_in,
             instrument_id=history.instrument_id,
             as_of=history.as_of,

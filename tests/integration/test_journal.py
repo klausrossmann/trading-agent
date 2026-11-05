@@ -184,7 +184,8 @@ async def test_digest_lists_proposals_and_book_changes(sessions: Sessions) -> No
         )
         await risk_repo.save_decision(s, aaa.id, rejected, datetime(2026, 10, 5, 14, tzinfo=UTC))
     book = BookContext.load(ROOT / "config", sessions, universe)
-    text = messages.render_digest(await journal.build_digest(book, DAY))
+    digest = await journal.build_digest(sessions, book.book, book.budget_eur, DAY)
+    text = messages.render_digest(digest)
     assert text.splitlines() == [
         "🌙 Evening digest Mon 5 Oct",
         "Proposals (Mon 5 Oct): 1 no trade, 1 proposed",

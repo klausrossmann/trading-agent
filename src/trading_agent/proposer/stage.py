@@ -8,15 +8,15 @@ from typing import Any
 
 from trading_agent.analysts.stage import SymbolAnalysis
 from trading_agent.analysts.technical import TechnicalAssessment
-from trading_agent.contexts import AnalysisContext
+from trading_agent.core.db import Sessions
 from trading_agent.core.steps import Step
 from trading_agent.critic.agent import CriticVerdict, PlanView
 from trading_agent.llm.runner import Outcome
 from trading_agent.marketdata import store as market_repo
 from trading_agent.marketdata.indicators import bars_to_frame
 from trading_agent.marketdata.macro import FRED_SERIES, MacroSnapshot, macro_snapshot
-from trading_agent.marketdata.types import Market
 from trading_agent.portfolio import store as portfolio_repo
+from trading_agent.portfolio.types import Book
 from trading_agent.proposer.agent import Holding, ProposerInput, ProposerOutput
 from trading_agent.proposer.types import Proposal
 from trading_agent.screen import rules as pullback
@@ -30,10 +30,10 @@ class ProposalRun:
     cost_usd: float
 
 
-async def holdings(ctx: AnalysisContext) -> list[Holding]:
+async def holdings(sessions: Sessions, book: Book) -> list[Holding]:
     """Open positions of the agent's book; the proposer skips those symbols."""
-    async with ctx.sessions() as s:
-        rows = [r for r in await portfolio_repo.book_trades(s, ctx.book) if r.exit_date is None]
+    async with sessions() as s:
+        rows = [r for r in await portfolio_repo.book_trades(s, book) if r.exit_date is None]
         instruments = await market_repo.instruments(s, {r.instrument_id for r in rows})
     return [
         Holding(symbol=i.yahoo_symbol, market=i.market, sector=i.sector)
@@ -42,9 +42,9 @@ async def holdings(ctx: AnalysisContext) -> list[Holding]:
     ]
 
 
-async def macro_context(ctx: AnalysisContext, market: Market, as_of: date) -> MacroSnapshot:
-    benchmark = ctx.benchmarks.get(market)
-    async with ctx.sessions() as s:
+async def macro_context(sessions: Sessions, benchmark: str | None, as_of: date) -> MacroSnapshot:
+    """The market snapshot for the proposer: the benchmark's trend and the macro series."""
+    async with sessions() as s:
         bench = await market_repo.instrument_by_symbol(s, benchmark) if benchmark else None
         bars = (
             await market_repo.bars(s, bench.id, as_of - timedelta(days=450))
